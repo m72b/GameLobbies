@@ -2,6 +2,7 @@ import { execFile as execFileCallback } from 'node:child_process'
 import { isAbsolute, relative, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { addTrackedPlaytime, getSettings, markGamePlayed } from './db'
+import { lobbyNative } from './native'
 
 const execFile = promisify(execFileCallback)
 interface Watch { gameId: string; installPath: string; requestedAt: number; onChanged?: () => void; startedAt?: number; lastSeenAt?: number; lastSavedAt?: number; lastNotifiedMinute?: number }
@@ -11,6 +12,11 @@ let polling = false
 
 async function processPaths(): Promise<string[]> {
   if (process.platform !== 'win32') return []
+  const native = lobbyNative()
+  if (native) {
+    try { return native.runningProcessPaths() }
+    catch (error) { console.warn('Native process listing failed; falling back to PowerShell', error) }
+  }
   const command = 'Get-CimInstance -ClassName Win32_Process | ForEach-Object { $_.ExecutablePath } | Where-Object { $_ } | ConvertTo-Json -Compress'
   const { stdout } = await execFile('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command], { encoding: 'utf8', timeout: 8_000, maxBuffer: 4 * 1024 * 1024, windowsHide: true })
   const text = stdout.trim()

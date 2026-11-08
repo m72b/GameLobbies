@@ -9,8 +9,9 @@
     "predev": "npx install-electron --no",
     "dev": "electron-vite dev",
     "typecheck": "tsc --noEmit",
+    "build:native": "node scripts/build-native.mjs",
     "test": "tsx --test tests/*.test.ts",
-    "build": "npm run typecheck && electron-vite build",
+    "build": "npm run typecheck && npm run build:native && electron-vite build",
     "dist": "npm run build && electron-builder",
     "postinstall": "electron-builder install-app-deps"
   },
@@ -41,8 +42,8 @@
   "build": {
     "appId": "app.gamelobby.desktop",
     "productName": "Game Lobby",
-    "asarUnpack": ["node_modules/better-sqlite3/**"],
-    "files": ["out/**/*", "package.json"],
+    "asarUnpack": ["node_modules/better-sqlite3/**", "native/*.node"],
+    "files": ["out/**/*", "package.json", "native/lobby_native.node"],
     "win": { "target": ["nsis", "portable"] },
     "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true }
   }

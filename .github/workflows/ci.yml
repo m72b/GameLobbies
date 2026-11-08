@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, Rusted]
   pull_request:
     branches: [main]
 
@@ -15,6 +15,17 @@ jobs:
         with:
           node-version: 24
           cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native
       - run: npm ci
       - run: npm test
+      - run: cargo fmt --manifest-path native/Cargo.toml --check
+      - run: cargo clippy --manifest-path native/Cargo.toml --all-targets -- -D warnings
+      - run: cargo test --manifest-path native/Cargo.toml
       - run: npm run build
+        env:
+          LOBBY_REQUIRE_NATIVE: '1'

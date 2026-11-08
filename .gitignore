@@ -6,3 +6,5 @@ release/
 npm-debug.log*
 Thumbs.db
 .DS_Store
+native/target/
+native/*.node

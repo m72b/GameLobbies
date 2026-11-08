@@ -1,0 +1,29 @@
+[package]
+name = "lobby-native"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "Native Windows helpers for Game Lobby, loaded by the Electron main process"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+napi = { version = "2.16", features = ["napi4"] }
+napi-derive = "2.16"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+  "Win32_Foundation",
+  "Win32_System_Diagnostics_ToolHelp",
+  "Win32_System_Threading",
+] }
+
+[build-dependencies]
+napi-build = "2.1"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = "symbols"
