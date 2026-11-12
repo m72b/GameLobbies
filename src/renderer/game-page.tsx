@@ -1,9 +1,12 @@
-import { useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, ChevronDown, FolderOpen, Heart, MoreHorizontal, Play } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { ArrowLeft, ChevronDown, FolderOpen, Heart, MoreHorizontal, Pencil, Play } from 'lucide-react'
 import { StoreIcon } from './store-icons'
+import { CustomizePanel, useLogoLayout } from './customize-page'
+import { coverUrl } from './lobby-api'
+import { defaultGamePageCustom } from '../shared/defaults'
 import { coverImage, coverStyle } from './cover'
 import { elapsedSeconds, formatClock, formatDate, formatSession, formatTime, formatTotal, useNow } from './format'
-import type { Game, GameArt, PlaySession, PlayStats, RunningGame, Settings } from '../shared/types'
+import type { Game, GamePageArt, PlaySession, PlayStats, RunningGame, Settings } from '../shared/types'
 
 export interface GamePageActions {
   back(): void
@@ -18,27 +21,32 @@ export interface GamePageActions {
   remove(game: Game): void
 }
 
-const emptyArt: GameArt = { hero: [], logo: [] }
+const emptyArt: GamePageArt = { hero: [], logo: [], custom: defaultGamePageCustom }
 
 export function GamePage({ game, index, settings, running, libraryVersion, actions }: { game: Game; index: number; settings: Settings; running?: RunningGame; libraryVersion: number; actions: GamePageActions }) {
-  const [art, setArt] = useState<GameArt>(emptyArt)
+  const [art, setArt] = useState<GamePageArt>(emptyArt)
   const [heroIdx, setHeroIdx] = useState(0)
   const [logoIdx, setLogoIdx] = useState(0)
   const [sessions, setSessions] = useState<PlaySession[]>([])
   const [stats, setStats] = useState<PlayStats | null>(null)
   const [routeIdx, setRouteIdx] = useState(0)
   const [menuOpen, setMenuOpen] = useState(false)
+  const [customizing, setCustomizing] = useState(false)
+  const { layout, change: changeLayout, flush: flushLayout } = useLogoLayout(game.id, art.custom)
   const now = useNow(!!running || sessions.some(session => !session.endedAt))
 
   const defaultRoute = useMemo(() => Math.max(0, game.routes.findIndex(route => route.installed)), [game.id]) // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { setRouteIdx(defaultRoute); setMenuOpen(false) }, [game.id, defaultRoute])
+  useEffect(() => { setRouteIdx(defaultRoute); setMenuOpen(false); setCustomizing(false) }, [game.id, defaultRoute])
 
   useEffect(() => {
     let live = true
     setArt(emptyArt); setHeroIdx(0); setLogoIdx(0)
-    window.lobby.art.get(game.id).then(next => { if (live) setArt(next) }).catch(() => {})
-    return () => { live = false }
+    const load = () => window.lobby.art.get(game.id).then(next => { if (live) setArt(next) }).catch(() => {})
+    load()
+    const off = window.lobby.art.onChanged(event => { if (event.gameId === game.id) { setHeroIdx(0); setLogoIdx(0); void load() } })
+    return () => { live = false; off() }
   }, [game.id])
+  const closeCustomize = useCallback(() => { flushLayout(); setCustomizing(false) }, [flushLayout])
 
   const runKey = running ? running.state + ':' + running.startedAt : 'idle'
   useEffect(() => {
@@ -49,8 +57,8 @@ export function GamePage({ game, index, settings, running, libraryVersion, actio
     return () => { live = false }
   }, [game.id, libraryVersion, runKey])
 
-  const heroSrc = art.hero[heroIdx]
-  const logoSrc = art.logo[logoIdx]
+  const heroSrc = art.hero[heroIdx] ? coverUrl(art.hero[heroIdx]) : undefined
+  const logoSrc = art.logo[logoIdx] ? coverUrl(art.logo[logoIdx]) : undefined
   const coverBg = coverImage(game.cover)
   const route = game.routes[routeIdx]
   const launching = running?.state === 'launching'
@@ -62,6 +70,7 @@ export function GamePage({ game, index, settings, running, libraryVersion, actio
   const hasLiveRow = sessions.some(item => !item.endedAt)
   const menuItems: Array<[string, () => void]> = [
     ['Edit metadata', () => actions.edit(game)],
+    ['Customize page', () => setCustomizing(true)],
     ['Set custom cover', () => actions.setCover(game)],
     ['Find cover on SteamGridDB', () => actions.findCover(game)],
     ['Link another game', () => actions.link(game)],
@@ -77,12 +86,15 @@ export function GamePage({ game, index, settings, running, libraryVersion, actio
         : <div className="gp-hero-fallback" style={coverBg ? { backgroundImage: coverBg } : coverStyle(game, index)} />}
       <div className="gp-hero-fade" />
       <button className="gp-back" onClick={actions.back}><ArrowLeft size={15} /> Library</button>
-      <div className="gp-logo-wrap">
+      <button className="gp-customize" onClick={() => setCustomizing(true)} aria-haspopup="dialog" title="Customize hero, logo and layout"><Pencil size={13} /> Customize</button>
+      <div className={'gp-logo-wrap pos-' + layout.position} style={{ '--logo-scale': layout.scale } as React.CSSProperties}>
         {logoSrc
           ? <img key={logoSrc} className="gp-logo" src={logoSrc} alt={game.title} onError={() => setLogoIdx(value => value + 1)} />
           : <h1 className="gp-title">{game.title}</h1>}
       </div>
     </div>
+
+    {customizing && <CustomizePanel game={game} custom={art.custom} heroSrc={heroSrc} logoSrc={logoSrc} layout={layout} onLayout={changeLayout} onClose={closeCustomize} />}
 
     <div className="gp-bar">
       {launching

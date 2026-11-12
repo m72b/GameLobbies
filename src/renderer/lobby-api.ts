@@ -2,7 +2,7 @@
 // Replaces the Electron preload script; the API shape is unchanged.
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
-import type { LobbyAPI, RunningGame, Settings, SteamGridDbFetchSummary } from '../shared/types'
+import type { ArtChangedEvent, LobbyAPI, RunningGame, Settings, SteamGridDbFetchSummary } from '../shared/types'
 
 async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   try {
@@ -79,6 +79,8 @@ const api: LobbyAPI = {
     saveKey: key => call('steamgriddb_save_key', { key }),
     testKey: () => call('steamgriddb_test_key'),
     search: gameId => call('steamgriddb_search', { gameId }),
+    searchHeroes: gameId => call('steamgriddb_search_heroes', { gameId }),
+    searchLogos: gameId => call('steamgriddb_search_logos', { gameId }),
     apply: (gameId, url) => call('steamgriddb_apply', { gameId, url }),
     fetchMissing: () => call('steamgriddb_fetch_missing'),
     onFetched: callback => subscribe<SteamGridDbFetchSummary>('steamgriddb:fetched', callback)
@@ -91,7 +93,13 @@ const api: LobbyAPI = {
     setExcluded: (gameId, excluded) => call('tracking_set_excluded', { gameId, excluded })
   },
   art: {
-    get: gameId => call('art_get', { gameId })
+    get: gameId => call('art_get', { gameId }),
+    setHero: (gameId, url) => call('art_set_hero', { gameId, url }),
+    setLogo: (gameId, url) => call('art_set_logo', { gameId, url }),
+    chooseHeroFile: gameId => call('art_choose_hero_file', { gameId }),
+    chooseLogoFile: gameId => call('art_choose_logo_file', { gameId }),
+    setLogoLayout: (gameId, position, scale) => call('art_set_logo_layout', { gameId, position, scale }),
+    onChanged: callback => subscribe<ArtChangedEvent>('art:changed', callback)
   },
   app: { quit: () => call('app_quit') }
 }

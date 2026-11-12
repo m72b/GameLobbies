@@ -490,6 +490,8 @@ pub async fn backup_export(
             games: db::all_games(&conn).map_err(err)?,
             settings: Some(db::get_settings(&conn).map_err(err)?),
             emulators: Some(db::emulator_profiles(&conn).map_err(err)?),
+            game_page_custom: Some(db::all_page_custom(&conn).map_err(err)?)
+                .filter(|entries| !entries.is_empty()),
         }
     };
     std::fs::write(&path, serde_json::to_string_pretty(&backup).map_err(err)?).map_err(err)?;
@@ -514,6 +516,14 @@ pub async fn backup_import(
         if let Ok(settings) = db::get_settings(&state.db.lock()) {
             notify_settings(&app, settings);
         }
+    }
+    for entry in backup.game_page_custom.iter().flatten() {
+        let _ = app.emit(
+            "art:changed",
+            ArtChanged {
+                game_id: &entry.game_id,
+            },
+        );
     }
     Ok(count)
 }
@@ -617,4 +627,149 @@ pub async fn tracking_set_excluded(
 #[tauri::command]
 pub async fn art_get(state: State<'_, AppState>, game_id: String) -> CmdResult<GameArt> {
     art::get(&state, &game_id).await.map_err(err)
+}
+
+// ---------------------------------------------------------------------------
+// Game page customization. Every change returns the updated `GamePageCustom` and emits
+// `art:changed` with `{ gameId }`.
+
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct ArtChanged<'a> {
+    game_id: &'a str,
+}
+
+fn notify_art(app: &AppHandle, game_id: &str, custom: GamePageCustom) -> GamePageCustom {
+    let _ = app.emit("art:changed", ArtChanged { game_id });
+    custom
+}
+
+fn set_page_image(
+    app: &AppHandle,
+    state: &AppState,
+    game_id: &str,
+    slot: art::Slot,
+    url: Option<&str>,
+) -> CmdResult<GamePageCustom> {
+    let custom =
+        art::set_image(&state.db.lock(), &state.covers_dir(), game_id, slot, url).map_err(err)?;
+    Ok(notify_art(app, game_id, custom))
+}
+
+/// Sets the custom hero (SteamGridDB https URL or an existing `lobby-cover://` name);
+/// `null` goes back to the automatic art.
+#[tauri::command]
+pub async fn art_set_hero(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    game_id: String,
+    url: Option<String>,
+) -> CmdResult<GamePageCustom> {
+    set_page_image(&app, &state, &game_id, art::Slot::Hero, url.as_deref())
+}
+
+/// Like `art_set_hero`, for the logo.
+#[tauri::command]
+pub async fn art_set_logo(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    game_id: String,
+    url: Option<String>,
+) -> CmdResult<GamePageCustom> {
+    set_page_image(&app, &state, &game_id, art::Slot::Logo, url.as_deref())
+}
+
+async fn choose_page_image(
+    app: &AppHandle,
+    window: &WebviewWindow,
+    state: &AppState,
+    game_id: &str,
+    slot: art::Slot,
+) -> CmdResult<GamePageCustom> {
+    if db::get_game(&state.db.lock(), game_id)
+        .map_err(err)?
+        .is_none()
+    {
+        return Err("Game not found.".into());
+    }
+    let filter = match slot {
+        art::Slot::Hero => "Images",
+        art::Slot::Logo => "Logo images (transparent PNG or WebP work best)",
+    };
+    let Some(source) = pick_file(window, filter, validation::PAGE_IMAGE_EXTENSIONS).await else {
+        // Cancelled: nothing changes.
+        return db::page_custom(&state.db.lock(), game_id).map_err(err);
+    };
+    let covers = state.covers_dir();
+    let value = art::import_image_file(&covers, game_id, slot, &source).map_err(err)?;
+    let saved = art::set_image(&state.db.lock(), &covers, game_id, slot, Some(&value));
+    match saved {
+        Ok(custom) => Ok(notify_art(app, game_id, custom)),
+        Err(e) => {
+            // Nothing references the new copy yet (e.g. the game was removed meanwhile).
+            if let Some(name) = validation::lobby_cover_name(&value) {
+                let _ = std::fs::remove_file(covers.join(name));
+            }
+            Err(err(e))
+        }
+    }
+}
+
+/// Opens a file dialog and copies the chosen image (PNG/JPEG/WebP/AVIF, at most 20 MB) into
+/// the covers folder as the custom hero. Cancelling returns the current value unchanged.
+#[tauri::command]
+pub async fn art_choose_hero_file(
+    app: AppHandle,
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    game_id: String,
+) -> CmdResult<GamePageCustom> {
+    choose_page_image(&app, &window, &state, &game_id, art::Slot::Hero).await
+}
+
+/// Like `art_choose_hero_file`, for the logo.
+#[tauri::command]
+pub async fn art_choose_logo_file(
+    app: AppHandle,
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    game_id: String,
+) -> CmdResult<GamePageCustom> {
+    choose_page_image(&app, &window, &state, &game_id, art::Slot::Logo).await
+}
+
+/// Logo placement: `position` is bottom-left | top-center | center | bottom-center and
+/// `scale` a finite number from 0.5 to 2.0.
+#[tauri::command]
+pub async fn art_set_logo_layout(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    game_id: String,
+    position: String,
+    scale: f64,
+) -> CmdResult<GamePageCustom> {
+    let custom = art::set_logo_layout(&state.db.lock(), &game_id, &position, scale).map_err(err)?;
+    Ok(notify_art(&app, &game_id, custom))
+}
+
+/// SteamGridDB hero candidates for the picker (not cached).
+#[tauri::command]
+pub async fn steamgriddb_search_heroes(
+    state: State<'_, AppState>,
+    game_id: String,
+) -> CmdResult<Vec<Cover>> {
+    steamgriddb::search_art(&state, &game_id, steamgriddb::ArtKind::Hero)
+        .await
+        .map_err(err)
+}
+
+/// SteamGridDB logo candidates for the picker (not cached).
+#[tauri::command]
+pub async fn steamgriddb_search_logos(
+    state: State<'_, AppState>,
+    game_id: String,
+) -> CmdResult<Vec<Cover>> {
+    steamgriddb::search_art(&state, &game_id, steamgriddb::ArtKind::Logo)
+        .await
+        .map_err(err)
 }

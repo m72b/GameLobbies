@@ -88,7 +88,16 @@ const EMULATOR_KEYS: &[&str] = &[
 ];
 const CONNECTION_KEYS: &[&str] = &["steamId", "steamApiKey", "legendaryPath", "gogDatabasePath"];
 const PLUGIN_KEYS: &[&str] = &["id", "name", "version", "kind", "store", "manifestFolder"];
-const BACKUP_KEYS: &[&str] = &["games", "settings", "emulators"];
+const BACKUP_KEYS: &[&str] = &["games", "settings", "emulators", "gamePageCustom"];
+const PAGE_CUSTOM_KEYS: &[&str] = &["gameId", "hero", "logo", "logoPosition", "logoScale"];
+/// Image types accepted for custom heroes and logos (`lobby-cover://` files).
+pub const PAGE_IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "webp", "avif"];
+pub const LOBBY_COVER_PREFIX: &str = "lobby-cover://";
+/// Bare covers-folder file names as Game Lobby creates them: ASCII letters, digits, `_.-`,
+/// not starting with a dot, ending in an image extension.
+static COVER_NAME: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)^[A-Za-z0-9_-][A-Za-z0-9_.-]{0,199}\.(png|jpe?g|webp|avif)$").unwrap()
+});
 
 fn object<'a>(value: &'a Value, what: &str) -> Result<&'a Map<String, Value>> {
     value
@@ -464,6 +473,95 @@ pub fn plugin_manifest(value: &Value) -> Result<PluginManifest> {
     Ok(m)
 }
 
+/// The file name in a `lobby-cover://<name>` value, when it is a safe bare covers-folder name
+/// (no paths, `..`, percent-escapes, drive letters or Windows device names). Syntax only: the
+/// caller checks the file exists.
+pub fn lobby_cover_name(raw: &str) -> Option<&str> {
+    let name = raw.strip_prefix(LOBBY_COVER_PREFIX)?;
+    if !COVER_NAME.is_match(name) || name.contains("..") {
+        return None;
+    }
+    let stem = name
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_uppercase();
+    let device = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || ((stem.starts_with("COM") || stem.starts_with("LPT"))
+            && stem.len() == 4
+            && stem.as_bytes()[3].is_ascii_digit());
+    (!device).then_some(name)
+}
+
+/// A custom hero/logo value: a SteamGridDB https image URL (not a video) or a
+/// `lobby-cover://<name>` value with a safe name. Returns the value to store.
+pub fn page_art_value(raw: &str) -> Result<String> {
+    let raw = raw.trim();
+    if raw.starts_with(LOBBY_COVER_PREFIX) {
+        return lobby_cover_name(raw)
+            .map(|name| format!("{LOBBY_COVER_PREFIX}{name}"))
+            .ok_or_else(|| anyhow!("That image file name is not valid."));
+    }
+    let url = crate::steamgriddb::validate_cover_url(raw)
+        .map_err(|_| anyhow!("Only SteamGridDB images or your own image files can be used."))?;
+    if url::Url::parse(&url).is_ok_and(|u| u.path().to_ascii_lowercase().ends_with(".webm")) {
+        bail!("Videos can't be used as game page art.");
+    }
+    Ok(url)
+}
+
+/// Logo layout: a known position and a finite scale in [`LOGO_SCALE_MIN`, `LOGO_SCALE_MAX`].
+pub fn logo_layout(position: &str, scale: f64) -> Result<(LogoPosition, f64)> {
+    let position = LogoPosition::parse(position).ok_or_else(|| {
+        anyhow!("Logo position must be bottom-left, top-center, center or bottom-center.")
+    })?;
+    if !valid_logo_scale(scale) {
+        bail!("Logo size must be between {LOGO_SCALE_MIN} and {LOGO_SCALE_MAX}.");
+    }
+    Ok((position, scale))
+}
+
+/// One `gamePageCustom` backup entry.
+pub fn page_custom_entry(value: &Value) -> Result<GamePageCustomEntry> {
+    let clean = strict(value, PAGE_CUSTOM_KEYS, "Game page customization")?;
+    let map = object(&clean, "Game page customization")?;
+    let game_id = map
+        .get("gameId")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|id| !id.is_empty() && id.chars().count() <= MAX_GAME_ID_LEN)
+        .ok_or_else(|| anyhow!("Game page customization has an invalid gameId."))?;
+    let art = |key: &str| -> Result<Option<String>> {
+        match map.get(key) {
+            None => Ok(None),
+            Some(Value::String(s)) => page_art_value(s)
+                .map(Some)
+                .map_err(|e| anyhow!("Game page customization {key}: {e}")),
+            Some(_) => bail!("Game page customization {key} must be text."),
+        }
+    };
+    let position = match map.get("logoPosition") {
+        None => LogoPosition::default().as_str(),
+        Some(v) => v
+            .as_str()
+            .ok_or_else(|| anyhow!("Game page customization logoPosition must be text."))?,
+    };
+    let scale = match map.get("logoScale") {
+        None => DEFAULT_LOGO_SCALE,
+        Some(v) => v
+            .as_f64()
+            .ok_or_else(|| anyhow!("Game page customization logoScale must be a number."))?,
+    };
+    let (logo_position, logo_scale) = logo_layout(position, scale)?;
+    Ok(GamePageCustomEntry {
+        game_id: game_id.to_string(),
+        hero: art("hero")?,
+        logo: art("logo")?,
+        logo_position,
+        logo_scale,
+    })
+}
+
 pub fn backup(value: &Value) -> Result<Backup> {
     let clean = strict(value, BACKUP_KEYS, "Backup")?;
     let games = clean
@@ -482,10 +580,20 @@ pub fn backup(value: &Value) -> Result<Backup> {
         Some(_) => bail!("Backup emulators are invalid."),
         None => None,
     };
+    let game_page_custom = match clean.get("gamePageCustom") {
+        Some(Value::Array(list)) if list.len() <= 100_000 => Some(
+            list.iter()
+                .map(page_custom_entry)
+                .collect::<Result<Vec<_>>>()?,
+        ),
+        Some(_) => bail!("Backup game page customizations are invalid."),
+        None => None,
+    };
     Ok(Backup {
         games,
         settings,
         emulators,
+        game_page_custom,
     })
 }
 
@@ -608,5 +716,47 @@ mod tests {
         assert!(game_patch(&json!({ "id": "a", "store": "Nope" })).is_err());
         assert!(https_url("http://x.example").is_err());
         assert!(https_url("https://u:p@x.example").is_err());
+    }
+
+    #[test]
+    fn backup_page_custom_entries_are_validated() {
+        let entry = |extra: Value| {
+            let mut v = json!({ "gameId": "steam:570" });
+            for (k, val) in extra.as_object().unwrap() {
+                v.as_object_mut().unwrap().insert(k.clone(), val.clone());
+            }
+            backup(&json!({ "games": [game_json()], "gamePageCustom": [v] }))
+        };
+        let minimal = entry(json!({})).unwrap().game_page_custom.unwrap();
+        assert_eq!(minimal[0].custom(), GamePageCustom::default());
+        let full = entry(json!({ "hero": "https://cdn2.steamgriddb.com/hero/a.png",
+            "logo": "lobby-cover://logo-a-1.webp", "logoPosition": "top-center", "logoScale": 2 }))
+        .unwrap()
+        .game_page_custom
+        .unwrap();
+        assert_eq!(full[0].logo_position, LogoPosition::TopCenter);
+        assert_eq!(full[0].logo_scale, 2.0);
+        // null means absent, like everywhere else in backups.
+        assert!(entry(json!({ "hero": null })).is_ok());
+        for bad in [
+            json!({ "hero": "https://evil.example/a.png" }),
+            json!({ "logo": "lobby-cover://../library.sqlite" }),
+            json!({ "logo": "lobby-cover://a/b.png" }),
+            json!({ "hero": 5 }),
+            json!({ "logoPosition": "left" }),
+            json!({ "logoScale": 3 }),
+            json!({ "logoScale": "1" }),
+            json!({ "gameId": "" }),
+            json!({ "gameId": "x".repeat(513) }),
+            json!({ "unexpected": true }),
+        ] {
+            assert!(entry(bad.clone()).is_err(), "{bad}");
+        }
+        assert!(backup(&json!({ "games": [], "gamePageCustom": {} })).is_err());
+        assert!(backup(&json!({ "games": [], "gamePageCustom": [1] })).is_err());
+        assert!(backup(&json!({ "games": [] }))
+            .unwrap()
+            .game_page_custom
+            .is_none());
     }
 }

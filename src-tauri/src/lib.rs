@@ -137,6 +137,13 @@ pub fn run() {
             commands::tracking_stats,
             commands::tracking_set_excluded,
             commands::art_get,
+            commands::art_set_hero,
+            commands::art_set_logo,
+            commands::art_choose_hero_file,
+            commands::art_choose_logo_file,
+            commands::art_set_logo_layout,
+            commands::steamgriddb_search_heroes,
+            commands::steamgriddb_search_logos,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Game Lobby");

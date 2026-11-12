@@ -342,6 +342,13 @@ pub struct Backup {
     pub settings: Option<Settings>,
     #[serde(default)]
     pub emulators: Option<Vec<EmulatorProfile>>,
+    /// Per-game page customization. Optional: older backups don't have it.
+    #[serde(
+        default,
+        rename = "gamePageCustom",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub game_page_custom: Option<Vec<GamePageCustomEntry>>,
 }
 
 /// One stored play session (`tracking_sessions`). `ended_at` is absent while it is in progress.
@@ -370,11 +377,123 @@ pub struct PlayStats {
     pub last_played: Option<i64>,
 }
 
-/// Game page art candidates in priority order (`art_get`).
+/// Game page art candidates in priority order (`art_get`), with the game's customization.
 #[derive(Serialize, Clone, Debug, Default, PartialEq)]
 pub struct GameArt {
     pub hero: Vec<String>,
     pub logo: Vec<String>,
+    pub custom: GamePageCustom,
+}
+
+/// Where the logo sits on the game page hero.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum LogoPosition {
+    #[default]
+    BottomLeft,
+    TopCenter,
+    Center,
+    BottomCenter,
+}
+
+impl LogoPosition {
+    pub const ALL: [LogoPosition; 4] = [
+        Self::BottomLeft,
+        Self::TopCenter,
+        Self::Center,
+        Self::BottomCenter,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::BottomLeft => "bottom-left",
+            Self::TopCenter => "top-center",
+            Self::Center => "center",
+            Self::BottomCenter => "bottom-center",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|p| p.as_str() == raw)
+    }
+}
+
+pub const LOGO_SCALE_MIN: f64 = 0.5;
+pub const LOGO_SCALE_MAX: f64 = 2.0;
+pub const DEFAULT_LOGO_SCALE: f64 = 1.0;
+
+pub fn valid_logo_scale(scale: f64) -> bool {
+    scale.is_finite() && (LOGO_SCALE_MIN..=LOGO_SCALE_MAX).contains(&scale)
+}
+
+/// A game's page customization (table `game_page_custom`). `hero` / `logo` are a SteamGridDB
+/// https URL or a `lobby-cover://<name>` file; `None` = the default art.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GamePageCustom {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hero: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub logo: Option<String>,
+    pub logo_position: LogoPosition,
+    pub logo_scale: f64,
+}
+
+impl Default for GamePageCustom {
+    fn default() -> Self {
+        Self {
+            hero: None,
+            logo: None,
+            logo_position: LogoPosition::default(),
+            logo_scale: DEFAULT_LOGO_SCALE,
+        }
+    }
+}
+
+impl GamePageCustom {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// One game's customization in a backup file.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GamePageCustomEntry {
+    pub game_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hero: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logo: Option<String>,
+    #[serde(default)]
+    pub logo_position: LogoPosition,
+    #[serde(default = "default_logo_scale")]
+    pub logo_scale: f64,
+}
+
+fn default_logo_scale() -> f64 {
+    DEFAULT_LOGO_SCALE
+}
+
+impl GamePageCustomEntry {
+    pub fn new(game_id: &str, custom: &GamePageCustom) -> Self {
+        Self {
+            game_id: game_id.to_string(),
+            hero: custom.hero.clone(),
+            logo: custom.logo.clone(),
+            logo_position: custom.logo_position,
+            logo_scale: custom.logo_scale,
+        }
+    }
+
+    pub fn custom(&self) -> GamePageCustom {
+        GamePageCustom {
+            hero: self.hero.clone(),
+            logo: self.logo.clone(),
+            logo_position: self.logo_position,
+            logo_scale: self.logo_scale,
+        }
+    }
 }
 
 pub fn now_ms() -> i64 {

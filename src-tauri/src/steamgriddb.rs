@@ -13,6 +13,8 @@
 //!   background after a library scan when `steamGridDbAutoFetch` is on. Emits
 //!   `library:changed` and `steamgriddb:fetched` (payload: [`FetchSummary`]).
 //! - `steamgriddb_test_key()` — one authenticated request; [`KeyTest`] `{ ok, message }`.
+//! - `steamgriddb_search_heroes(gameId)` / `steamgriddb_search_logos(gameId)` — up to
+//!   [`MAX_CANDIDATES`] game page art candidates for the pickers (not cached).
 //!
 //! Grid requests follow the user's settings (read at request time, see [`GridPrefs`]):
 //! `steamGridDbStyles`, `steamGridDbAnimated`, `steamGridDbNsfw`, `steamGridDbHumor`.
@@ -336,18 +338,40 @@ pub fn parse_grids(body: &str, prefs: &GridPrefs) -> Result<Vec<Cover>, ApiError
         .collect())
 }
 
-/// `GET /heroes/game/{id}` or `GET /logos/game/{id}` → image URLs in API order, with the same
-/// safety filtering as [`parse_grids`] (grid styles ignored), capped at [`MAX_ART_CANDIDATES`].
-pub fn parse_art(body: &str, prefs: &GridPrefs) -> Result<Vec<String>, ApiError> {
+/// `GET /heroes/game/{id}` or `GET /logos/game/{id}` → picker candidates in API order, with
+/// the same safety filtering as [`parse_grids`] (grid styles ignored), capped at
+/// [`MAX_CANDIDATES`].
+pub fn parse_art_covers(body: &str, prefs: &GridPrefs) -> Result<Vec<Cover>, ApiError> {
     let prefs = GridPrefs {
         styles: Vec::new(),
         ..prefs.clone()
     };
-    Ok(parse_grids(body, &prefs)?
+    parse_grids(body, &prefs)
+}
+
+/// Like [`parse_art_covers`], but only the image URLs, capped at [`MAX_ART_CANDIDATES`].
+pub fn parse_art(body: &str, prefs: &GridPrefs) -> Result<Vec<String>, ApiError> {
+    Ok(parse_art_covers(body, prefs)?
         .into_iter()
         .map(|c| c.url)
         .take(MAX_ART_CANDIDATES)
         .collect())
+}
+
+/// Game page art kinds on SteamGridDB.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArtKind {
+    Hero,
+    Logo,
+}
+
+impl ArtKind {
+    fn segment(self) -> &'static str {
+        match self {
+            Self::Hero => "heroes",
+            Self::Logo => "logos",
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -534,21 +558,33 @@ impl Client {
         url
     }
 
-    /// `kind` is `"heroes"` or `"logos"`.
-    fn art_url(kind: &str, sgdb_id: u64, prefs: &GridPrefs) -> url::Url {
-        let mut url = Self::endpoint(&[kind, "game", &sgdb_id.to_string()]);
+    fn art_url(kind: ArtKind, sgdb_id: u64, prefs: &GridPrefs) -> url::Url {
+        let mut url = Self::endpoint(&[kind.segment(), "game", &sgdb_id.to_string()]);
         url.query_pairs_mut().extend_pairs(prefs.art_query());
         url
     }
 
     async fn art(
         &self,
-        kind: &str,
+        kind: ArtKind,
         sgdb_id: u64,
         prefs: &GridPrefs,
     ) -> Result<Vec<String>, ApiError> {
         match self.get(Self::art_url(kind, sgdb_id, prefs)).await {
             Ok(body) => parse_art(&body, prefs),
+            Err(ApiError::NotFound) => Ok(Vec::new()),
+            Err(e) => Err(e),
+        }
+    }
+
+    async fn art_covers(
+        &self,
+        kind: ArtKind,
+        sgdb_id: u64,
+        prefs: &GridPrefs,
+    ) -> Result<Vec<Cover>, ApiError> {
+        match self.get(Self::art_url(kind, sgdb_id, prefs)).await {
+            Ok(body) => parse_art_covers(&body, prefs),
             Err(ApiError::NotFound) => Ok(Vec::new()),
             Err(e) => Err(e),
         }
@@ -594,6 +630,20 @@ pub async fn search(state: &AppState, game_id: &str) -> Result<Vec<Cover>> {
     Ok(client.grids(sgdb_id, &prefs).await?)
 }
 
+/// Hero or logo picker candidates (`steamgriddb_search_heroes` / `_logos`): up to
+/// [`MAX_CANDIDATES`], filtered like the game page art (animated/NSFW/humor settings, no
+/// grid styles, images only). Never cached. Empty when SteamGridDB has no match.
+pub async fn search_art(state: &AppState, game_id: &str, kind: ArtKind) -> Result<Vec<Cover>> {
+    let game =
+        db::get_game(&state.db.lock(), game_id)?.ok_or_else(|| anyhow!("Game not found."))?;
+    let client = client(state)?;
+    let Some(sgdb_id) = client.game_id(&game).await? else {
+        return Ok(Vec::new());
+    };
+    let prefs = grid_prefs(state)?;
+    Ok(client.art_covers(kind, sgdb_id, &prefs).await?)
+}
+
 /// Hero and logo URLs for the game page. `Ok(None)` when no key is saved; `Ok(Some(empty))`
 /// when SteamGridDB has no match. Errors never contain the key or request URLs.
 pub async fn fetch_art(
@@ -608,8 +658,8 @@ pub async fn fetch_art(
     let Some(sgdb_id) = client.game_id(game).await? else {
         return Ok(Some((Vec::new(), Vec::new())));
     };
-    let hero = client.art("heroes", sgdb_id, prefs).await?;
-    let logo = client.art("logos", sgdb_id, prefs).await?;
+    let hero = client.art(ArtKind::Hero, sgdb_id, prefs).await?;
+    let logo = client.art(ArtKind::Logo, sgdb_id, prefs).await?;
     Ok(Some((hero, logo)))
 }
 
@@ -1007,11 +1057,11 @@ mod tests {
     fn art_requests_follow_the_settings_except_grid_styles() {
         let p = prefs(&["material"], true, false, true);
         assert_eq!(
-            Client::art_url("heroes", 7, &p).as_str(),
+            Client::art_url(ArtKind::Hero, 7, &p).as_str(),
             "https://www.steamgriddb.com/api/v2/heroes/game/7?types=static%2Canimated&nsfw=false&humor=any"
         );
         assert_eq!(
-            Client::art_url("logos", 7, &GridPrefs::default()).as_str(),
+            Client::art_url(ArtKind::Logo, 7, &GridPrefs::default()).as_str(),
             "https://www.steamgriddb.com/api/v2/logos/game/7?types=static&nsfw=false&humor=false"
         );
         assert_ne!(
@@ -1116,5 +1166,69 @@ mod tests {
         g.default_cover = None;
         g.cover = Some("lobby-cover://a.png".into());
         assert!(!missing_cover(&g));
+    }
+
+    #[test]
+    fn parses_hero_and_logo_picker_candidates() {
+        let heroes = r#"{"success":true,"data":[
+            {"id":101,"score":3,"style":"blurred","width":1920,"height":620,"nsfw":false,"humor":false,"epilepsy":false,
+             "mime":"image/png","url":"https://cdn2.steamgriddb.com/hero/a.png","thumb":"https://cdn2.steamgriddb.com/hero_thumb/a.jpg",
+             "upvotes":4,"downvotes":0,"author":{"name":"painter"}},
+            {"id":102,"width":3840,"height":1240,"mime":"image/jpeg","url":"https://cdn2.steamgriddb.com/hero/b.jpg","thumb":"https://cdn2.steamgriddb.com/hero_thumb/b.jpg"},
+            {"id":103,"width":1920,"height":620,"humor":true,"url":"https://cdn2.steamgriddb.com/hero/c.png","thumb":"https://cdn2.steamgriddb.com/hero_thumb/c.jpg"},
+            {"id":104,"width":1920,"height":620,"mime":"video/webm","url":"https://cdn2.steamgriddb.com/hero/d.webm","thumb":"https://cdn2.steamgriddb.com/hero_thumb/d.jpg"},
+            {"id":105,"width":1920,"height":620,"url":"https://cdn2.steamgriddb.com/hero/e.png","thumb":"https://evil.example/e.jpg"}
+        ]}"#;
+        // Grid styles never filter heroes or logos.
+        let p = prefs(&["material"], false, false, false);
+        let covers = parse_art_covers(heroes, &p).unwrap();
+        assert_eq!(covers.iter().map(|c| c.id).collect::<Vec<_>>(), [101, 102]);
+        assert_eq!(
+            covers[0],
+            Cover {
+                id: 101,
+                url: "https://cdn2.steamgriddb.com/hero/a.png".into(),
+                thumb: "https://cdn2.steamgriddb.com/hero_thumb/a.jpg".into(),
+                width: 1920,
+                height: 620,
+                style: Some("blurred".into()),
+                score: Some(3),
+                upvotes: Some(4),
+                downvotes: Some(0),
+                author: Some("painter".into()),
+            }
+        );
+        assert_eq!(
+            parse_art_covers(heroes, &prefs(&[], false, false, true))
+                .unwrap()
+                .len(),
+            3
+        );
+
+        let logos = r#"{"success":true,"data":[
+            {"id":201,"style":"official","width":1280,"height":427,"mime":"image/png","url":"https://cdn2.steamgriddb.com/logo/a.png","thumb":"https://cdn2.steamgriddb.com/logo_thumb/a.png"},
+            {"id":202,"style":"white","width":800,"height":300,"mime":"image/webp","url":"https://cdn2.steamgriddb.com/logo/b.webp","thumb":"https://cdn2.steamgriddb.com/logo_thumb/b.png"},
+            {"id":203,"width":800,"height":300,"nsfw":true,"url":"https://cdn2.steamgriddb.com/logo/c.png","thumb":"https://cdn2.steamgriddb.com/logo_thumb/c.png"}
+        ]}"#;
+        let covers = parse_art_covers(logos, &GridPrefs::default()).unwrap();
+        assert_eq!(covers.iter().map(|c| c.id).collect::<Vec<_>>(), [201, 202]);
+        assert_eq!(covers[1].style.as_deref(), Some("white"));
+
+        // Pickers get up to MAX_CANDIDATES; the game page cache keeps MAX_ART_CANDIDATES.
+        let many: Vec<String> = (0..50)
+            .map(|i| format!(r#"{{"id":{i},"width":1,"height":1,"url":"https://cdn2.steamgriddb.com/h/{i}.png","thumb":"https://cdn2.steamgriddb.com/t/{i}.png"}}"#))
+            .collect();
+        let body = format!(r#"{{"success":true,"data":[{}]}}"#, many.join(","));
+        assert_eq!(
+            parse_art_covers(&body, &GridPrefs::default())
+                .unwrap()
+                .len(),
+            MAX_CANDIDATES
+        );
+        assert!(parse_art_covers("<html>", &GridPrefs::default()).is_err());
+        assert_eq!(
+            Client::art_url(ArtKind::Logo, 9, &prefs(&[], true, true, false)).as_str(),
+            "https://www.steamgriddb.com/api/v2/logos/game/9?types=static%2Canimated&nsfw=any&humor=false"
+        );
     }
 }

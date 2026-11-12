@@ -56,7 +56,8 @@ fn migrate(db: &Connection, file: Option<&Path>) -> Result<()> {
         CREATE TABLE IF NOT EXISTS secrets(key TEXT PRIMARY KEY,value BLOB NOT NULL);
         CREATE TABLE IF NOT EXISTS play_sessions(id INTEGER PRIMARY KEY,gameId TEXT NOT NULL,startedAt INTEGER NOT NULL,endedAt INTEGER,seconds INTEGER NOT NULL DEFAULT 0,source TEXT NOT NULL);
         CREATE INDEX IF NOT EXISTS play_sessions_game ON play_sessions(gameId,startedAt);
-        CREATE TABLE IF NOT EXISTS game_art(gameId TEXT PRIMARY KEY,hero TEXT NOT NULL DEFAULT '[]',logo TEXT NOT NULL DEFAULT '[]',prefs TEXT NOT NULL DEFAULT '',fetchedAt INTEGER NOT NULL);",
+        CREATE TABLE IF NOT EXISTS game_art(gameId TEXT PRIMARY KEY,hero TEXT NOT NULL DEFAULT '[]',logo TEXT NOT NULL DEFAULT '[]',prefs TEXT NOT NULL DEFAULT '',fetchedAt INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS game_page_custom(gameId TEXT PRIMARY KEY,hero TEXT,logo TEXT,logoPosition TEXT NOT NULL DEFAULT 'bottom-left',logoScale REAL NOT NULL DEFAULT 1,updatedAt INTEGER NOT NULL);",
         GAMES_TABLE.replace("CREATE TABLE games", "CREATE TABLE IF NOT EXISTS games")
     ))?;
     let columns: HashSet<String> = db
@@ -452,12 +453,24 @@ const LOCAL_ONLY_SOURCES: [&str; 6] = [
     "xbox-appx",
 ];
 
-fn has_user_data(row: &GameRow) -> bool {
+/// Ids of games with a page customization (loaded once per reconcile).
+fn customized_game_ids(db: &Connection) -> Result<HashSet<String>> {
+    let mut stmt = db.prepare("SELECT gameId FROM game_page_custom")?;
+    let ids = stmt
+        .query_map([], |row| row.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(ids)
+}
+
+/// Whether the user put anything into this game that a scan must not throw away. A game page
+/// customization (`customized` holds those game ids) counts too.
+fn has_user_data(row: &GameRow, customized: &HashSet<String>) -> bool {
     let route_stats = row
         .routes
         .iter()
         .any(|r| r.playtime_minutes.unwrap_or(0) > 0 || r.last_played.is_some());
-    row.favorite
+    customized.contains(&row.id)
+        || row.favorite
         || row.hidden
         || row.seconds() > 0
         || row.last_played.is_some()
@@ -483,6 +496,7 @@ pub fn reconcile_installed_source(
         .map(route_identity)
         .collect();
     let rows = all_rows(db)?;
+    let customized = customized_game_ids(db)?;
     let tx = db.transaction()?;
     for row in rows {
         let mut changed = false;
@@ -524,7 +538,7 @@ pub fn reconcile_installed_source(
                 next.owned = None;
             }
             changed = true;
-            if !installed && next.owned != Some(true) && !has_user_data(&row) {
+            if !installed && next.owned != Some(true) && !has_user_data(&row, &customized) {
                 continue;
             }
             updated.push(next);
@@ -564,6 +578,7 @@ pub fn reconcile_owned_source(
         .map(route_identity)
         .collect();
     let rows = all_rows(db)?;
+    let customized = customized_game_ids(db)?;
     let tx = db.transaction()?;
     for row in rows {
         let mut changed = false;
@@ -577,7 +592,7 @@ pub fn reconcile_owned_source(
                 continue;
             }
             changed = true;
-            if route.installed == Some(true) || has_user_data(&row) {
+            if route.installed == Some(true) || has_user_data(&row, &customized) {
                 updated.push(GameRoute {
                     owned: Some(false),
                     installed: Some(route.installed == Some(true)),
@@ -657,6 +672,7 @@ fn delete_game_rows(db: &Connection, id: &str) -> Result<()> {
     for sql in [
         "DELETE FROM play_sessions WHERE gameId=?",
         "DELETE FROM game_art WHERE gameId=?",
+        "DELETE FROM game_page_custom WHERE gameId=?",
         "DELETE FROM games WHERE id=?",
     ] {
         db.execute(sql, [id])?;
@@ -723,6 +739,11 @@ pub fn merge_games(db: &mut Connection, target_id: &str, source_id: &str) -> Res
     )?;
     // The merged game's routes changed, so its art lookup may resolve differently: refetch.
     tx.execute("DELETE FROM game_art WHERE gameId=?", [target_id])?;
+    // Page customization: the target's wins; otherwise the source's moves over.
+    tx.execute(
+        "UPDATE OR IGNORE game_page_custom SET gameId=?1 WHERE gameId=?2",
+        params![target_id, source_id],
+    )?;
     delete_game_rows(&tx, source_id)?;
     tx.commit()?;
     all_games(db)
@@ -885,6 +906,83 @@ pub fn put_cached_art(db: &Connection, game_id: &str, art: &CachedArt) -> Result
         ],
     )?;
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Game page customization
+
+fn read_page_custom(row: &Row) -> rusqlite::Result<GamePageCustom> {
+    let art = |name: &str| -> rusqlite::Result<Option<String>> {
+        Ok(col_text(row, name)?.filter(|s| !s.is_empty()))
+    };
+    // Values are validated on the way in; anything odd in the file falls back to defaults.
+    let position = col_text(row, "logoPosition")?
+        .and_then(|p| LogoPosition::parse(&p))
+        .unwrap_or_default();
+    let scale = match row.get_ref("logoScale")? {
+        ValueRef::Real(f) => Some(f),
+        ValueRef::Integer(i) => Some(i as f64),
+        _ => None,
+    }
+    .filter(|f| valid_logo_scale(*f))
+    .unwrap_or(DEFAULT_LOGO_SCALE);
+    Ok(GamePageCustom {
+        hero: art("hero")?,
+        logo: art("logo")?,
+        logo_position: position,
+        logo_scale: scale,
+    })
+}
+
+/// A game's page customization; defaults when it has none (or doesn't exist).
+pub fn page_custom(db: &Connection, game_id: &str) -> Result<GamePageCustom> {
+    Ok(db
+        .query_row(
+            "SELECT * FROM game_page_custom WHERE gameId=?",
+            [game_id],
+            read_page_custom,
+        )
+        .optional()?
+        .unwrap_or_default())
+}
+
+/// Stores a game's customization (an all-default value removes the row). Values must already
+/// be validated. Returns false, storing nothing, when the game doesn't exist.
+pub fn put_page_custom(db: &Connection, game_id: &str, custom: &GamePageCustom) -> Result<bool> {
+    if get_row(db, game_id)?.is_none() {
+        return Ok(false);
+    }
+    if custom.is_default() {
+        db.execute("DELETE FROM game_page_custom WHERE gameId=?", [game_id])?;
+        return Ok(true);
+    }
+    db.execute(
+        "INSERT INTO game_page_custom(gameId,hero,logo,logoPosition,logoScale,updatedAt) VALUES(?1,?2,?3,?4,?5,?6)
+         ON CONFLICT(gameId) DO UPDATE SET hero=excluded.hero,logo=excluded.logo,logoPosition=excluded.logoPosition,logoScale=excluded.logoScale,updatedAt=excluded.updatedAt",
+        params![
+            game_id,
+            custom.hero,
+            custom.logo,
+            custom.logo_position.as_str(),
+            custom.logo_scale,
+            now_ms()
+        ],
+    )?;
+    Ok(true)
+}
+
+/// Every stored customization (backups), by game id.
+pub fn all_page_custom(db: &Connection) -> Result<Vec<GamePageCustomEntry>> {
+    let mut stmt = db.prepare("SELECT * FROM game_page_custom ORDER BY gameId")?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(GamePageCustomEntry::new(
+                &col_text(row, "gameId")?.unwrap_or_default(),
+                &read_page_custom(row)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(rows)
 }
 
 // ---------------------------------------------------------------------------
@@ -1057,6 +1155,10 @@ pub fn restore_backup(db: &mut Connection, backup: &Backup) -> Result<usize> {
     }
     for emulator in backup.emulators.iter().flatten() {
         save_emulator(&tx, emulator)?;
+    }
+    // Entries for games that aren't in the library are skipped.
+    for entry in backup.game_page_custom.iter().flatten() {
+        put_page_custom(&tx, &entry.game_id, &entry.custom())?;
     }
     tx.commit()?;
     Ok(backup.games.len())
@@ -1415,5 +1517,227 @@ mod tests {
         assert_eq!(seconds_after(10, None, 5, 0), 5);
         assert_eq!(seconds_after(0, Some(1_000), 1, 1_000), 0);
         assert_eq!(seconds_after(0, None, 10, 5_000), 5);
+    }
+
+    #[test]
+    fn existing_databases_gain_the_page_custom_table() {
+        let conn = Connection::open_in_memory().unwrap();
+        // A library from before game page customization.
+        conn.execute_batch(&format!(
+            "{GAMES_TABLE};
+             CREATE TABLE settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+             CREATE TABLE game_art(gameId TEXT PRIMARY KEY,hero TEXT NOT NULL DEFAULT '[]',logo TEXT NOT NULL DEFAULT '[]',prefs TEXT NOT NULL DEFAULT '',fetchedAt INTEGER NOT NULL);
+             INSERT INTO games(id,title,store) VALUES('a','A','Steam');
+             INSERT INTO game_art(gameId,hero,fetchedAt) VALUES('a','[\"https://cdn2.steamgriddb.com/h.png\"]',5);"
+        ))
+        .unwrap();
+        migrate(&conn, None).unwrap();
+        let columns: Vec<String> = conn
+            .prepare("SELECT name FROM pragma_table_info('game_page_custom')")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(
+            columns,
+            [
+                "gameId",
+                "hero",
+                "logo",
+                "logoPosition",
+                "logoScale",
+                "updatedAt"
+            ]
+        );
+        assert_eq!(cached_art(&conn, "a").unwrap().unwrap().hero.len(), 1);
+        assert_eq!(page_custom(&conn, "a").unwrap(), GamePageCustom::default());
+        let custom = GamePageCustom {
+            hero: Some("https://cdn2.steamgriddb.com/hero/a.png".into()),
+            logo_scale: 1.25,
+            ..Default::default()
+        };
+        assert!(put_page_custom(&conn, "a", &custom).unwrap());
+        // Migrating again keeps the data.
+        migrate(&conn, None).unwrap();
+        assert_eq!(page_custom(&conn, "a").unwrap(), custom);
+        // Values damaged outside the app fall back to defaults instead of failing.
+        conn.execute(
+            "UPDATE game_page_custom SET logoPosition='sideways',logoScale=99,logo='' WHERE gameId='a'",
+            [],
+        )
+        .unwrap();
+        let read = page_custom(&conn, "a").unwrap();
+        assert_eq!(
+            (read.logo, read.logo_position, read.logo_scale),
+            (None, LogoPosition::BottomLeft, 1.0)
+        );
+        assert!(!put_page_custom(&conn, "ghost", &custom).unwrap());
+        assert_eq!(
+            page_custom(&conn, "ghost").unwrap(),
+            GamePageCustom::default()
+        );
+    }
+
+    fn custom_hero(n: &str) -> GamePageCustom {
+        GamePageCustom {
+            hero: Some(format!("https://cdn2.steamgriddb.com/hero/{n}.png")),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn page_custom_follows_remove_and_merge() {
+        let db = Db::memory().unwrap();
+        let mut conn = db.lock();
+        for id in ["a", "b", "c", "d", "e"] {
+            save_game(&conn, &GamePatch::from(&game(id, id, vec![]))).unwrap();
+        }
+        for id in ["a", "b", "d", "e"] {
+            put_page_custom(&conn, id, &custom_hero(id)).unwrap();
+        }
+        remove_game(&conn, "e").unwrap();
+        assert_eq!(page_custom(&conn, "e").unwrap(), GamePageCustom::default());
+
+        // Both customized: the target's row is kept, the source's is dropped.
+        merge_games(&mut conn, "a", "b").unwrap();
+        assert_eq!(page_custom(&conn, "a").unwrap(), custom_hero("a"));
+        // Only the source customized: it moves to the target.
+        merge_games(&mut conn, "c", "d").unwrap();
+        assert_eq!(page_custom(&conn, "c").unwrap(), custom_hero("d"));
+        let ids: Vec<String> = all_page_custom(&conn)
+            .unwrap()
+            .into_iter()
+            .map(|e| e.game_id)
+            .collect();
+        assert_eq!(ids, ["a", "c"]);
+    }
+
+    #[test]
+    fn page_custom_round_trips_through_backups_and_old_backups_still_restore() {
+        let db = Db::memory().unwrap();
+        let mut conn = db.lock();
+        save_game(&conn, &GamePatch::from(&game("a", "A", vec![]))).unwrap();
+        save_game(&conn, &GamePatch::from(&game("b", "B", vec![]))).unwrap();
+        let custom = GamePageCustom {
+            hero: Some("lobby-cover://hero-a-1.png".into()),
+            logo: Some("https://cdn2.steamgriddb.com/logo/a.png".into()),
+            logo_position: LogoPosition::BottomCenter,
+            logo_scale: 0.75,
+        };
+        put_page_custom(&conn, "a", &custom).unwrap();
+        let backup = Backup {
+            games: all_games(&conn).unwrap(),
+            settings: None,
+            emulators: None,
+            game_page_custom: Some(all_page_custom(&conn).unwrap()),
+        };
+        let text = serde_json::to_string(&backup).unwrap();
+        let raw: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            raw["gamePageCustom"],
+            serde_json::json!([{ "gameId": "a", "hero": "lobby-cover://hero-a-1.png",
+                "logo": "https://cdn2.steamgriddb.com/logo/a.png",
+                "logoPosition": "bottom-center", "logoScale": 0.75 }])
+        );
+        let parsed = crate::validation::backup(&raw).unwrap();
+
+        let fresh = Db::memory().unwrap();
+        let mut fresh = fresh.lock();
+        save_game(&fresh, &GamePatch::from(&game("b", "B", vec![]))).unwrap();
+        put_page_custom(&fresh, "b", &custom_hero("b")).unwrap();
+        assert_eq!(restore_backup(&mut fresh, &parsed).unwrap(), 2);
+        assert_eq!(page_custom(&fresh, "a").unwrap(), custom);
+        assert_eq!(
+            page_custom(&fresh, "b").unwrap(),
+            custom_hero("b"),
+            "games without an entry keep theirs"
+        );
+
+        // A backup from before this feature: no field, nothing changes, nothing fails.
+        let mut old = raw.clone();
+        old.as_object_mut().unwrap().remove("gamePageCustom");
+        let parsed = crate::validation::backup(&old).unwrap();
+        assert!(parsed.game_page_custom.is_none());
+        assert_eq!(restore_backup(&mut conn, &parsed).unwrap(), 2);
+        assert_eq!(page_custom(&conn, "a").unwrap(), custom);
+        let without = serde_json::to_value(Backup {
+            game_page_custom: None,
+            ..parsed
+        })
+        .unwrap();
+        assert!(without.get("gamePageCustom").is_none());
+
+        // Entries for games missing from the library are skipped.
+        let mut ghost = raw;
+        ghost["gamePageCustom"][0]["gameId"] = "ghost".into();
+        restore_backup(&mut conn, &crate::validation::backup(&ghost).unwrap()).unwrap();
+        assert_eq!(
+            page_custom(&conn, "ghost").unwrap(),
+            GamePageCustom::default()
+        );
+    }
+
+    #[test]
+    fn scans_keep_uninstalled_games_whose_page_was_customized() {
+        let db = Db::memory().unwrap();
+        let mut conn = db.lock();
+        let kept = game("steam:1", "Kept", vec![route("steam", "1", true)]);
+        let plain = game("steam:2", "Plain", vec![route("steam", "2", true)]);
+        let other = game("steam:3", "Other", vec![route("steam", "3", true)]);
+        upsert_imported_games(&mut conn, &[kept, plain, other.clone()]).unwrap();
+        put_page_custom(&conn, "steam:1", &custom_hero("1")).unwrap();
+        // Only steam:3 is still installed.
+        reconcile_installed_source(&mut conn, "steam-installed", &[other]).unwrap();
+        let ids: Vec<String> = all_games(&conn)
+            .unwrap()
+            .into_iter()
+            .map(|g| g.id)
+            .collect();
+        assert_eq!(ids, ["steam:1", "steam:3"]);
+        let g = get_game(&conn, "steam:1").unwrap().unwrap();
+        assert_eq!(
+            g.routes[0].installed,
+            Some(false),
+            "kept, marked not installed"
+        );
+        assert_eq!(page_custom(&conn, "steam:1").unwrap(), custom_hero("1"));
+
+        // Owned scans: a customized game that is no longer owned (and not installed) is kept.
+        let mut owned = route("steam", "4", false);
+        owned.owned = Some(true);
+        owned.install_states = None;
+        let mut owned2 = route("steam", "5", false);
+        owned2.owned = Some(true);
+        owned2.install_states = None;
+        let mut still = route("steam", "6", false);
+        still.owned = Some(true);
+        still.install_states = None;
+        let still_game = game("steam:6", "Still", vec![still]);
+        upsert_imported_games(
+            &mut conn,
+            &[
+                game("steam:4", "Custom", vec![owned]),
+                game("steam:5", "Gone", vec![owned2]),
+                still_game.clone(),
+            ],
+        )
+        .unwrap();
+        put_page_custom(
+            &conn,
+            "steam:4",
+            &GamePageCustom {
+                logo_position: LogoPosition::Center,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        reconcile_owned_source(&mut conn, "steam", &[still_game]).unwrap();
+        assert!(get_game(&conn, "steam:5").unwrap().is_none());
+        let g = get_game(&conn, "steam:4").unwrap().unwrap();
+        assert_eq!(
+            (g.routes[0].owned, g.routes[0].installed),
+            (Some(false), Some(false))
+        );
     }
 }

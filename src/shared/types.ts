@@ -56,8 +56,14 @@ export interface SteamGridDbKeyTest { ok: boolean; message: string }
  *   settings-based filters as search(). Rejects if a
  *   run is already in progress or the key is rejected. Emits `library:changed` when covers change.
  * - onFetched(cb): fires after any successful bulk run, including the automatic one after a scan.
+ * - searchHeroes(gameId) / searchLogos(gameId): up to 30 game page hero / logo candidates for the
+ *   pickers, same shape and game matching as search(). Filtered by steamGridDbAnimated/Nsfw/Humor
+ *   (grid styles don't apply; epilepsy-flagged entries and videos are always dropped). Not cached:
+ *   every call asks SteamGridDB. Empty array = no match. Rejects with a friendly message when no
+ *   key is saved, the key is rejected, SteamGridDB rate-limits or can't be reached, or the game
+ *   doesn't exist. Pass a candidate's `url` to `art.setHero` / `art.setLogo`.
  */
-export interface SteamGridDbAPI { status(): Promise<{ keySet: boolean }>; saveKey(key: string): Promise<{ keySet: boolean }>; testKey(): Promise<SteamGridDbKeyTest>; search(gameId: string): Promise<SteamGridDbCover[]>; apply(gameId: string, url: string): Promise<Game[]>; fetchMissing(): Promise<SteamGridDbFetchSummary>; onFetched(callback: (summary: SteamGridDbFetchSummary) => void): () => void }
+export interface SteamGridDbAPI { status(): Promise<{ keySet: boolean }>; saveKey(key: string): Promise<{ keySet: boolean }>; testKey(): Promise<SteamGridDbKeyTest>; search(gameId: string): Promise<SteamGridDbCover[]>; searchHeroes(gameId: string): Promise<SteamGridDbCover[]>; searchLogos(gameId: string): Promise<SteamGridDbCover[]>; apply(gameId: string, url: string): Promise<Game[]>; fetchMissing(): Promise<SteamGridDbFetchSummary>; onFetched(callback: (summary: SteamGridDbFetchSummary) => void): () => void }
 /** How a play session started: from Game Lobby (`launch`) or found running (`detected`). */
 export type PlaySource = 'launch' | 'detected'
 /**
@@ -103,12 +109,59 @@ export interface TrackingAPI { status(): Promise<RunningGame[]>; onChanged(callb
 /**
  * Game page art: candidate image URLs in priority order. Try `hero[0]`, and on an image load
  * error the next one, and so on; an empty array means no art (show a fallback).
- * Order: Steam's `library_hero.jpg` / `logo.png` (games with a Steam route), then SteamGridDB
- * heroes/logos (when a key is saved; filtered by the steamGridDbAnimated/Nsfw/Humor settings,
- * cached for 30 days). Never rejects for missing art (no key, no match, offline).
+ * Order: the user's custom hero/logo if set (see `GamePageCustom`), then Steam's
+ * `library_hero.jpg` / `logo.png` (games with a Steam route), then SteamGridDB heroes/logos (when a
+ * key is saved; filtered by the steamGridDbAnimated/Nsfw/Humor settings, cached for 30 days).
+ * No URL appears twice. Never rejects for missing art (no key, no match, offline).
+ * Entries may be `lobby-cover://<name>` (a file chosen with chooseHeroFile/chooseLogoFile):
+ * pass every entry through `coverUrl()` from lobby-api.ts before using it as an image source.
  */
 export interface GameArt { hero: string[]; logo: string[] }
-export interface ArtAPI { get(gameId: string): Promise<GameArt> }
+/** Logo placements accepted by `art.setLogoLayout` (the backend rejects anything else). */
+export const logoPositions = ['bottom-left', 'top-center', 'center', 'bottom-center'] as const
+export type LogoPosition = typeof logoPositions[number]
+/** Inclusive range accepted for `GamePageCustom.logoScale`. */
+export const logoScaleRange = { min: 0.5, max: 2 } as const
+/**
+ * A game's page customization. `hero` / `logo` are absent when the automatic art is used;
+ * otherwise a SteamGridDB https URL or `lobby-cover://<name>` (use `coverUrl()` to display).
+ * `logoScale` multiplies the logo's normal size. Defaults: `defaultGamePageCustom` in defaults.ts
+ * (`bottom-left`, `1`).
+ */
+export interface GamePageCustom { hero?: string; logo?: string; logoPosition: LogoPosition; logoScale: number }
+/** `art.get()` result: candidates (a custom choice already first) plus the customization. */
+export interface GamePageArt extends GameArt { custom: GamePageCustom }
+/** Payload of `art.onChanged`. */
+export interface ArtChangedEvent { gameId: string }
+/**
+ * Game page art and its customization. Every mutation resolves with the game's updated
+ * `GamePageCustom` and emits `art:changed` (`onChanged`) so open game pages can call get() again.
+ * Mutations reject with a user-facing message for an unknown game or invalid input.
+ * - get(gameId): candidates + customization; an unknown game gets empty lists and defaults.
+ * - setHero(gameId, url) / setLogo(gameId, url): `url` is a SteamGridDB https image URL (e.g. a
+ *   `SteamGridDbCover.url` from searchHeroes/searchLogos; no other hosts, no http, no ports or
+ *   credentials, no .webm) or a `lobby-cover://<name>` value whose file exists in the covers
+ *   folder (e.g. a game's current custom cover or an earlier custom hero/logo). `null` resets to
+ *   the automatic art.
+ * - chooseHeroFile(gameId) / chooseLogoFile(gameId): native file dialog for PNG, JPEG, WebP or
+ *   AVIF (at most 20 MB; the content must be a real image of one of those types). The file is
+ *   copied into the covers folder and stored as `lobby-cover://...`. Cancelling resolves with the
+ *   current value unchanged (no event). Transparent PNG/WebP suit logos best.
+ * - setLogoLayout(gameId, position, scale): `position` from `logoPositions`, `scale` a finite
+ *   number within `logoScaleRange` (0.5 to 2).
+ * - onChanged(cb): fires with `{ gameId }` after any change above, and for each restored entry
+ *   after a backup import. Returns an unsubscribe function.
+ * Replaced custom files stay on disk; nothing is deleted.
+ */
+export interface ArtAPI {
+  get(gameId: string): Promise<GamePageArt>
+  setHero(gameId: string, url: string | null): Promise<GamePageCustom>
+  setLogo(gameId: string, url: string | null): Promise<GamePageCustom>
+  chooseHeroFile(gameId: string): Promise<GamePageCustom>
+  chooseLogoFile(gameId: string): Promise<GamePageCustom>
+  setLogoLayout(gameId: string, position: LogoPosition, scale: number): Promise<GamePageCustom>
+  onChanged(callback: (event: ArtChangedEvent) => void): () => void
+}
 export interface LobbyAPI {
   window: { minimize(): Promise<void>; toggleMaximize(): Promise<void>; close(): Promise<void>; isMaximized(): Promise<boolean> }
   library: { list(): Promise<Game[]>; scan(): Promise<LibraryStats>; launch(id: string, route?: number): Promise<void>; save(game: Partial<Game> & { id: string }): Promise<Game[]>; remove(id: string): Promise<Game[]>; merge(targetId: string, sourceId: string): Promise<Game[]>; resetPlaytime(): Promise<Game[]>; setCover(id: string, dataUrl: string | null): Promise<Game[]>; chooseCover(id: string): Promise<Game[]>; chooseInstallFolder(id: string): Promise<void>; add(title: string, target: string): Promise<Game[]>; connections(): Promise<LibraryConnections>; saveConnections(input: LibraryConnectionInput): Promise<LibraryConnections>; chooseLegendary(): Promise<string | null>; chooseGogDatabase(): Promise<string | null>; onChanged(callback: () => void): () => void }
