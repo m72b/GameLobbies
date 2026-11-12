@@ -47,7 +47,30 @@ Scanning combines routes when their stable source and external app identity matc
 
 Windows playtime tracking looks for a running process inside the selected game's install folder while Game Lobby is open. It records elapsed time and last-played time locally. Routes without a usable install folder can still update last-played when launched, but cannot be process-tracked.
 
-Emulator profiles can store an executable path, launch arguments, ROM folders, and supported file extensions. Automatic ROM discovery and emulator launching are not yet wired into the current build.
+Emulators are configured as profiles and can be found automatically in emulator folders. See [Emulators and ROM library](#emulators-and-rom-library).
+
+### Emulators and ROM library
+
+Add library folders in **Settings → Library folders**: one or more **Game folders** and **Emulator folders**, typed as a path or chosen with **Browse**. Each folder can be enabled or disabled, rescanned, or removed. **Scan all** scans every folder, and the library **Scan** also runs a folder scan.
+
+**Game folders** hold one subfolder per system, named for it, such as `PS3`, `Sony 3`, `PlayStation 3`, `Switch`, `PS1`, `Wii`, `GameCube`, `NES`, or `PC`. Names are matched loosely. Game Lobby supports 24 systems: PS1, PS2, PS3, PS4, PSP, PS Vita, GameCube, Wii, Wii U, Switch, 3DS, DS, GBA, GB/GBC, N64, SNES, NES, Genesis/Mega Drive, Dreamcast, Saturn, Xbox, Xbox 360, Arcade, and PC.
+
+- Multi-file games count once. `.m3u`, `.cue`, `.gdi`, `.ccd`, and `.mds` files claim the files they list, but only files in the same folder or below it.
+- Some games are folders rather than single files: PS3 (`PS3_GAME/USRDIR/EBOOT.BIN`, with the title read from `PARAM.SFO`), PS4 (`eboot.bin` with `sce_sys`), Wii U (`code/*.rpx`), and Xbox 360 (`default.xex`). Switch updates and DLC are skipped.
+- Under **PC**, each subfolder is one game. The main `.exe` is chosen automatically, or the game goes to **Review** when the choice is unclear.
+- Internet shortcuts (`.url`) are accepted only for supported store links, such as `steam:` and Epic links. A `.lnk` that points to a plain `.exe` is stored as that `.exe`. Any other `.lnk`, such as one with arguments or a non-`.exe` target, goes to **Review**, must be confirmed, and will not launch if it changes after confirmation.
+
+**Add local game** in the library adds a single `.exe`, `.lnk`, or `.url` by browsing, using the same shortcut rules.
+
+**Emulator folders** are searched up to four levels deep for known emulators: Dolphin, PCSX2, RPCS3, DuckStation, PPSSPP, Ryujinx, yuzu forks, Cemu, xemu, Xenia and Xenia Canary, melonDS, Azahar/Lime3DS/Citra, mGBA, Project64, Snes9x, Mesen, Flycast, Vita3K, shadPS4, and RetroArch. Emulators can also be added manually. Each profile has editable launch arguments with the placeholders `{rom}`, `{romdir}`, and `{romname}`. Quotes group text. If `{rom}` is missing, the ROM path is appended. RetroArch needs its core set in the arguments before it can be used. The default argument templates come from each emulator's documentation; edit them if your build differs. A removed emulator stays removed on rescan, and you can restore it from **Ignored emulators**. A second copy of an already-known emulator is added disabled.
+
+Each ROM game uses the best matching enabled emulator, or the one you pick on its game page. Launching never uses a shell: each argument is passed separately, so file names with spaces, quotes, `&`, `%`, or `^` are safe. Playtime for emulator games is tracked for games started from Game Lobby, by the emulator process it launched.
+
+Rescans are safe. Titles, favorites, covers, playtime, and emulator choices are kept, and nothing is duplicated. Possible duplicates go to **Settings → Review**, where you can keep them separate, link them, or dismiss them. Offline or unreadable folders never remove games. If a scan would remove more than half of a folder's games (and more than 20), it holds off and reports it. Unreadable subfolders and unsupported files are listed in the scan summary and in Review.
+
+Folder rules: use full local paths only. System and program folders, network paths, and links (junctions) are refused. Folders cannot overlap each other, and emulator folders cannot be Downloads, Desktop, or Temp.
+
+For development, debug builds honour `GAME_LOBBY_DATA_DIR` (an absolute folder) to use a separate data folder. Release builds ignore it.
 
 ## Extensions
 
@@ -81,7 +104,7 @@ Game Lobby is licensed under the GNU General Public License v3.0 only (GPL-3.0-o
 
 ## Project status
 
-Game Lobby is an early-stage independent project. Steam, Epic, GOG, and best-effort local discovery for the listed Windows storefronts are available, with ownership coverage varying by source as described above. Broader account-catalog imports, ROM scanning and launching, richer metadata services, and executable plugin support remain future work.
+Game Lobby is an early-stage independent project. Steam, Epic, GOG, and best-effort local discovery for the listed Windows storefronts are available, with ownership coverage varying by source as described above. Broader account-catalog imports, richer metadata services, and executable plugin support remain future work.
 
 ## Acknowledgements
 

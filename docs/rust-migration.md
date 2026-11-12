@@ -15,6 +15,22 @@
 | `src/main/themes/loader.ts` | `theme.rs` |
 | `src/preload/index.ts` | `src/renderer/lobby-api.ts` |
 
+### Local library modules
+
+Modules added for emulators and ROM folders:
+
+| Module | Responsibility |
+| --- | --- |
+| `catalog.rs` | Supported systems, folder-name aliases, file formats, known emulators |
+| `roots.rs` | Library folders and their validation rules |
+| `emulators.rs` | Emulator discovery and profiles |
+| `localscan.rs` | Folder walking and game detection |
+| `local.rs` | Applying scan results and review resolution |
+| `local_commands.rs` | IPC commands for local library features |
+| `review.rs` | Review queue |
+
+`launch.rs` now builds emulator argv without a shell.
+
 ---
 
 

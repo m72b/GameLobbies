@@ -34,6 +34,7 @@ windows-sys = { version = "0.59", features = [
   "Win32_Foundation",
   "Win32_Graphics_Dwm",
   "Win32_Security_Cryptography",
+  "Win32_Storage_FileSystem",
   "Win32_System_Com",
   "Win32_System_Diagnostics_ToolHelp",
   "Win32_System_Threading",
@@ -44,7 +45,10 @@ windows = { version = "0.61", features = [
   "ApplicationModel",
   "Foundation_Collections",
   "Management_Deployment",
+  "Win32_Storage_FileSystem",
+  "Win32_System_Com",
   "Win32_System_WinRT",
+  "Win32_UI_Shell",
 ] }
 
 [dev-dependencies]

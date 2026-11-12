@@ -35,6 +35,12 @@
 //! lock, never the other way round. The install-folder snapshot (`Tracker::targets`) is a leaf
 //! lock. No lock is held across an `.await`.
 //!
+//! Emulator games: a ROM route's install folder is its ROM folder and the emulator is shared
+//! by many games, so ROM routes are never detection targets, and neither is anything inside
+//! an emulator library root or an emulator's folder. A ROM game is tracked only when Game
+//! Lobby launched it: [`Tracker::watch_process`] follows the emulator process it started
+//! (by process id and executable path, no window needed) until it exits.
+//!
 //! Events: `tracking:changed` (payload `RunningGame[]`) whenever the running set or a state
 //! changes, and at least every [`HEARTBEAT_MS`] while something runs; `library:changed` when
 //! stored playtime changes (first save, each full minute, session end).
@@ -381,17 +387,25 @@ pub struct Targets {
 }
 
 impl Targets {
-    /// Uses every installed route's install folder that the guard allows.
-    pub fn build(games: &[Game], guard: &PathGuard) -> Self {
+    /// Uses every installed route's install folder that the guard allows. ROM routes (and
+    /// any route with an emulator) are skipped, as are folders that are inside, equal to or
+    /// contain one of `excluded` (emulator roots and emulator folders, normalized).
+    pub fn build(games: &[Game], guard: &PathGuard, excluded: &[String]) -> Self {
         let mut entries: Vec<(String, String)> = games
             .iter()
             .flat_map(|game| {
                 game.routes
                     .iter()
                     .filter(|r| r.installed != Some(false))
+                    .filter(|r| r.source_id != "rom" && r.emulator_id.is_none())
                     .filter_map(|r| r.install_path.as_deref())
                     .filter_map(normalize_path)
                     .filter(|path| guard.allows_install_path(path))
+                    .filter(|path| {
+                        !excluded
+                            .iter()
+                            .any(|e| is_within(e, path) || is_within(path, e))
+                    })
                     .map(|path| (format!("{path}\\"), game.id.clone()))
             })
             .collect();
@@ -598,6 +612,10 @@ pub struct Sessions {
 impl Sessions {
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+
+    pub fn contains(&self, game_id: &str) -> bool {
+        self.entries.contains_key(game_id)
     }
 
     /// A Game Lobby launch: wait for the game's process. No-op if it is already tracked.
@@ -860,9 +878,35 @@ pub fn apply(conn: &Connection, sessions: &mut Sessions, effects: Vec<Effect>) {
 // ---------------------------------------------------------------------------
 // The monitor
 
+/// A process Game Lobby started for a game (emulator launches).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WatchedProcess {
+    pub pid: u32,
+    /// Normalized executable path; guards against process id reuse.
+    pub exe: String,
+}
+
+/// Games whose launched process is running now: matched by process id and executable.
+pub fn watched_running(
+    watched: &HashMap<String, WatchedProcess>,
+    processes: &[ProcessInfo],
+) -> HashMap<String, String> {
+    watched
+        .iter()
+        .filter_map(|(game_id, w)| {
+            processes
+                .iter()
+                .find(|p| p.pid == w.pid && normalize_path(&p.path).as_deref() == Some(&w.exe))
+                .map(|p| (game_id.clone(), p.path.clone()))
+        })
+        .collect()
+}
+
 #[derive(Default)]
 pub struct Tracker {
     sessions: Mutex<Sessions>,
+    /// Emulator processes started by Game Lobby, by game id (a leaf lock).
+    watched: Mutex<HashMap<String, WatchedProcess>>,
     targets: Mutex<Arc<Targets>>,
     /// False when the library changed since `targets` was built.
     targets_current: AtomicBool,
@@ -897,10 +941,26 @@ impl Tracker {
     /// Locks the database briefly; must not be called while holding it.
     pub fn targets(&self, db: &Db) -> Arc<Targets> {
         if !self.targets_current.swap(true, Ordering::SeqCst) {
-            let games = db::all_games(&db.lock());
-            match games {
-                Ok(games) => {
-                    let built = Arc::new(Targets::build(&games, self.guard()));
+            let loaded = (|| -> anyhow::Result<(Vec<Game>, Vec<String>)> {
+                let conn = db.lock();
+                let games = db::all_games(&conn)?;
+                let mut excluded: Vec<String> = crate::roots::list(&conn)?
+                    .into_iter()
+                    .filter(|r| r.kind == "emulators")
+                    .map(|r| r.key())
+                    .collect();
+                excluded.extend(
+                    db::emulator_profiles(&conn)?
+                        .iter()
+                        .filter_map(|p| normalize_path(&p.executable))
+                        .filter_map(|exe| exe.rsplit_once('\\').map(|(dir, _)| dir.to_string()))
+                        .filter(|dir| depth(dir) > 0),
+                );
+                Ok((games, excluded))
+            })();
+            match loaded {
+                Ok((games, excluded)) => {
+                    let built = Arc::new(Targets::build(&games, self.guard(), &excluded));
                     *self.targets.lock().unwrap_or_else(|p| p.into_inner()) = built;
                 }
                 Err(e) => {
@@ -930,6 +990,35 @@ impl Tracker {
             return false;
         }
         self.sessions().launch(game_id, now_ms());
+        self.wake();
+        true
+    }
+
+    fn watched(&self) -> MutexGuard<'_, HashMap<String, WatchedProcess>> {
+        self.watched.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// An emulator Game Lobby started for `game_id` (process `pid`, executable `exe`).
+    /// Returns false when it can't be tracked (tracking off, the game excluded); the caller
+    /// then just marks it played. The session ends when that process exits.
+    pub fn watch_process(&self, game_id: &str, pid: u32, exe: &str, settings: &Settings) -> bool {
+        let Some(exe) = normalize_path(exe) else {
+            return false;
+        };
+        if !settings.tracking
+            || !cfg!(windows)
+            || settings
+                .tracking_excluded_game_ids
+                .iter()
+                .any(|id| id == game_id)
+        {
+            return false;
+        }
+        let mut sessions = self.sessions();
+        self.watched()
+            .insert(game_id.to_string(), WatchedProcess { pid, exe });
+        sessions.launch(game_id, now_ms());
+        drop(sessions);
         self.wake();
         true
     }
@@ -985,7 +1074,10 @@ async fn poll(app: &AppHandle, last_emit: &mut i64) {
                     Err(e) => return eprintln!("Game window check failed: {e}"),
                 }
             };
-            targets.attribute(&processes, tracker.guard(), &with_window)
+            let mut seen = targets.attribute(&processes, tracker.guard(), &with_window);
+            // Launched emulators count by process, without a window check.
+            seen.extend(watched_running(&tracker.watched(), &processes));
+            seen
         }
     };
     let now = now_ms();
@@ -1000,6 +1092,10 @@ async fn poll(app: &AppHandle, last_emit: &mut i64) {
         if !effects.is_empty() {
             apply(&state.db.lock(), &mut sessions, effects);
         }
+        // A watched process whose game is no longer tracked is forgotten.
+        tracker
+            .watched()
+            .retain(|game_id, _| sessions.contains(game_id));
         (tick, sessions.snapshot(now))
     };
     if tick.library_changed {
@@ -1193,6 +1289,7 @@ mod tests {
                 uninstalled,
             ],
             &g,
+            &[],
         );
         assert!(targets.has_game("outer") && targets.has_game("inner"));
         assert!(!targets.has_game("generic") && !targets.has_game("root"));
@@ -1329,6 +1426,7 @@ mod tests {
                 game("game", &[r"D:\Games\Hades"]),
             ],
             &g,
+            &[],
         );
         let processes = procs(&[
             r"M:\SteamLibrary\steamapps\common\wallpaper_engine\bin\webwallpaper64.exe",
@@ -1584,6 +1682,61 @@ mod tests {
                 { "gameId": "a", "state": "launching", "startedAt": T0, "sessionSeconds": 0, "source": "launch" },
                 { "gameId": "b", "state": "running", "startedAt": T0, "sessionSeconds": 3, "source": "detected", "exe": r"C:\Games\b\b.exe" }
             ])
+        );
+    }
+
+    #[test]
+    fn rom_routes_and_emulator_folders_are_never_detection_targets() {
+        let g = guard();
+        let mut rom = game("rom", &[r"D:\Roms\GBA"]);
+        rom.routes[0].source_id = "rom".into();
+        let mut assigned = game("assigned", &[r"D:\Roms\SNES"]);
+        assigned.routes[0].emulator_id = Some("emu".into());
+        let targets = Targets::build(
+            &[
+                rom,
+                assigned,
+                game("inside-emu-root", &[r"E:\Emulators\Dolphin"]),
+                game("emu-folder", &[r"F:\Tools\mGBA"]),
+                game("pc", &[r"D:\Games\PC\Celeste"]),
+            ],
+            &g,
+            &[n(r"E:\Emulators"), n(r"F:\Tools\mGBA")],
+        );
+        for id in ["rom", "assigned", "inside-emu-root", "emu-folder"] {
+            assert!(!targets.has_game(id), "{id}");
+        }
+        assert!(targets.has_game("pc"));
+        // A shared emulator running never makes ROM games look running.
+        let processes = procs(&[
+            r"F:\Tools\mGBA\mGBA.exe",
+            r"E:\Emulators\Dolphin\Dolphin.exe",
+        ]);
+        assert!(targets
+            .attribute(&processes, &g, &all_pids(&processes))
+            .is_empty());
+        // Only the process Game Lobby started (pid and exe both match) counts.
+        let watched: HashMap<String, WatchedProcess> = [(
+            "rom".to_string(),
+            WatchedProcess {
+                pid: processes[0].pid,
+                exe: n(&processes[0].path),
+            },
+        )]
+        .into();
+        let running = watched_running(&watched, &processes);
+        assert_eq!(running.keys().collect::<Vec<_>>(), ["rom"]);
+        let reused: HashMap<String, WatchedProcess> = [(
+            "rom".to_string(),
+            WatchedProcess {
+                pid: processes[1].pid,
+                exe: n(&processes[0].path),
+            },
+        )]
+        .into();
+        assert!(
+            watched_running(&reused, &processes).is_empty(),
+            "pid reused by another exe"
         );
     }
 }

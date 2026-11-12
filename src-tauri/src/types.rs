@@ -67,6 +67,13 @@ pub struct GameRoute {
         deserialize_with = "num::opt"
     )]
     pub last_played: Option<i64>,
+    /// Emulator profile assigned to a ROM route (`sourceId` `rom`). `None` = automatic: the
+    /// best enabled profile for `system` is used at launch (and stored by the next scan).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub emulator_id: Option<String>,
+    /// Catalog system id (`catalog::SYSTEMS`) of a ROM or local PC route.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
@@ -276,8 +283,36 @@ pub struct EmulatorProfile {
     pub name: String,
     pub executable: String,
     pub args: String,
+    #[serde(default)]
     pub rom_folders: Vec<String>,
+    #[serde(default)]
     pub extensions: Vec<String>,
+    /// Catalog system ids this profile runs (used to pick a game's default emulator).
+    #[serde(default)]
+    pub systems: Vec<String>,
+    /// Disabled profiles are never picked automatically and refuse to launch.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// `"discovered"` (found in an emulator folder) or `"manual"`.
+    #[serde(default = "manual_source")]
+    pub source: String,
+    /// Catalog emulator id (`catalog::EMULATORS`) the executable was recognised as.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detected_as: Option<String>,
+    /// Output only: the executable exists right now.
+    #[serde(default = "default_true")]
+    pub available: bool,
+    /// Output only: the catalog's default arguments still need editing (RetroArch's core).
+    #[serde(default)]
+    pub needs_configuration: bool,
+    /// When the profile was first stored (ms epoch; 0 for profiles from before this field).
+    /// Older profiles win ties when a default emulator is picked. Kept from backups.
+    #[serde(default)]
+    pub added_at: i64,
+}
+
+fn manual_source() -> String {
+    "manual".into()
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -333,6 +368,9 @@ pub struct LibraryStats {
     pub errors: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scanned_at: Option<i64>,
+    /// Result of the library folder (emulator/ROM/PC) part of the scan, when roots exist.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local: Option<crate::local::ScanSummary>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

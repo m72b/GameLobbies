@@ -142,28 +142,48 @@ fn executable_path(entry: &RegistryEntry, install_path: &str) -> Option<PathBuf>
             .ends_with(".exe")
             .then(|| crate::platform::resolve(install_path));
     }
-    let mut candidates = Vec::new();
-    let mut add = |dir: &Path| {
-        for item in std::fs::read_dir(dir).into_iter().flatten().flatten() {
-            if item.file_type().is_ok_and(|t| t.is_file())
-                && file_name_lower(&item.path()).ends_with(".exe")
-            {
-                candidates.push(item.path());
-            }
+    let display = entry.values.get("displayname").cloned().unwrap_or_default();
+    // A folder that can't be listed completely can't be verified.
+    let ranked = ranked_executables(folder, &display).ok()?;
+    match ranked.as_slice() {
+        [] => None,
+        [first, _, ..] if first.1 == 0 => None,
+        [first, ..] => Some(crate::platform::resolve(&first.0.to_string_lossy())),
+    }
+}
+
+/// The `.exe` files in `folder` and one level below, best first: each word (longer than
+/// three characters) of `name` found in the file name scores 5. Installers, uninstallers,
+/// crash handlers and updaters are left out. Ties are sorted by path. Any error listing
+/// `folder` or a subfolder (or reading an entry's type) is returned, so a partial listing is
+/// never mistaken for the whole folder.
+pub fn ranked_executables(folder: &Path, name: &str) -> std::io::Result<Vec<(PathBuf, usize)>> {
+    fn entries(dir: &Path) -> std::io::Result<Vec<(PathBuf, std::fs::FileType)>> {
+        let mut out = Vec::new();
+        for item in std::fs::read_dir(dir)? {
+            let item = item?;
+            out.push((item.path(), item.file_type()?));
         }
-    };
-    add(folder);
-    for item in std::fs::read_dir(folder).into_iter().flatten().flatten() {
-        if item.file_type().is_ok_and(|t| t.is_dir()) {
-            add(&item.path());
+        Ok(out)
+    }
+    let mut candidates = Vec::new();
+    let top = entries(folder)?;
+    let mut dirs = Vec::new();
+    for (path, kind) in top {
+        if kind.is_file() && file_name_lower(&path).ends_with(".exe") {
+            candidates.push(path);
+        } else if kind.is_dir() {
+            dirs.push(path);
         }
     }
-    let display = entry
-        .values
-        .get("displayname")
-        .cloned()
-        .unwrap_or_default()
-        .to_lowercase();
+    for dir in dirs {
+        for (path, kind) in entries(&dir)? {
+            if kind.is_file() && file_name_lower(&path).ends_with(".exe") {
+                candidates.push(path);
+            }
+        }
+    }
+    let display = name.to_lowercase();
     let terms: Vec<&str> = display
         .split(|c: char| !c.is_alphanumeric())
         .filter(|t| t.chars().count() > 3)
@@ -184,11 +204,7 @@ fn executable_path(entry: &RegistryEntry, install_path: &str) -> Option<PathBuf>
                 .cmp(&b.0.to_string_lossy().to_lowercase())
         })
     });
-    match ranked.as_slice() {
-        [] => None,
-        [first, _, ..] if first.1 == 0 => None,
-        [first, ..] => Some(crate::platform::resolve(&first.0.to_string_lossy())),
-    }
+    Ok(ranked)
 }
 
 pub struct Source {

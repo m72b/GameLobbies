@@ -1,18 +1,22 @@
 import './lobby-api'
 import { useEffect, useState } from 'react'
-import { ArrowLeft, Blocks, ChevronRight, CircleHelp, Cloud, Gamepad2, Image, ImagePlus, Keyboard, Library, Palette, Puzzle, RotateCcw, Settings2, SlidersHorizontal, Sparkles, Star } from 'lucide-react'
-import type { EmulatorProfile, LibraryConnections, Settings, SteamGridDbStyle } from '../shared/types'
+import { ArrowLeft, Blocks, ChevronRight, CircleHelp, Cloud, FolderSearch, Gamepad2, Image, ImagePlus, Keyboard, Library, ListChecks, Palette, Puzzle, RotateCcw, Settings2, SlidersHorizontal, Sparkles, Star } from 'lucide-react'
+import type { LibraryConnections, Settings, SteamGridDbStyle } from '../shared/types'
 import { steamGridDbStyles } from '../shared/types'
 import { defaultSettings } from '../shared/defaults'
 import packageInfo from '../../package.json'
 import { applyTheme } from './theme'
 import { StoreIcon } from './store-icons'
+import { EmulatorsSection, LibraryFoldersSection, useLocalScan } from './library-settings'
+import { ReviewSection } from './review-panel'
 import { createRoot } from 'react-dom/client'
 import './styles.css'
 
 const sections = [
   ['Libraries', 'Connect stores and choose how often Game Lobby scans.', Library],
-  ['Emulators', 'Manage emulator profiles and ROM folders.', Gamepad2],
+  ['Library folders', 'Choose game and emulator folders and scan them.', FolderSearch],
+  ['Emulators', 'Manage emulator profiles and the systems they run.', Gamepad2],
+  ['Review', 'Decide on duplicates and games a scan could not place.', ListChecks],
   ['Covers and Metadata', 'Choose metadata sources and configure artwork.', Image],
   ['SteamGridDB', 'Cover art from SteamGridDB: API key and preferences.', ImagePlus],
   ['Themes (MyUI)', 'Load themes from a remote JSON or CSS link.', Palette],
@@ -34,7 +38,7 @@ export function SettingsApp() {
   const [section, setSection] = useState<Section>('Libraries')
   const [settings, setSettings] = useState<Settings>(defaultSettings)
   const [plugins, setPlugins] = useState<any[]>([])
-  const [emulators, setEmulators] = useState<EmulatorProfile[]>([])
+  const localScan = useLocalScan()
   const [themeUrl, setThemeUrl] = useState('')
   const [repoUrl, setRepoUrl] = useState('')
   const [message, setMessage] = useState('')
@@ -53,7 +57,6 @@ export function SettingsApp() {
     void Promise.all([
       window.lobby.settings.get().then(setSettings),
       window.lobby.plugins.list().then(setPlugins),
-      window.lobby.emulators.list().then(setEmulators),
       window.lobby.library.connections().then(setConnections),
       window.lobby.steamGridDb.status().then(result => setSgdbKeySet(result.keySet)).catch(() => undefined)
     ])
@@ -129,21 +132,6 @@ export function SettingsApp() {
     setPlugins(list)
     say('Plugin manifest added')
   }
-  const addEmulator = async () => {
-    const profile: EmulatorProfile = { id: crypto.randomUUID(), name: 'New emulator', executable: '', args: '{rom}', romFolders: [], extensions: ['.iso', '.rom'] }
-    await window.lobby.emulators.save(profile)
-    setEmulators(current => [...current, profile])
-    say('Emulator profile created')
-  }
-  const updateEmulator = (id: string, patch: Partial<EmulatorProfile>) => {
-    setEmulators(current => current.map(profile => profile.id === id ? { ...profile, ...patch } : profile))
-  }
-  const saveEmulator = async (profile: EmulatorProfile) => {
-    try {
-      await window.lobby.emulators.save(profile)
-      say('Saved ' + profile.name)
-    } catch (error) { say(error instanceof Error ? error.message : 'Emulator profile could not be saved') }
-  }
   const saveConnections = async () => {
     try {
       const next = await window.lobby.library.saveConnections({ ...connections, steamApiKey: steamApiKey.trim() || undefined })
@@ -206,19 +194,9 @@ export function SettingsApp() {
           <label className="setting-row">Scan interval<select value={settings.scanIntervalHours} onChange={event => void save({ scanIntervalHours: +event.target.value })}><option value={0}>Manual only</option><option value={6}>Every 6 hours</option><option value={12}>Every 12 hours</option><option value={24}>Daily</option></select></label>
         </>}
 
-        {section === 'Emulators' && <>
-          <div className="settings-card">
-            <div className="card-heading"><div><h3>Emulator profiles</h3><p>Profiles can target RetroArch, Dolphin, PCSX2, RPCS3, Ryujinx, Cemu, PPSSPP and DuckStation.</p></div><button className="secondary-button" onClick={() => void addEmulator()}><span>＋</span> Add profile</button></div>
-            {emulators.length === 0 && <div className="empty-inline">No profiles configured yet.</div>}
-            {emulators.map(profile => <div className="emulator-row" key={profile.id}>
-              <input aria-label="Profile name" value={profile.name} onChange={event => updateEmulator(profile.id, { name: event.target.value })} />
-              <input aria-label="Executable path" value={profile.executable} placeholder="Executable path" onChange={event => updateEmulator(profile.id, { executable: event.target.value })} />
-              <input aria-label="Launch arguments" value={profile.args} placeholder="Arguments, use {rom}" onChange={event => updateEmulator(profile.id, { args: event.target.value })} />
-              <button className="secondary-button" onClick={() => void saveEmulator(profile)}>Save</button>
-            </div>)}
-          </div>
-          <div className="feature-row"><span>Automatic ROM scanning and launching</span><span className="coming-soon">COMING SOON</span></div>
-        </>}
+        {section === 'Library folders' && <LibraryFoldersSection scan={localScan} onOpenReview={() => setSection('Review')} say={say} />}
+        {section === 'Emulators' && <EmulatorsSection scan={localScan} say={say} />}
+        {section === 'Review' && <ReviewSection say={say} />}
 
         {section === 'Covers and Metadata' && <div className="settings-card">
           <h3>Metadata providers</h3><p>Steam cover art is used automatically when an app ID is available.</p>
@@ -308,7 +286,7 @@ export function SettingsApp() {
         {section === 'About and Updates' && <div className="settings-card">
           <div className="about-mark"><Gamepad2 /></div><h2>Game Lobby</h2>
           <p>Version {packageInfo.version} · Local-first library manager</p>
-          <p>Built with Electron, React, TypeScript and SQLite.</p>
+          <p>Built with Tauri, Rust, React, TypeScript and SQLite.</p>
           <button className="secondary-button coming-soon-control" disabled>Check for updates · Coming soon</button>
         </div>}
         {message && <div className="settings-toast">{message}</div>}

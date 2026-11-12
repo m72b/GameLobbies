@@ -57,7 +57,12 @@ fn migrate(db: &Connection, file: Option<&Path>) -> Result<()> {
         CREATE TABLE IF NOT EXISTS play_sessions(id INTEGER PRIMARY KEY,gameId TEXT NOT NULL,startedAt INTEGER NOT NULL,endedAt INTEGER,seconds INTEGER NOT NULL DEFAULT 0,source TEXT NOT NULL);
         CREATE INDEX IF NOT EXISTS play_sessions_game ON play_sessions(gameId,startedAt);
         CREATE TABLE IF NOT EXISTS game_art(gameId TEXT PRIMARY KEY,hero TEXT NOT NULL DEFAULT '[]',logo TEXT NOT NULL DEFAULT '[]',prefs TEXT NOT NULL DEFAULT '',fetchedAt INTEGER NOT NULL);
-        CREATE TABLE IF NOT EXISTS game_page_custom(gameId TEXT PRIMARY KEY,hero TEXT,logo TEXT,logoPosition TEXT NOT NULL DEFAULT 'bottom-left',logoScale REAL NOT NULL DEFAULT 1,updatedAt INTEGER NOT NULL);",
+        CREATE TABLE IF NOT EXISTS game_page_custom(gameId TEXT PRIMARY KEY,hero TEXT,logo TEXT,logoPosition TEXT NOT NULL DEFAULT 'bottom-left',logoScale REAL NOT NULL DEFAULT 1,updatedAt INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS library_roots(id TEXT PRIMARY KEY,kind TEXT NOT NULL,path TEXT NOT NULL,enabled INTEGER NOT NULL DEFAULT 1,addedAt INTEGER NOT NULL,lastScanAt INTEGER,lastResult TEXT);
+        CREATE TABLE IF NOT EXISTS scan_review(id TEXT PRIMARY KEY,kind TEXT NOT NULL,key TEXT NOT NULL UNIQUE,rootId TEXT,details TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'open',resolution TEXT,createdAt INTEGER NOT NULL,updatedAt INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS scan_ignore(kind TEXT NOT NULL,key TEXT NOT NULL,path TEXT NOT NULL,addedAt INTEGER NOT NULL,PRIMARY KEY(kind,key));
+        CREATE TABLE IF NOT EXISTS local_exe_choice(folderKey TEXT PRIMARY KEY,executable TEXT NOT NULL,chosenAt INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS local_shortcut_ok(shortcutKey TEXT PRIMARY KEY,target TEXT NOT NULL,arguments TEXT NOT NULL,confirmedAt INTEGER NOT NULL);",
         GAMES_TABLE.replace("CREATE TABLE games", "CREATE TABLE IF NOT EXISTS games")
     ))?;
     let columns: HashSet<String> = db
@@ -69,6 +74,23 @@ fn migrate(db: &Connection, file: Option<&Path>) -> Result<()> {
             "ALTER TABLE games ADD COLUMN playtimeSeconds INTEGER NOT NULL DEFAULT 0;
              UPDATE games SET playtimeSeconds=playtimeMinutes*60;",
         )?;
+    }
+    let emulator_columns: HashSet<String> = db
+        .prepare("SELECT name FROM pragma_table_info('emulators')")?
+        .query_map([], |row| row.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    for (name, definition) in [
+        ("systems", "TEXT NOT NULL DEFAULT '[]'"),
+        ("enabled", "INTEGER NOT NULL DEFAULT 1"),
+        ("source", "TEXT NOT NULL DEFAULT 'manual'"),
+        ("detectedAs", "TEXT"),
+        ("addedAt", "INTEGER NOT NULL DEFAULT 0"),
+    ] {
+        if !emulator_columns.contains(name) {
+            db.execute_batch(&format!(
+                "ALTER TABLE emulators ADD COLUMN {name} {definition};"
+            ))?;
+        }
     }
     let schema: String = db
         .query_row(
@@ -351,6 +373,12 @@ pub fn merge_route(existing: &GameRoute, incoming: &GameRoute) -> GameRoute {
         .unwrap_or(0)
         .max(incoming.last_played.unwrap_or(0));
     combined.last_played = (last != 0).then_some(last);
+    // A chosen emulator is the user's decision: scans never replace it (they never set one).
+    combined.emulator_id = existing
+        .emulator_id
+        .clone()
+        .or_else(|| incoming.emulator_id.clone());
+    combined.system = incoming.system.clone().or_else(|| existing.system.clone());
     combined
 }
 
@@ -477,6 +505,8 @@ fn has_user_data(row: &GameRow, customized: &HashSet<String>) -> bool {
         || route_stats
         || non_empty(&row.genre).is_some()
         || (non_empty(&row.cover).is_some() && row.cover != row.default_cover)
+        // An emulator chosen for a ROM (scans never set one; only the user does).
+        || row.routes.iter().any(|r| r.emulator_id.is_some())
 }
 
 /// Applies an installed-games scan. An empty scan is ambiguous (client missing, drive
@@ -1079,48 +1109,315 @@ pub fn delete_secret(db: &Connection, key: &str) -> Result<()> {
 
 pub fn emulator_profiles(db: &Connection) -> Result<Vec<EmulatorProfile>> {
     let mut stmt = db.prepare(
-        "SELECT id,name,executable,args,romFolders,extensions FROM emulators ORDER BY name",
+        "SELECT id,name,executable,args,romFolders,extensions,systems,enabled,source,detectedAs,addedAt FROM emulators ORDER BY name COLLATE NOCASE,executable COLLATE NOCASE,addedAt,id",
     )?;
     let rows = stmt
         .query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, String>(4)?,
-                row.get::<_, String>(5)?,
-            ))
+            let json = |i: usize| -> rusqlite::Result<Vec<String>> {
+                Ok(row
+                    .get::<_, Option<String>>(i)?
+                    .and_then(|s| serde_json::from_str(&s).ok())
+                    .unwrap_or_default())
+            };
+            Ok(EmulatorProfile {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                executable: row.get(2)?,
+                args: row.get(3)?,
+                rom_folders: json(4)?,
+                extensions: json(5)?,
+                systems: json(6)?,
+                enabled: row.get::<_, Option<i64>>(7)?.unwrap_or(1) != 0,
+                source: row
+                    .get::<_, Option<String>>(8)?
+                    .unwrap_or_else(|| "manual".into()),
+                detected_as: row.get::<_, Option<String>>(9)?.filter(|s| !s.is_empty()),
+                available: false,
+                needs_configuration: false,
+                added_at: row.get::<_, Option<i64>>(10)?.unwrap_or(0),
+            })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
+    // No filesystem access here (the database lock is held): `available` stays false until
+    // `emulators::refresh_available` runs after the lock is released.
     Ok(rows
         .into_iter()
-        .map(
-            |(id, name, executable, args, folders, extensions)| EmulatorProfile {
-                id,
-                name,
-                executable,
-                args,
-                rom_folders: serde_json::from_str(&folders).unwrap_or_default(),
-                extensions: serde_json::from_str(&extensions).unwrap_or_default(),
-            },
-        )
+        .map(|mut p| {
+            p.needs_configuration = crate::emulators::needs_configuration(&p);
+            p
+        })
         .collect())
 }
 
+pub fn emulator_profile(db: &Connection, id: &str) -> Result<Option<EmulatorProfile>> {
+    Ok(emulator_profiles(db)?.into_iter().find(|p| p.id == id))
+}
+
+/// Inserts or replaces a whole profile (`available` / `needsConfiguration` are not stored).
+/// `addedAt` is set once, on insert (the profile's own value when it has one, else now).
 pub fn save_emulator(db: &Connection, p: &EmulatorProfile) -> Result<Vec<EmulatorProfile>> {
     db.execute(
-        "INSERT INTO emulators(id,name,executable,args,romFolders,extensions) VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,executable=excluded.executable,args=excluded.args,romFolders=excluded.romFolders,extensions=excluded.extensions",
+        "INSERT INTO emulators(id,name,executable,args,romFolders,extensions,systems,enabled,source,detectedAs,addedAt) VALUES(?,?,?,?,?,?,?,?,?,?,?)
+         ON CONFLICT(id) DO UPDATE SET name=excluded.name,executable=excluded.executable,args=excluded.args,romFolders=excluded.romFolders,extensions=excluded.extensions,systems=excluded.systems,enabled=excluded.enabled,source=excluded.source,detectedAs=excluded.detectedAs",
         params![
             p.id,
             p.name,
             p.executable,
             p.args,
             serde_json::to_string(&p.rom_folders)?,
-            serde_json::to_string(&p.extensions)?
+            serde_json::to_string(&p.extensions)?,
+            serde_json::to_string(&p.systems)?,
+            p.enabled as i64,
+            p.source,
+            p.detected_as,
+            if p.added_at > 0 { p.added_at } else { now_ms() },
         ],
     )?;
     emulator_profiles(db)
+}
+
+/// Deletes a profile. Its executable is remembered (`scan_ignore` kind `emulator`) so a
+/// rescan never brings it back, and ROM routes assigned to it go back to automatic.
+pub fn remove_emulator(db: &Connection, id: &str) -> Result<bool> {
+    let Some(profile) = emulator_profile(db, id)? else {
+        return Ok(false);
+    };
+    let tx = db.unchecked_transaction()?;
+    if let Some(key) = crate::tracker::normalize_path(&profile.executable) {
+        add_ignore(&tx, IGNORE_EMULATOR, &key, &profile.executable)?;
+    }
+    tx.execute("DELETE FROM emulators WHERE id=?", [id])?;
+    for row in all_rows(&tx)? {
+        if row
+            .routes
+            .iter()
+            .any(|r| r.emulator_id.as_deref() == Some(id))
+        {
+            let routes = row
+                .routes
+                .iter()
+                .cloned()
+                .map(|mut r| {
+                    if r.emulator_id.as_deref() == Some(id) {
+                        r.emulator_id = None;
+                    }
+                    r
+                })
+                .collect();
+            set_routes(&tx, &row.id, routes)?;
+        }
+    }
+    tx.commit()?;
+    Ok(true)
+}
+
+// ---------------------------------------------------------------------------
+// Scan ignore list (`scan_ignore`): removed emulator executables and ignored game paths.
+// `key` is the normalized (lower-case) path; `path` the path as shown to the user.
+
+pub const IGNORE_EMULATOR: &str = "emulator";
+pub const IGNORE_PATH: &str = "path";
+
+pub fn add_ignore(db: &Connection, kind: &str, key: &str, path: &str) -> Result<()> {
+    db.execute(
+        "INSERT INTO scan_ignore(kind,key,path,addedAt) VALUES(?,?,?,?) ON CONFLICT(kind,key) DO NOTHING",
+        params![kind, key, path, now_ms()],
+    )?;
+    Ok(())
+}
+
+pub fn remove_ignore(db: &Connection, kind: &str, key: &str) -> Result<bool> {
+    Ok(db.execute(
+        "DELETE FROM scan_ignore WHERE kind=? AND key=?",
+        params![kind, key],
+    )? > 0)
+}
+
+/// (key, path, addedAt) of one ignore kind, oldest first.
+pub fn ignores(db: &Connection, kind: &str) -> Result<Vec<(String, String, i64)>> {
+    let mut stmt =
+        db.prepare("SELECT key,path,addedAt FROM scan_ignore WHERE kind=? ORDER BY addedAt,key")?;
+    let rows = stmt
+        .query_map([kind], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(rows)
+}
+
+pub fn ignore_keys(db: &Connection, kind: &str) -> Result<HashSet<String>> {
+    Ok(ignores(db, kind)?.into_iter().map(|(k, _, _)| k).collect())
+}
+
+// ---------------------------------------------------------------------------
+// Local (library folder) games
+
+/// Install-state key of a library root's routes (`GameRoute.installStates`).
+pub fn root_state_key(root_id: &str) -> String {
+    format!("root:{root_id}")
+}
+
+/// Marks local routes as missing: for every route `missing` selects, the install state
+/// `state_key` (or, with `None`, every `root:` state) becomes false. A route no longer
+/// installed anywhere loses its install path and is dropped when it isn't owned and the game
+/// holds no user data (`has_user_data`); a game left without routes is deleted. Returns
+/// (routes marked not installed, games removed).
+pub fn mark_local_routes_missing(
+    db: &mut Connection,
+    state_key: Option<&str>,
+    missing: &dyn Fn(&GameRoute) -> bool,
+) -> Result<(usize, usize)> {
+    let rows = all_rows(db)?;
+    let customized = customized_game_ids(db)?;
+    let tx = db.transaction()?;
+    let (mut marked, mut removed) = (0, 0);
+    for row in rows {
+        let mut changed = false;
+        let mut updated = Vec::with_capacity(row.routes.len());
+        for route in &row.routes {
+            let mut states = route.install_states.clone().unwrap_or_default();
+            let keys: Vec<String> = states
+                .iter()
+                .filter(|(k, v)| {
+                    **v && match state_key {
+                        Some(key) => k.as_str() == key,
+                        None => k.starts_with("root:"),
+                    }
+                })
+                .map(|(k, _)| k.clone())
+                .collect();
+            if keys.is_empty() || !missing(route) {
+                updated.push(route.clone());
+                continue;
+            }
+            for key in keys {
+                states.insert(key, false);
+            }
+            let installed = states.values().any(|v| *v);
+            let mut next = route.clone();
+            next.install_states = Some(states);
+            next.installed = Some(installed);
+            changed = true;
+            if !installed {
+                next.install_path = None;
+                marked += 1;
+                if next.owned != Some(true) && !has_user_data(&row, &customized) {
+                    continue;
+                }
+            }
+            updated.push(next);
+        }
+        if !changed {
+            continue;
+        }
+        if updated.is_empty() {
+            delete_game_rows(&tx, &row.id)?;
+            removed += 1;
+        } else {
+            set_routes(&tx, &row.id, updated)?;
+        }
+    }
+    tx.commit()?;
+    Ok((marked, removed))
+}
+
+/// Missing-route counts above which a scan's removals are held back (see
+/// [`reconcile_local_root`]).
+pub const MASS_REMOVAL_MIN: usize = 20;
+
+/// Result of [`reconcile_local_root`].
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct LocalReconcile {
+    /// Routes marked not installed (including dropped ones).
+    pub marked: usize,
+    pub removed_games: usize,
+    /// Routes that would have been marked missing but were held back by the guard.
+    pub held: usize,
+}
+
+/// Applies one library root's scan: routes of that root (`root_state_key`) whose identity
+/// isn't in `found` are marked missing, except where `protected` says the scan couldn't see
+/// them (an unreadable folder). Like store scans, an empty result changes nothing. A scan that
+/// would mark more than half of the root's installed routes, and more than
+/// [`MASS_REMOVAL_MIN`], as missing changes nothing either (a drive half-mounted, a renamed
+/// parent folder): the count is returned as `held`.
+pub fn reconcile_local_root(
+    db: &mut Connection,
+    root_id: &str,
+    found: &HashSet<String>,
+    protected: &dyn Fn(&GameRoute) -> bool,
+) -> Result<LocalReconcile> {
+    if found.is_empty() {
+        return Ok(LocalReconcile::default());
+    }
+    let key = root_state_key(root_id);
+    let missing = |route: &GameRoute| !found.contains(&route_identity(route)) && !protected(route);
+    let (mut total, mut would_mark) = (0, 0);
+    for row in all_rows(db)? {
+        for route in &row.routes {
+            let active = route
+                .install_states
+                .as_ref()
+                .is_some_and(|s| s.get(&key) == Some(&true));
+            if active {
+                total += 1;
+                if missing(route) {
+                    would_mark += 1;
+                }
+            }
+        }
+    }
+    if would_mark > MASS_REMOVAL_MIN && would_mark * 2 > total {
+        return Ok(LocalReconcile {
+            held: would_mark,
+            ..Default::default()
+        });
+    }
+    let (marked, removed_games) = mark_local_routes_missing(db, Some(&key), &missing)?;
+    Ok(LocalReconcile {
+        marked,
+        removed_games,
+        held: 0,
+    })
+}
+
+/// Shortcuts the user confirmed: normalized `.lnk` path → (target, arguments) they saw.
+pub fn shortcut_confirmations(db: &Connection) -> Result<HashMap<String, (String, String)>> {
+    let mut stmt = db.prepare("SELECT shortcutKey,target,arguments FROM local_shortcut_ok")?;
+    let rows = stmt
+        .query_map([], |r| Ok((r.get(0)?, (r.get(1)?, r.get(2)?))))?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(rows)
+}
+
+pub fn confirm_shortcut(db: &Connection, key: &str, target: &str, arguments: &str) -> Result<()> {
+    db.execute(
+        "INSERT INTO local_shortcut_ok(shortcutKey,target,arguments,confirmedAt) VALUES(?,?,?,?) ON CONFLICT(shortcutKey) DO UPDATE SET target=excluded.target,arguments=excluded.arguments,confirmedAt=excluded.confirmedAt",
+        params![key, target, arguments, now_ms()],
+    )?;
+    Ok(())
+}
+
+/// Every game with whether it holds user data (read-only passes such as duplicate checks).
+pub fn games_with_user_data(db: &Connection) -> Result<Vec<(Game, bool)>> {
+    let customized = customized_game_ids(db)?;
+    Ok(all_rows(db)?
+        .into_iter()
+        .map(|row| {
+            let user = has_user_data(&row, &customized);
+            (row_to_game(row), user)
+        })
+        .collect())
+}
+
+/// Replaces one game's routes.
+pub fn set_routes(db: &Connection, id: &str, routes: Vec<GameRoute>) -> Result<()> {
+    persist_game(
+        db,
+        &GamePatch {
+            routes: Some(routes),
+            ..GamePatch::new(id)
+        },
+    )?;
+    Ok(())
 }
 
 pub fn plugins(db: &Connection) -> Result<Vec<Value>> {
@@ -1739,5 +2036,116 @@ mod tests {
             (g.routes[0].owned, g.routes[0].installed),
             (Some(false), Some(false))
         );
+    }
+
+    #[test]
+    fn old_emulator_tables_and_backups_still_work() {
+        let conn = Connection::open_in_memory().unwrap();
+        // A library from before library roots: emulators without the new columns.
+        conn.execute_batch(&format!(
+            "{GAMES_TABLE};
+             CREATE TABLE settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+             CREATE TABLE emulators(id TEXT PRIMARY KEY,name TEXT NOT NULL,executable TEXT NOT NULL,args TEXT NOT NULL,romFolders TEXT NOT NULL,extensions TEXT NOT NULL);
+             INSERT INTO emulators VALUES('old','Old','D:\\Emu\\old.exe','{{rom}}','[\"D:\\\\Roms\"]','[\".iso\"]');"
+        ))
+        .unwrap();
+        migrate(&conn, None).unwrap();
+        migrate(&conn, None).unwrap();
+        let list = emulator_profiles(&conn).unwrap();
+        assert_eq!(list.len(), 1);
+        let old = &list[0];
+        assert_eq!((old.enabled, old.source.as_str()), (true, "manual"));
+        assert!(old.systems.is_empty() && old.detected_as.is_none());
+        assert_eq!(old.rom_folders, [r"D:\Roms"]);
+        for table in [
+            "library_roots",
+            "scan_review",
+            "scan_ignore",
+            "local_exe_choice",
+        ] {
+            let n: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?",
+                    [table],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(n, 1, "{table}");
+        }
+
+        // An old backup's emulator (no new fields) restores with defaults.
+        let raw = serde_json::json!({ "games": [], "emulators": [
+            { "id": "dolphin", "name": "Dolphin", "executable": "C:\\Emu\\Dolphin.exe", "args": "-e {rom}", "romFolders": [], "extensions": [".iso"] }
+        ]});
+        let parsed = crate::validation::backup(&raw).unwrap();
+        let mut conn = conn;
+        restore_backup(&mut conn, &parsed).unwrap();
+        let restored = emulator_profile(&conn, "dolphin").unwrap().unwrap();
+        assert!(restored.enabled && restored.systems.is_empty());
+        // A new backup round-trips the new fields.
+        let mut p = restored.clone();
+        p.systems = vec!["gc".into(), "wii".into()];
+        p.enabled = false;
+        p.source = "discovered".into();
+        p.detected_as = Some("dolphin".into());
+        let text = serde_json::to_value(Backup {
+            games: vec![],
+            settings: None,
+            emulators: Some(vec![p.clone()]),
+            game_page_custom: None,
+        })
+        .unwrap();
+        let parsed = crate::validation::backup(&text).unwrap();
+        restore_backup(&mut conn, &parsed).unwrap();
+        let back = emulator_profile(&conn, "dolphin").unwrap().unwrap();
+        assert_eq!(
+            (
+                back.systems.clone(),
+                back.enabled,
+                back.source.as_str(),
+                back.detected_as.as_deref()
+            ),
+            (p.systems, false, "discovered", Some("dolphin"))
+        );
+        // Unknown systems or sources are rejected.
+        let bad = serde_json::json!({ "games": [], "emulators": [
+            { "id": "x", "name": "X", "executable": "x.exe", "args": "", "romFolders": [], "extensions": [], "systems": ["ps9"] }
+        ]});
+        assert!(crate::validation::backup(&bad).is_err());
+    }
+
+    #[test]
+    fn routes_keep_their_emulator_choice_through_imports() {
+        let db = Db::memory().unwrap();
+        let mut conn = db.lock();
+        let rom = |emulator: Option<&str>| GameRoute {
+            source_id: "rom".into(),
+            store: "Emulator".into(),
+            app_id: Some(r"d:\roms\gba\a.gba".into()),
+            launch_target: r"D:\Roms\GBA\a.gba".into(),
+            installed: Some(true),
+            emulator_id: emulator.map(Into::into),
+            system: Some("gba".into()),
+            ..Default::default()
+        };
+        let g = |id: &str, r| Game {
+            id: id.into(),
+            title: "A".into(),
+            store: "Emulator".into(),
+            routes: vec![r],
+            ..Default::default()
+        };
+        upsert_imported_games(&mut conn, &[g("rom:1", rom(Some("chosen")))]).unwrap();
+        upsert_imported_games(&mut conn, &[g("rom:2", rom(Some("default")))]).unwrap();
+        let games = all_games(&conn).unwrap();
+        assert_eq!(games.len(), 1);
+        assert_eq!(games[0].routes[0].emulator_id.as_deref(), Some("chosen"));
+        // The new fields survive validation from the renderer.
+        let value = serde_json::to_value(&games[0]).unwrap();
+        assert_eq!(value["routes"][0]["emulatorId"], "chosen");
+        assert!(crate::validation::game_patch(&value).is_ok());
+        let mut bad = value.clone();
+        bad["routes"][0]["system"] = "ps9".into();
+        assert!(crate::validation::game_patch(&bad).is_err());
     }
 }

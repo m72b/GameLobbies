@@ -1,7 +1,26 @@
 export type Store = 'Steam' | 'Epic Games' | 'GOG' | 'EA app' | 'Battle.net' | 'Xbox' | 'Ubisoft' | 'Emulator' | 'itch.io' | 'Amazon Games' | 'Custom'
-export interface GameRoute { sourceId: string; store: Store; appId?: string; launchTarget: string; launchArgs?: string; installPath?: string; owned?: boolean; installed?: boolean; installStates?: Record<string, boolean>; playtimeMinutes?: number; lastPlayed?: number }
+/**
+ * One way to launch a game.
+ * Local routes (from library folders, see `RootsAPI`):
+ * - `sourceId: 'rom'`: a ROM played with an emulator. Store `Emulator`; `appId` = the normalized
+ *   lower-case ROM path (its identity); `launchTarget` = the ROM path; `installPath` = its folder.
+ * - `sourceId: 'local'`: a PC game started directly. Store `Custom`; `appId` = the normalized game
+ *   folder (or shortcut file) path; `installPath` = its folder. `launchTarget` is an `.exe`, a store
+ *   launch link taken from a `.url` (never the `.url` file), or a `.lnk` the user confirmed in
+ *   review (re-checked at every launch; refused if it changed).
+ * Routes found by a folder scan carry the install state `root:<rootId>`; `installed` is true while
+ * the last successful scan of that folder found the file.
+ * - `emulatorId`: the emulator profile the USER chose for a `rom` route (scans never set it, and it
+ *   counts as user data, so the game is kept when its file disappears). Absent = automatic: the
+ *   best enabled, available, configured profile for `system` is picked at launch (manual profiles
+ *   first, then the oldest, then catalog preference). An assigned profile that was deleted also
+ *   falls back to automatic. Change it with `library.setEmulator`.
+ * - `system`: a `CatalogSystem.id` (`'ps2'`, `'switch'`, `'pc'`, ...).
+ */
+export interface GameRoute { sourceId: string; store: Store; appId?: string; launchTarget: string; launchArgs?: string; installPath?: string; owned?: boolean; installed?: boolean; installStates?: Record<string, boolean>; playtimeMinutes?: number; lastPlayed?: number; emulatorId?: string; system?: string }
 export interface Game { id: string; title: string; cover?: string; defaultCover?: string; store: Store; genre?: string; playtimeMinutes: number; playtimeSeconds?: number; lastPlayed?: number; hidden: boolean; favorite: boolean; routes: GameRoute[] }
-export interface LibraryStats { total: number; imported?: number; errors?: string[]; scannedAt?: number }
+/** `library.scan()` result. `local` is the library folder part, present when any folder was scanned (store scans and folder scans run side by side). */
+export interface LibraryStats { total: number; imported?: number; errors?: string[]; scannedAt?: number; local?: LocalScanSummary }
 export interface LibraryConnections { steamId: string; steamApiKeySet: boolean; legendaryPath: string; gogDatabasePath: string }
 export interface LibraryConnectionInput { steamId: string; steamApiKey?: string; legendaryPath: string; gogDatabasePath: string }
 export interface ThemeTokens { name: string; bg: string; surface: string; surface2: string; accent: string; text: string; muted: string; radius: string; gap: string; font: string; hover: string; backgroundImage?: string }
@@ -31,7 +50,159 @@ export interface Settings { scanIntervalHours: number; posterWidth: number; show
 /** Grid styles accepted by `Settings.steamGridDbStyles` (the backend rejects anything else). */
 export const steamGridDbStyles = ['alternate', 'blurred', 'white_logo', 'material', 'no_logo'] as const
 export type SteamGridDbStyle = typeof steamGridDbStyles[number]
-export interface EmulatorProfile { id: string; name: string; executable: string; args: string; romFolders: string[]; extensions: string[] }
+/**
+ * An emulator profile. `executable` must be an absolute drive-letter path ending in `.exe`
+ * (checked on save and in backups; existence is checked at launch).
+ * `args` is a template split like a command line but WITHOUT any shell: whitespace separates
+ * arguments, `"..."` or `'...'` group text (the quotes are removed), backslashes are literal, and
+ * an unclosed quote is rejected on save. Placeholders are replaced inside the already-split
+ * arguments: `{rom}` (ROM path), `{romdir}` (its folder), `{romname}` (file name without
+ * extension). A path with spaces, quotes, `&` or `%` therefore stays exactly one argument;
+ * `--path={rom}` becomes the single argument `--path=<path>`. Without `{rom}` the ROM path is
+ * appended as the last argument. The emulator starts in its own folder.
+ * - `systems`: `CatalogSystem.id`s it runs (used to pick a game's default emulator). Omitted on
+ *   save = keep the stored value (`[]` for a new profile).
+ * - `enabled`: omitted on save = keep (true for a new profile). Disabled profiles are never
+ *   picked automatically and refuse to launch.
+ * - `source`: `'discovered'` (found in an emulator folder) or `'manual'`. Read-only.
+ * - `detectedAs`: `KnownEmulator.id` it was recognised as (by executable name). Read-only.
+ * - `available`: the executable exists right now. Read-only (computed).
+ * - `needsConfiguration`: the arguments still contain a catalog placeholder (RetroArch's
+ *   `CORE_NAME`): never picked automatically and refuses to launch until edited. Read-only.
+ * - `addedAt`: when the profile was first stored (ms epoch; 0 for older profiles). Read-only.
+ *   Discovery adds a second executable recognised as an emulator that already has a profile
+ *   DISABLED, so a stray copy never takes over.
+ * A bare `{romname}` argument is refused at launch when the file name starts with `-` or `/`.
+ * `romFolders` / `extensions` are legacy fields kept for older profiles; scans don't use them.
+ */
+export interface EmulatorProfile { id: string; name: string; executable: string; args: string; romFolders: string[]; extensions: string[]; systems?: string[]; enabled?: boolean; source?: 'discovered' | 'manual'; detectedAs?: string; available?: boolean; needsConfiguration?: boolean; addedAt?: number }
+/** A system from the built-in catalog. `aliases` are folder names meaning it (matched ignoring case, spaces and punctuation: "Sony 3" = "PS3" = "PlayStation 3"). `extensions` are lower-case with a dot; empty for `pc`. */
+export interface CatalogSystem { id: string; name: string; aliases: string[]; extensions: string[] }
+/** A known emulator. `executables`: lower-case file names recognised in emulator folders. `defaultArgs`: the template new profiles get. `needsConfiguration`: that template must be edited first (RetroArch: replace CORE_NAME with a core). */
+export interface KnownEmulator { id: string; name: string; executables: string[]; systems: string[]; defaultArgs: string; needsConfiguration: boolean; note: string }
+/** `emulators.catalog()`: static built-in data. */
+export interface EmulatorCatalog { systems: CatalogSystem[]; emulators: KnownEmulator[] }
+/** A path on an ignore list (executables of removed emulator profiles, or game files/folders scans skip). */
+export interface IgnoredPath { path: string; addedAt: number }
+export type LibraryRootKind = 'emulators' | 'games'
+export interface EmulatorScanCounts { added: number; updated: number; unavailable: number }
+/**
+ * Game counts of a folder scan. `updated`: known games found again with a change (back after being
+ * missing, or a new launch target). `removedOrUninstalled`: routes no longer found (games with user
+ * data stay, marked not installed; the rest are removed). `skipped`: files that aren't games.
+ * `failed`: folders that couldn't be read (or listed completely); games under them are kept.
+ * `removalsHeld`: routes that looked missing but were NOT marked missing, because more than half
+ * of a root's games (and more than 20) vanished at once; see `RootScanOutcome.warning`.
+ */
+export interface GameScanCounts { added: number; updated: number; removedOrUninstalled: number; skipped: number; failed: number; removalsHeld: number }
+/** One root in a scan. `ok: false`: the folder couldn't be read (e.g. offline drive) and nothing in the library changed for it. `truncated`: the entry cap was hit, so games were added but none marked missing. `unreadable`: subfolders that couldn't be read. `warning`: the scan worked but removals were skipped (too many at once, or the folder became unreadable before they were applied); show it to the user. */
+export interface RootScanOutcome { id: string; path: string; kind: LibraryRootKind; ok: boolean; error?: string; truncated: boolean; unreadable: number; warning?: string }
+/** `LibraryRoot.lastResult`: the outcome plus that root's counts and duration. */
+export interface RootScanResult extends RootScanOutcome { durationMs: number; emulators?: EmulatorScanCounts; games?: GameScanCounts }
+/**
+ * A library folder. `emulators` folders are searched (up to 4 folders deep) for known emulator
+ * executables. `games` folders hold system folders (`PS2`, `Sony 3`, `Nintendo Switch`, `PC`, ... at
+ * any level; the nearest one wins; the root itself may be one) containing ROMs, folder games (PS3,
+ * PS4, Wii U, Xbox 360), or under a PC folder one subfolder per game. `path` is normalized
+ * (`D:\Roms`). `online`: the folder exists right now.
+ */
+export interface LibraryRoot { id: string; kind: LibraryRootKind; path: string; enabled: boolean; addedAt: number; lastScanAt?: number; lastResult?: RootScanResult; online: boolean }
+/**
+ * `library-scan:progress`, at most ~10 per second plus every phase change. `phase`: `emulators` or
+ * `games` while a root is walked (`root` = its path, `processed` = entries seen in it so far,
+ * `current` = the folder being read), then `library` (saving, duplicate check), then `done`.
+ * `total` isn't known in advance and is currently always absent.
+ */
+export interface LocalScanProgress { phase: 'emulators' | 'games' | 'library' | 'done'; root: string; processed: number; total?: number; current?: string }
+/** Result of a library folder scan (also pushed as `library-scan:finished`). `review`: open review items afterwards. `unsupportedSamples`: up to 20 skipped paths with reasons. */
+export interface LocalScanSummary { roots: RootScanOutcome[]; emulators: EmulatorScanCounts; games: GameScanCounts; review: number; unsupportedSamples: string[]; durationMs: number }
+export interface ReviewItemBase { id: string; status: 'open' | 'resolved'; resolution?: 'kept-separate' | 'linked' | 'ignored' | 'exe-chosen' | 'shortcut-confirmed' | 'dismissed'; rootId?: string; createdAt: number; updatedAt: number }
+/**
+ * Something a scan won't decide on its own. `details` per `kind`:
+ * - `duplicate`: different games with the same system and clean title (e.g. USA and Europe
+ *   dumps, or the same game in two folders). Never merged automatically.
+ * - `ambiguous-exe`: a PC game folder without one clear executable. The game isn't added until
+ *   one is chosen.
+ * - `unsupported`: an unknown system folder, or a PC game folder with no executable.
+ * - `unreadable`: a folder that couldn't be read (games under it are kept as they were).
+ * - `shortcut`: a `.lnk` with arguments or a target that isn't a plain existing `.exe`. Show
+ *   `target` and `arguments` to the user; nothing is added until they confirm exactly those
+ *   (`confirm-shortcut`). `folder` is the game folder it was found in (null when the shortcut
+ *   lies directly in the PC folder or was picked with `addLocalGame`); `rootId` is null for picked
+ *   files.
+ * Rescans refresh open items instead of adding copies; resolved items stay resolved.
+ */
+export type ReviewItem = ReviewItemBase & (
+  | { kind: 'duplicate'; details: { system: string; title: string; games: { gameId: string; title: string; paths: string[] }[] } }
+  | { kind: 'ambiguous-exe'; details: { title: string; folder: string; candidates: string[]; rootId: string } }
+  | { kind: 'unsupported' | 'unreadable'; details: { path: string; reason: string; rootId: string } }
+  | { kind: 'shortcut'; details: { title: string; shortcut: string; target: string; arguments: string; folder: string | null; rootId: string | null } }
+)
+/**
+ * How to resolve a review item:
+ * - `keep-separate` (duplicate): they are different games; this exact set isn't reported again.
+ * - `link` (duplicate): merge the listed games into `targetGameId` (default: the first listed), as
+ *   `library.merge` does (playtime summed, sessions moved).
+ * - `ignore` (any kind): `path` must be one of the item's paths (or its folder). Scans skip it from
+ *   now on (undo with `review.unignore`); its game becomes not installed, or is removed when it
+ *   has no user data.
+ * - `choose-exe` (ambiguous-exe): `executable` must be one of `candidates`. The game is added now
+ *   and later scans keep that choice. A shortcut candidate follows the shortcut rules (a `.lnk`
+ *   with arguments is refused here).
+ * - `confirm-shortcut` (shortcut): the user accepts the shown target and arguments; the game is
+ *   added and launches the `.lnk`. Rejected if the shortcut changed since the item was made
+ *   (rescan to see the new values). Use `ignore` with `details.shortcut` to skip it for good.
+ * - `dismiss` (any kind): close without changes.
+ */
+export type ReviewResolution = { action: 'keep-separate' } | { action: 'link'; targetGameId?: string } | { action: 'ignore'; path: string } | { action: 'choose-exe'; executable: string } | { action: 'confirm-shortcut' } | { action: 'dismiss' }
+/** `library.addLocalGame()` result: the new (or already existing) game's id and the library. */
+export interface AddedLocalGame { gameId: string; games: Game[] }
+/**
+ * Library folders. Calls reject with a user-facing message on invalid input.
+ * - list(): all roots.
+ * - add(kind, path): `path` must be an existing absolute local folder like `D:\Roms` (no network,
+ *   `\\?\` or relative paths, no `.`/`..`, at most 1024 characters; not on a mapped network
+ *   drive; not itself a link/junction; links in parent folders are resolved and the real location
+ *   is checked and stored). Refused: the Windows folder, Roaming AppData and Game Lobby's data
+ *   folder (and anything in or above them); Program Files, ProgramData, the user profile, Public
+ *   and Local AppData themselves (or a folder containing them; folders inside them are fine); for
+ *   `emulators` roots also Downloads, Desktop and Temp (and anything in or above them). A root may
+ *   not repeat, contain or sit inside ANY other root, of either kind. Compared case-insensitively.
+ *   Returns the updated list; does not scan.
+ * - browse(): native folder picker; the chosen path (not added yet), or null when cancelled.
+ * - setEnabled(id, enabled): turned-off roots are skipped by scans; their games stay as they are.
+ * - remove(id): games found only under it become not installed (removed when they have no user
+ *   data); emulator profiles found in it stay. Waits for a running folder scan to finish.
+ * - rescan(id?): scans one root (it must be enabled) or every enabled root. Rejects while a folder
+ *   scan is already running. Emits progress, `library:changed`, `review:changed` and
+ *   `library-scan:finished`.
+ * - onProgress(cb) / onFinished(cb): folder scan events, also during `library.scan()` and
+ *   `emulators.scan()`. Return an unsubscribe function.
+ */
+export interface RootsAPI { list(): Promise<LibraryRoot[]>; add(kind: LibraryRootKind, path: string): Promise<LibraryRoot[]>; browse(): Promise<string | null>; setEnabled(id: string, enabled: boolean): Promise<LibraryRoot[]>; remove(id: string): Promise<LibraryRoot[]>; rescan(id?: string): Promise<LocalScanSummary>; onProgress(callback: (progress: LocalScanProgress) => void): () => void; onFinished(callback: (summary: LocalScanSummary) => void): () => void }
+/**
+ * Emulator profiles.
+ * - list(): every profile with `available` / `needsConfiguration` computed.
+ * - save(profile): creates or updates (see `EmulatorProfile` for kept fields). New profiles are
+ *   `manual` and recognised by executable name. `systems` must be catalog ids; `executable` must be
+ *   an absolute `.exe` path; `args` must have balanced quotes.
+ * - remove(id): deletes it; scans never re-add its executable (see ignored/unignore). Games that
+ *   used it go back to automatic.
+ * - scan(): searches the enabled emulator folders only (rejects while a folder scan runs).
+ * - catalog(): built-in systems and known emulators.
+ * - ignored() / unignore(path): executables of removed profiles.
+ * - browseExecutable(): native .exe picker; the path, or null when cancelled.
+ */
+export interface EmulatorsAPI { list(): Promise<EmulatorProfile[]>; save(profile: EmulatorProfile): Promise<EmulatorProfile[]>; remove(id: string): Promise<EmulatorProfile[]>; scan(): Promise<LocalScanSummary>; catalog(): Promise<EmulatorCatalog>; ignored(): Promise<IgnoredPath[]>; unignore(path: string): Promise<IgnoredPath[]>; browseExecutable(): Promise<string | null> }
+/**
+ * Scan review.
+ * - list(includeResolved = false): open items, newest first (or every item).
+ * - resolve(id, resolution): applies it (see `ReviewResolution`) and returns the open items.
+ *   Rejects for an unknown or already resolved item, or a resolution that doesn't fit its kind.
+ * - ignored() / unignore(path): game files and folders scans skip.
+ * - onChanged(cb): items may have changed (after scans and resolutions).
+ */
+export interface ReviewAPI { list(includeResolved?: boolean): Promise<ReviewItem[]>; resolve(id: string, resolution: ReviewResolution): Promise<ReviewItem[]>; ignored(): Promise<IgnoredPath[]>; unignore(path: string): Promise<IgnoredPath[]>; onChanged(callback: () => void): () => void }
 export interface PluginManifest { id: string; name: string; version: string; kind: 'library'; store: Store; manifestFolder?: string }
 /** A SteamGridDB poster candidate. `url`/`thumb` are https://*.steamgriddb.com images. */
 export interface SteamGridDbCover { id: number; url: string; thumb: string; width: number; height: number; style?: string; score?: number; upvotes?: number; downvotes?: number; author?: string }
@@ -164,10 +335,25 @@ export interface ArtAPI {
 }
 export interface LobbyAPI {
   window: { minimize(): Promise<void>; toggleMaximize(): Promise<void>; close(): Promise<void>; isMaximized(): Promise<boolean> }
-  library: { list(): Promise<Game[]>; scan(): Promise<LibraryStats>; launch(id: string, route?: number): Promise<void>; save(game: Partial<Game> & { id: string }): Promise<Game[]>; remove(id: string): Promise<Game[]>; merge(targetId: string, sourceId: string): Promise<Game[]>; resetPlaytime(): Promise<Game[]>; setCover(id: string, dataUrl: string | null): Promise<Game[]>; chooseCover(id: string): Promise<Game[]>; chooseInstallFolder(id: string): Promise<void>; add(title: string, target: string): Promise<Game[]>; connections(): Promise<LibraryConnections>; saveConnections(input: LibraryConnectionInput): Promise<LibraryConnections>; chooseLegendary(): Promise<string | null>; chooseGogDatabase(): Promise<string | null>; onChanged(callback: () => void): () => void }
+  library: { list(): Promise<Game[]>; scan(): Promise<LibraryStats>; launch(id: string, route?: number): Promise<void>; save(game: Partial<Game> & { id: string }): Promise<Game[]>; remove(id: string): Promise<Game[]>; merge(targetId: string, sourceId: string): Promise<Game[]>; resetPlaytime(): Promise<Game[]>; setCover(id: string, dataUrl: string | null): Promise<Game[]>; chooseCover(id: string): Promise<Game[]>; chooseInstallFolder(id: string): Promise<void>; add(title: string, target: string): Promise<Game[]>; connections(): Promise<LibraryConnections>; saveConnections(input: LibraryConnectionInput): Promise<LibraryConnections>; chooseLegendary(): Promise<string | null>; chooseGogDatabase(): Promise<string | null>; onChanged(callback: () => void): () => void
+    /** Sets the emulator of a `rom` route (`routeIndex` into `game.routes`); `null` = automatic. The profile must exist; other route kinds are rejected. Returns the library. */
+    setEmulator(gameId: string, routeIndex: number, emulatorId: string | null): Promise<Game[]>
+    /**
+     * Native file picker for a PC game (.exe/.lnk/.url) or a ROM file. Adds it (title from the file
+     * name, editable with `save`) and returns its id, or null when cancelled. Adding a file already in
+     * the library returns that game. A ROM's system comes from a system-named parent folder or a
+     * unique extension; otherwise `system` is absent and an emulator must be chosen with `setEmulator`.
+     * Shortcuts: a `.url` is accepted only when it opens a store launch link (the link is stored); a
+     * `.lnk` to an existing `.exe` without arguments adds that `.exe`; any other `.lnk` REJECTS with a
+     * message naming its target and arguments and creates a `shortcut` review item to confirm it
+     * (`review.onChanged` fires).
+     */
+    addLocalGame(): Promise<AddedLocalGame | null> }
   settings: { get(): Promise<Settings>; save(settings: Partial<Settings>): Promise<Settings>; onChanged(callback: (settings: Settings) => void): () => void; open(): Promise<void> }
   theme: { load(url: string): Promise<Settings>; reset(): Promise<Settings> }
-  emulators: { list(): Promise<EmulatorProfile[]>; save(profile: EmulatorProfile): Promise<EmulatorProfile[]>; scan(): Promise<LibraryStats> }
+  emulators: EmulatorsAPI
+  roots: RootsAPI
+  review: ReviewAPI
   backup: { export(): Promise<string | null>; import(): Promise<number> }
   plugins: { list(): Promise<PluginManifest[]>; install(): Promise<PluginManifest[]> }
   steamGridDb: SteamGridDbAPI

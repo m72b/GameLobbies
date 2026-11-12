@@ -79,13 +79,29 @@ pub async fn run_capture(
 
 /// Starts a program detached from Game Lobby, so closing the launcher doesn't close the game.
 pub fn spawn_detached(program: &Path, args: &[String]) -> Result<()> {
+    let cwd = program.parent().filter(|d| d.is_dir());
+    spawn_detached_in(program, args, cwd)
+        .map(drop)
+        .map_err(|e| anyhow!("Could not start {}: {e}", program.display()))
+}
+
+/// Like [`spawn_detached`] with an explicit working folder; returns the new process id.
+/// Arguments are passed as separate argv entries (Rust quotes each one for
+/// `CommandLineToArgvW`); no shell is involved, so `&`, `%`, `"` or spaces in an argument
+/// can't start other commands or split it. Callers must only pass `.exe` programs: Windows
+/// runs `.bat`/`.cmd` files through `cmd.exe`.
+pub fn spawn_detached_in(
+    program: &Path,
+    args: &[String],
+    cwd: Option<&Path>,
+) -> std::io::Result<u32> {
     let mut command = std::process::Command::new(program);
     command
         .args(args)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
-    if let Some(dir) = program.parent().filter(|d| d.is_dir()) {
+    if let Some(dir) = cwd {
         command.current_dir(dir);
     }
     #[cfg(windows)]
@@ -93,10 +109,7 @@ pub fn spawn_detached(program: &Path, args: &[String]) -> Result<()> {
         use std::os::windows::process::CommandExt;
         command.creation_flags(0x0000_0008 | 0x0000_0200); // DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
     }
-    command
-        .spawn()
-        .map(drop)
-        .map_err(|e| anyhow!("Could not start {}: {e}", program.display()))
+    command.spawn().map(|child| child.id())
 }
 
 #[cfg(windows)]
@@ -385,6 +398,154 @@ pub fn protect(_: &[u8]) -> Result<Vec<u8>> {
 #[cfg(not(windows))]
 pub fn unprotect(_: &[u8]) -> Result<Vec<u8>> {
     bail!("Secure storage is only available on Windows.")
+}
+
+// ---------------------------------------------------------------------------
+// Shortcuts and drives
+
+/// Largest `.lnk` / `.url` file that is read.
+pub const MAX_SHORTCUT_BYTES: u64 = 64 * 1024;
+
+/// The `URL=` value of an Internet shortcut's `[InternetShortcut]` section. The caller must
+/// still validate it (`launch::validate_launch_uri`).
+pub fn read_url_shortcut(path: &Path) -> Result<String> {
+    if std::fs::metadata(path)?.len() > MAX_SHORTCUT_BYTES {
+        bail!("{} is too large for a shortcut.", path.display());
+    }
+    parse_url_shortcut(&String::from_utf8_lossy(&std::fs::read(path)?))
+        .ok_or_else(|| anyhow!("{} has no link.", path.display()))
+}
+
+pub fn parse_url_shortcut(text: &str) -> Option<String> {
+    let mut in_section = false;
+    for line in text.lines() {
+        let line = line.trim().trim_start_matches('\u{feff}');
+        if line.starts_with('[') {
+            in_section = line.eq_ignore_ascii_case("[InternetShortcut]");
+            continue;
+        }
+        if !in_section {
+            continue;
+        }
+        if let Some((key, value)) = line.split_once('=') {
+            if key.trim().eq_ignore_ascii_case("URL") {
+                let value = value.trim();
+                return (!value.is_empty()).then(|| value.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// A Windows shortcut's (`.lnk`) target path and arguments, read with `IShellLinkW` without
+/// resolving it (no search, no UI).
+#[cfg(windows)]
+pub fn resolve_shortcut(path: &Path) -> Result<(String, String)> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::core::{Interface, PCWSTR};
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, CoUninitialize, IPersistFile, CLSCTX_INPROC_SERVER,
+        COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, STGM_READ,
+    };
+    use windows::Win32::UI::Shell::{IShellLinkW, ShellLink};
+    if std::fs::metadata(path)?.len() > MAX_SHORTCUT_BYTES {
+        bail!("{} is too large for a shortcut.", path.display());
+    }
+    let wide: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let from_wide = |buffer: &[u16]| {
+        let end = buffer.iter().position(|c| *c == 0).unwrap_or(buffer.len());
+        String::from_utf16_lossy(&buffer[..end])
+    };
+    unsafe {
+        let init = CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+        let result = (|| -> windows::core::Result<(String, String)> {
+            let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)?;
+            let file: IPersistFile = link.cast()?;
+            file.Load(PCWSTR(wide.as_ptr()), STGM_READ)?;
+            let mut target = vec![0u16; 32_768];
+            link.GetPath(&mut target, std::ptr::null_mut(), 0)?;
+            let mut arguments = vec![0u16; 32_768];
+            link.GetArguments(&mut arguments)?;
+            Ok((from_wide(&target), from_wide(&arguments)))
+        })();
+        if init.is_ok() {
+            CoUninitialize();
+        }
+        result.map_err(|e| anyhow!("{} can't be read as a shortcut: {e}", path.display()))
+    }
+}
+
+#[cfg(not(windows))]
+pub fn resolve_shortcut(path: &Path) -> Result<(String, String)> {
+    bail!("{} can't be read as a shortcut here.", path.display())
+}
+
+/// Writes a `.lnk` (tests only).
+#[cfg(all(windows, test))]
+pub fn create_shortcut(path: &Path, target: &str, arguments: &str) -> Result<()> {
+    use windows::core::{Interface, HSTRING};
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, CoUninitialize, IPersistFile, CLSCTX_INPROC_SERVER,
+        COINIT_APARTMENTTHREADED,
+    };
+    use windows::Win32::UI::Shell::{IShellLinkW, ShellLink};
+    unsafe {
+        let init = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        let result = (|| -> windows::core::Result<()> {
+            let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)?;
+            link.SetPath(&HSTRING::from(target))?;
+            link.SetArguments(&HSTRING::from(arguments))?;
+            let file: IPersistFile = link.cast()?;
+            file.Save(&HSTRING::from(path.as_os_str()), true)?;
+            Ok(())
+        })();
+        if init.is_ok() {
+            CoUninitialize();
+        }
+        result.map_err(|e| anyhow!("{e}"))
+    }
+}
+
+/// True when the drive of an absolute `X:\...` path is a network drive (`DRIVE_REMOTE`).
+#[cfg(windows)]
+pub fn is_remote_drive(path: &str) -> bool {
+    use windows_sys::Win32::Storage::FileSystem::GetDriveTypeW;
+    const DRIVE_REMOTE: u32 = 4;
+    let bytes = path.as_bytes();
+    if bytes.len() < 2 || !bytes[0].is_ascii_alphabetic() || bytes[1] != b':' {
+        return false;
+    }
+    let root = wide(&format!("{}:\\", bytes[0] as char));
+    unsafe { GetDriveTypeW(root.as_ptr()) == DRIVE_REMOTE }
+}
+
+#[cfg(not(windows))]
+pub fn is_remote_drive(_path: &str) -> bool {
+    false
+}
+
+/// True when `path` itself (not its target) is a symbolic link, junction or other reparse
+/// point.
+pub fn is_reparse_point(path: &Path) -> bool {
+    let Ok(meta) = std::fs::symlink_metadata(path) else {
+        return false;
+    };
+    if meta.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        meta.file_attributes() & 0x400 != 0
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
 }
 
 #[cfg(test)]

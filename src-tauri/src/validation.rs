@@ -31,6 +31,8 @@ const ROUTE_KEYS: &[&str] = &[
     "installStates",
     "playtimeMinutes",
     "lastPlayed",
+    "emulatorId",
+    "system",
 ];
 const GAME_KEYS: &[&str] = &[
     "id",
@@ -85,6 +87,13 @@ const EMULATOR_KEYS: &[&str] = &[
     "args",
     "romFolders",
     "extensions",
+    "systems",
+    "enabled",
+    "source",
+    "detectedAs",
+    "available",
+    "needsConfiguration",
+    "addedAt",
 ];
 const CONNECTION_KEYS: &[&str] = &["steamId", "steamApiKey", "legendaryPath", "gogDatabasePath"];
 const PLUGIN_KEYS: &[&str] = &["id", "name", "version", "kind", "store", "manifestFolder"];
@@ -175,7 +184,14 @@ fn route(value: &Value) -> Result<GameRoute> {
     let mut r: GameRoute = decode(strict(value, ROUTE_KEYS, "Launch route")?, "Launch route")?;
     short_text(&mut r.source_id, 128, "Route source")?;
     store(&r.store)?;
-    max_len(&r.app_id, 256, "Route app ID")?;
+    // ROM and local PC routes use the normalized file path as their app ID.
+    max_len(&r.app_id, 8_192, "Route app ID")?;
+    max_len(&r.emulator_id, 256, "Route emulator")?;
+    if let Some(system) = &r.system {
+        if !crate::catalog::is_system_id(system) {
+            bail!("Unknown system \"{system}\".");
+        }
+    }
     short_text(&mut r.launch_target, 8_192, "Launch target")?;
     max_len(&r.launch_args, 8_192, "Launch arguments")?;
     max_len(&r.install_path, 8_192, "Install path")?;
@@ -424,6 +440,12 @@ pub fn emulator(value: &Value) -> Result<EmulatorProfile> {
     short_text(&mut p.id, 256, "Emulator ID")?;
     short_text(&mut p.name, 128, "Emulator name")?;
     short_text(&mut p.executable, 8_192, "Emulator executable")?;
+    // Existence is checked at launch; the shape is checked here (saves and backups alike).
+    if !crate::emulators::executable_path_ok(&p.executable) {
+        bail!(
+            r"The emulator executable must be a full path to an .exe file, like C:\Emulators\Dolphin\Dolphin.exe."
+        );
+    }
     max_len(&Some(p.args.clone()), 8_192, "Emulator arguments")?;
     if p.rom_folders.len() > 128 || p.extensions.len() > 256 {
         bail!("Too many ROM folders or extensions.");
@@ -434,6 +456,29 @@ pub fn emulator(value: &Value) -> Result<EmulatorProfile> {
     if let Some(bad) = p.extensions.iter().find(|e| !EXTENSION.is_match(e)) {
         bail!("\"{bad}\" is not a file extension like .iso.");
     }
+    if p.systems.len() > 32 {
+        bail!("An emulator can list at most 32 systems.");
+    }
+    let mut seen = std::collections::HashSet::new();
+    for system in &p.systems {
+        if !crate::catalog::is_system_id(system) {
+            bail!("Unknown system \"{system}\".");
+        }
+        if !seen.insert(system) {
+            bail!("System \"{system}\" is listed twice.");
+        }
+    }
+    if !["manual", "discovered"].contains(&p.source.as_str()) {
+        bail!("Emulator source must be \"manual\" or \"discovered\".");
+    }
+    if let Some(id) = &p.detected_as {
+        if crate::catalog::known_emulator(id).is_none() {
+            bail!("Unknown emulator \"{id}\".");
+        }
+    }
+    // Output-only fields are recomputed when profiles are listed.
+    p.available = true;
+    p.needs_configuration = false;
     Ok(p)
 }
 
@@ -701,8 +746,23 @@ mod tests {
         ] {
             assert!(settings_patch(&bad).is_err(), "{bad} should be rejected");
         }
-        let ok = emulator(&json!({ "id": "dolphin", "name": "Dolphin", "executable": "Dolphin.exe", "args": "--exec {rom}", "romFolders": ["D:/Roms"], "extensions": [".iso"] })).unwrap();
+        let ok = emulator(&json!({ "id": "dolphin", "name": "Dolphin", "executable": r"C:\Emu\Dolphin.exe", "args": "--exec {rom}", "romFolders": ["D:/Roms"], "extensions": [".iso"] })).unwrap();
         assert_eq!(ok.extensions[0], ".iso");
+        for bad in [
+            "Dolphin.exe",
+            r"C:\Emu\run.bat",
+            r"\\server\share\emu.exe",
+            r"C:\Emu\",
+            "/usr/bin/emu.exe",
+        ] {
+            let profile = json!({ "id": "x", "name": "X", "executable": bad, "args": "", "romFolders": [], "extensions": [] });
+            assert!(emulator(&profile).is_err(), "{bad}");
+            assert!(
+                backup(&json!({ "games": [], "emulators": [profile] })).is_err(),
+                "{bad}"
+            );
+        }
+        assert!(emulator(&json!({ "id": "x", "name": "X", "executable": "d:/emu/X.EXE", "args": "", "romFolders": [], "extensions": [] })).is_ok());
         assert!(emulator(&json!({ "id": "bad", "name": "Bad", "executable": "", "args": "", "romFolders": [], "extensions": ["iso"] })).is_err());
         let manifest = json!({ "id": "sample-library", "name": "Sample", "version": "1.2.3", "kind": "library", "store": "Custom" });
         assert_eq!(plugin_manifest(&manifest).unwrap().name, "Sample");

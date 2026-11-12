@@ -32,6 +32,7 @@ export default function App() {
   const [linkQuery, setLinkQuery] = useState('')
   const [menu, setMenu] = useState<{ x: number; y: number; game: Game } | null>(null)
   const [scanBusy, setScanBusy] = useState(false)
+  const [localBusy, setLocalBusy] = useState(false)
   const [toast, setToast] = useState('')
   const [adding, setAdding] = useState(false)
   const [editingGame, setEditingGame] = useState<Game | null>(null)
@@ -185,6 +186,21 @@ export default function App() {
       notice(error instanceof Error ? error.message : 'Library scan failed')
     } finally {
       setScanBusy(false)
+    }
+  }
+  const addLocalGame = async () => {
+    setLocalBusy(true)
+    try {
+      const result = await window.lobby.library.addLocalGame()
+      if (!result) return
+      setGames(result.games)
+      const added = result.games.find(game => game.id === result.gameId)
+      if (added) openGame(added)
+      notice(added ? 'Added ' + added.title : 'Game added')
+    } catch (error) {
+      notice(error instanceof Error ? error.message : 'Could not add the game')
+    } finally {
+      setLocalBusy(false)
     }
   }
   const addGame = async (event: FormEvent<HTMLFormElement>) => {
@@ -348,7 +364,8 @@ export default function App() {
     toggleHidden: game => void menuAction(game.hidden ? 'Unhide' : 'Hide', game),
     toggleFavorite: game => void window.lobby.library.save({ ...game, favorite: !game.favorite }).then(setGames).catch(error => notice(error instanceof Error ? error.message : 'Could not update favorite')),
     openFolder: game => void window.lobby.library.chooseInstallFolder(game.id).catch(error => notice(error instanceof Error ? error.message : 'Could not open install folder')),
-    remove: game => void menuAction('Remove', game)
+    remove: game => void menuAction('Remove', game),
+    setEmulator: async (game, routeIndex, emulatorId) => { setGames(await window.lobby.library.setEmulator(game.id, routeIndex, emulatorId)) }
   }
 
   return <div className="app-shell">
@@ -385,6 +402,7 @@ export default function App() {
         <div className="toolbar-actions">
           <label className="searchbox"><Search size={16} /><input ref={searchRef} value={query} onChange={event => setQuery(event.target.value)} placeholder="Search your library" /><kbd>Ctrl K</kbd></label>
           <button className="icon-button" title="Scan libraries" onClick={() => void scan()} disabled={scanBusy}><CloudDownload size={17} className={scanBusy ? 'spin' : ''} /></button>
+          <button className="secondary-button" onClick={() => void addLocalGame()} disabled={localBusy} title="Pick a PC game (.exe, .lnk, .url) or a ROM file"><Plus size={16} /> Add local game</button>
           <button className="primary-button" onClick={() => setAdding(true)}><Plus size={16} /> Add game</button>
         </div>
       </div>

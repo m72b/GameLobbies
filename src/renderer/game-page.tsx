@@ -6,7 +6,7 @@ import { coverUrl } from './lobby-api'
 import { defaultGamePageCustom } from '../shared/defaults'
 import { coverImage, coverStyle } from './cover'
 import { elapsedSeconds, formatClock, formatDate, formatSession, formatTime, formatTotal, useNow } from './format'
-import type { Game, GamePageArt, PlaySession, PlayStats, RunningGame, Settings } from '../shared/types'
+import type { EmulatorCatalog, EmulatorProfile, Game, GamePageArt, PlaySession, PlayStats, RunningGame, Settings } from '../shared/types'
 
 export interface GamePageActions {
   back(): void
@@ -19,6 +19,7 @@ export interface GamePageActions {
   toggleFavorite(game: Game): void
   openFolder(game: Game): void
   remove(game: Game): void
+  setEmulator(game: Game, routeIndex: number, emulatorId: string | null): Promise<void>
 }
 
 const emptyArt: GamePageArt = { hero: [], logo: [], custom: defaultGamePageCustom }
@@ -31,6 +32,9 @@ export function GamePage({ game, index, settings, running, libraryVersion, actio
   const [stats, setStats] = useState<PlayStats | null>(null)
   const [routeIdx, setRouteIdx] = useState(0)
   const [menuOpen, setMenuOpen] = useState(false)
+  const [emulators, setEmulators] = useState<EmulatorProfile[]>([])
+  const [catalog, setCatalog] = useState<EmulatorCatalog | null>(null)
+  const [emuError, setEmuError] = useState('')
   const [customizing, setCustomizing] = useState(false)
   const { layout, change: changeLayout, flush: flushLayout } = useLogoLayout(game.id, art.custom)
   const now = useNow(!!running || sessions.some(session => !session.endedAt))
@@ -46,6 +50,19 @@ export function GamePage({ game, index, settings, running, libraryVersion, actio
     const off = window.lobby.art.onChanged(event => { if (event.gameId === game.id) { setHeroIdx(0); setLogoIdx(0); void load() } })
     return () => { live = false; off() }
   }, [game.id])
+  const hasEmulatorRoute = game.routes.some(item => item.store === 'Emulator' || item.system)
+  useEffect(() => {
+    if (!hasEmulatorRoute) return
+    let live = true
+    window.lobby.emulators.list().then(next => { if (live) setEmulators(next) }).catch(() => {})
+    if (!catalog) window.lobby.emulators.catalog().then(next => { if (live) setCatalog(next) }).catch(() => {})
+    return () => { live = false }
+  }, [game.id, hasEmulatorRoute, libraryVersion]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setEmuError('') }, [game.id])
+  const changeEmulator = (index: number, value: string) => {
+    setEmuError('')
+    actions.setEmulator(game, index, value === '' ? null : value).catch(error => setEmuError(error instanceof Error ? error.message : 'Could not change the emulator'))
+  }
   const closeCustomize = useCallback(() => { flushLayout(); setCustomizing(false) }, [flushLayout])
 
   const runKey = running ? running.state + ':' + running.startedAt : 'idle'
@@ -168,6 +185,25 @@ export function GamePage({ game, index, settings, running, libraryVersion, actio
             <span className="store-badge small"><StoreIcon store={item.store} /></span>
             <span className="route-name">{item.store}<small>{item.installed ? 'Installed' : item.owned ? 'Owned · not installed' : 'Launch route'}</small></span>
           </div>)}
+          {game.routes.map((item, i) => {
+            if (item.sourceId !== 'rom' && !item.system) return null
+            const systemName = item.system ? catalog?.systems.find(system => system.id === item.system)?.name ?? item.system : 'Unknown system'
+            const candidates = emulators.filter(profile => profile.enabled !== false && !!item.system && (profile.systems ?? []).includes(item.system))
+            const assigned = item.emulatorId ? emulators.find(profile => profile.id === item.emulatorId) : undefined
+            const options = assigned && !candidates.some(profile => profile.id === assigned.id) ? [...candidates, assigned] : candidates
+            return <div className="gp-emulator" key={'emu-' + item.sourceId + '-' + i}>
+              <label>
+                <span className="detail-label">EMULATOR · {systemName.toUpperCase()}</span>
+                <select aria-label={'Emulator for ' + systemName} value={assigned ? assigned.id : ''} onChange={event => changeEmulator(i, event.target.value)}>
+                  <option value="">Default (automatic)</option>
+                  {options.map(profile => <option key={profile.id} value={profile.id}>{profile.name}{profile.enabled === false ? ' (disabled)' : profile.available === false ? ' (not found)' : profile.needsConfiguration ? ' (needs setup)' : ''}</option>)}
+                </select>
+              </label>
+              {!item.system && <div className="inline-warning">System unknown. Choose an emulator to play this ROM.</div>}
+              {item.system && candidates.length === 0 && <div className="inline-warning">No emulator is configured for {systemName}. Add an emulator folder or profile in Settings, then pick the system there.</div>}
+            </div>
+          })}
+          {emuError && <div className="form-error" role="alert">{emuError}</div>}
         </div>
         <div className="gp-side-block"><div className="detail-label">GENRE</div><div className="muted-text">{game.genre || 'Not set'}</div></div>
         <div className="gp-side-block"><div className="detail-label">INSTALL FOLDER</div>

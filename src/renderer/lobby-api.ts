@@ -2,7 +2,7 @@
 // Replaces the Electron preload script; the API shape is unchanged.
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
-import type { ArtChangedEvent, LobbyAPI, RunningGame, Settings, SteamGridDbFetchSummary } from '../shared/types'
+import type { ArtChangedEvent, LobbyAPI, LocalScanProgress, LocalScanSummary, RunningGame, Settings, SteamGridDbFetchSummary } from '../shared/types'
 
 async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   try {
@@ -49,7 +49,9 @@ const api: LobbyAPI = {
     saveConnections: input => call('library_save_connections', { input }),
     chooseLegendary: () => call('library_choose_legendary'),
     chooseGogDatabase: () => call('library_choose_gog_database'),
-    onChanged: callback => subscribe('library:changed', () => callback())
+    onChanged: callback => subscribe('library:changed', () => callback()),
+    setEmulator: (gameId, routeIndex, emulatorId) => call('library_set_emulator', { gameId, routeIndex, emulatorId }),
+    addLocalGame: () => call('library_add_local_game')
   },
   settings: {
     get: () => call('settings_get'),
@@ -64,7 +66,29 @@ const api: LobbyAPI = {
   emulators: {
     list: () => call('emulators_list'),
     save: profile => call('emulators_save', { profile }),
-    scan: () => call('emulators_scan')
+    remove: id => call('emulators_remove', { id }),
+    scan: () => call('emulators_scan'),
+    catalog: () => call('emulators_catalog'),
+    ignored: () => call('emulators_ignored'),
+    unignore: path => call('emulators_unignore', { path }),
+    browseExecutable: () => call('emulators_browse_executable')
+  },
+  roots: {
+    list: () => call('roots_list'),
+    add: (kind, path) => call('roots_add', { kind, path }),
+    browse: () => call('roots_browse'),
+    setEnabled: (id, enabled) => call('roots_set_enabled', { id, enabled }),
+    remove: id => call('roots_remove', { id }),
+    rescan: id => call('roots_rescan', { id: id ?? null }),
+    onProgress: callback => subscribe<LocalScanProgress>('library-scan:progress', callback),
+    onFinished: callback => subscribe<LocalScanSummary>('library-scan:finished', callback)
+  },
+  review: {
+    list: includeResolved => call('review_list', { includeResolved: includeResolved ?? false }),
+    resolve: (id, resolution) => call('review_resolve', { id, resolution }),
+    ignored: () => call('review_ignored'),
+    unignore: path => call('review_unignore', { path }),
+    onChanged: callback => subscribe('review:changed', () => callback())
   },
   backup: {
     export: () => call('backup_export'),

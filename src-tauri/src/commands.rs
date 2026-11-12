@@ -32,7 +32,11 @@ fn notify_settings(app: &AppHandle, settings: Settings) -> Settings {
     settings
 }
 
-async fn pick_file(window: &WebviewWindow, name: &str, extensions: &[&str]) -> Option<PathBuf> {
+pub(crate) async fn pick_file(
+    window: &WebviewWindow,
+    name: &str,
+    extensions: &[&str],
+) -> Option<PathBuf> {
     let (tx, rx) = tokio::sync::oneshot::channel();
     window
         .dialog()
@@ -419,34 +423,11 @@ pub async fn theme_reset(app: AppHandle, state: State<'_, AppState>) -> CmdResul
 // Emulators, plugins, backups
 
 #[tauri::command]
-pub async fn emulators_list(state: State<'_, AppState>) -> CmdResult<Vec<EmulatorProfile>> {
-    db::emulator_profiles(&state.db.lock()).map_err(err)
-}
-
-#[tauri::command]
-pub async fn emulators_save(
-    state: State<'_, AppState>,
-    profile: Value,
-) -> CmdResult<Vec<EmulatorProfile>> {
-    let profile = validation::emulator(&profile).map_err(err)?;
-    db::save_emulator(&state.db.lock(), &profile).map_err(err)
-}
-
-#[tauri::command]
-pub fn emulators_scan() -> LibraryStats {
-    LibraryStats {
-        total: 0,
-        scanned_at: Some(now_ms()),
-        ..Default::default()
-    }
-}
-
-#[tauri::command]
 pub async fn plugins_list(state: State<'_, AppState>) -> CmdResult<Vec<Value>> {
     db::plugins(&state.db.lock()).map_err(err)
 }
 
-fn read_limited_json(path: &Path, max: u64, what: &str) -> anyhow::Result<Value> {
+pub(crate) fn read_limited_json(path: &Path, max: u64, what: &str) -> anyhow::Result<Value> {
     if std::fs::metadata(path)?.len() > max {
         anyhow::bail!("{what} is too large.");
     }

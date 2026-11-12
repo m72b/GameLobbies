@@ -14,6 +14,8 @@ pub struct AppState {
     /// Held while a SteamGridDB bulk cover fetch runs; a second run is refused.
     pub cover_fetch_lock: tokio::sync::Mutex<()>,
     pub scan_timer: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
+    /// Held while library roots (emulator/ROM/PC folders) are scanned.
+    pub local_scan_lock: tokio::sync::Mutex<()>,
 }
 
 impl AppState {

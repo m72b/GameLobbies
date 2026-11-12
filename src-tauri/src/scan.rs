@@ -6,6 +6,7 @@ use crate::platform::on_thread;
 use crate::secrets::{get_steam_api_key, has_steam_api_key};
 use crate::state::AppState;
 use crate::types::{now_ms, Game, LibraryStats};
+use crate::{local, roots};
 use anyhow::Result;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
@@ -47,7 +48,102 @@ async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T> + Send + 'sta
     tauri::async_runtime::spawn_blocking(f).await?
 }
 
+/// Store scans and library folder scans run side by side, so a large ROM folder doesn't hold
+/// up the store results (each applies its changes and emits `library:changed` as it ends).
 async fn perform(app: &AppHandle) -> Result<LibraryStats> {
+    let (stores, local) = tokio::join!(perform_stores(app), scan_local(app, LocalScope::All, true));
+    let mut stats = stores?;
+    match local {
+        Ok(summary) => {
+            if !summary.roots.is_empty() {
+                stats.total = db::game_count(&app.state::<AppState>().db.lock())?;
+                stats.local = Some(summary);
+            }
+        }
+        Err(e) => stats
+            .errors
+            .get_or_insert_with(Vec::new)
+            .push(format!("Library folders: {e}")),
+    }
+    Ok(stats)
+}
+
+/// Which library roots a folder scan covers.
+#[derive(Debug, Clone)]
+pub enum LocalScope {
+    /// Every enabled root.
+    All,
+    /// Every enabled root of one kind (`emulators` / `games`).
+    Kind(&'static str),
+    /// One root (must be enabled).
+    Root(String),
+}
+
+/// Minimum time between two `library-scan:progress` events of the same phase.
+const PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
+
+/// Scans library roots, emitting `library-scan:progress` (at most ~10 per second, plus every
+/// phase change) and `library-scan:finished` with the summary. With `wait` false a scan
+/// that is already running is an error instead of being waited for.
+pub async fn scan_local(
+    app: &AppHandle,
+    scope: LocalScope,
+    wait: bool,
+) -> Result<local::ScanSummary, String> {
+    let state = app.state::<AppState>();
+    let _guard = if wait {
+        state.local_scan_lock.lock().await
+    } else {
+        state
+            .local_scan_lock
+            .try_lock()
+            .map_err(|_| "A library folder scan is already running.".to_string())?
+    };
+    let roots = roots::list(&state.db.lock()).map_err(|e| format!("{e:#}"))?;
+    let selected: Vec<roots::LibraryRoot> = match &scope {
+        LocalScope::All => roots,
+        LocalScope::Kind(kind) => roots.into_iter().filter(|r| r.kind == *kind).collect(),
+        LocalScope::Root(id) => {
+            let root = roots
+                .into_iter()
+                .find(|r| r.id == *id)
+                .ok_or("That library folder no longer exists.")?;
+            if !root.enabled {
+                return Err("That library folder is turned off. Turn it on to scan it.".into());
+            }
+            vec![root]
+        }
+    };
+    if !selected.iter().any(|r| r.enabled) {
+        return Ok(local::ScanSummary::default());
+    }
+    let worker = app.clone();
+    let summary = tauri::async_runtime::spawn_blocking(move || {
+        let state = worker.state::<AppState>();
+        let mut last: Option<(&'static str, std::time::Instant)> = None;
+        local::scan_roots(&state.db, &selected, &mut |progress| {
+            let now = std::time::Instant::now();
+            let due = match last {
+                Some((phase, at)) => phase != progress.phase || now - at >= PROGRESS_INTERVAL,
+                None => true,
+            };
+            if due {
+                last = Some((progress.phase, now));
+                let _ = worker.emit("library-scan:progress", &progress);
+            }
+        })
+    })
+    .await
+    .map_err(|e| format!("{e}"))?
+    .map_err(|e| format!("{e:#}"))?;
+    state.tracker.library_changed();
+    let _ = app.emit("library:changed", ());
+    let _ = app.emit("review:changed", ());
+    let _ = app.emit("library-scan:finished", &summary);
+    Ok(summary)
+}
+
+async fn perform_stores(app: &AppHandle) -> Result<LibraryStats> {
     let state = app.state::<AppState>();
     let connections = db::get_connection_values(&state.db.lock())?;
     let mut c = Collected {
@@ -156,6 +252,7 @@ async fn perform(app: &AppHandle) -> Result<LibraryStats> {
         imported: Some(imported),
         errors: Some(errors),
         scanned_at: Some(now_ms()),
+        local: None,
     })
 }
 
