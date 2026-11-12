@@ -31,6 +31,10 @@ Modules added for emulators and ROM folders:
 
 `launch.rs` now builds emulator argv without a shell.
 
+### Updates
+
+`updater.rs` provides signed self-updates through `tauri-plugin-updater`. The webviews have no updater or process permissions. The renderer calls the app's own `updates_*` commands, which check the manifest in the public m72b/GameLobby-releases repository and keep the update they found. They download that update and verify its minisign signature, which must also be bound to the announced version. They then end tracked play sessions and back up `library.sqlite` with SQLite's online backup API to `library.sqlite.before-update-<version>.bak`. Finally they start the NSIS installer in passive mode, which closes the app and restarts it. Releases are built and published by `.github/workflows/release.yml`; see "Releases and updates" in the README.
+
 ---
 
 

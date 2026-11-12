@@ -243,6 +243,10 @@ pub struct Settings {
     /// Limits are enforced by `validation::settings_patch`.
     #[serde(default)]
     pub tracking_excluded_game_ids: Vec<String>,
+    /// Check for a new Game Lobby release shortly after startup, at most once a day. Updates are
+    /// never installed without the user's click. Stored settings without it default to on.
+    #[serde(default = "default_true")]
+    pub auto_check_updates: bool,
 }
 
 /// Grid styles accepted by the SteamGridDB API (`styles=` on `/grids`).
@@ -272,6 +276,7 @@ impl Default for Settings {
             steam_grid_db_humor: false,
             detect_external_launches: true,
             tracking_excluded_game_ids: Vec::new(),
+            auto_check_updates: true,
         }
     }
 }

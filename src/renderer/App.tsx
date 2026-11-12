@@ -3,7 +3,7 @@ import Fuse from 'fuse.js'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { Boxes, Clock3, CloudDownload, EyeOff, Gamepad2, Heart, Library, ListFilter, MoreHorizontal, Pencil, Play, Plus, Search, Settings2, Star, X } from 'lucide-react'
 import { StoreIcon } from './store-icons'
-import type { Game, RunningGame, Settings, Store as StoreName, SteamGridDbCover } from '../shared/types'
+import type { Game, RunningGame, Settings, Store as StoreName, SteamGridDbCover, UpdateInfo } from '../shared/types'
 import { defaultSettings } from '../shared/defaults'
 import { applyTheme } from './theme'
 import { coverStyle } from './cover'
@@ -34,6 +34,7 @@ export default function App() {
   const [scanBusy, setScanBusy] = useState(false)
   const [localBusy, setLocalBusy] = useState(false)
   const [toast, setToast] = useState('')
+  const [updateNotice, setUpdateNotice] = useState<UpdateInfo | null>(null)
   const [adding, setAdding] = useState(false)
   const [editingGame, setEditingGame] = useState<Game | null>(null)
   const [editTitle, setEditTitle] = useState('')
@@ -275,6 +276,13 @@ export default function App() {
   }, [openId, menu, adding, editingGame, sgdbGame, linkingGame])
 
   useEffect(() => { applyTheme(settings.theme, settings) }, [settings])
+  useEffect(() => {
+    // Startup update check (the backend skips it when turned off or done in the last 24 h).
+    const timer = window.setTimeout(() => {
+      void window.lobby.updates.autoCheck().then(info => { if (info?.available) setUpdateNotice(info) }).catch(() => undefined)
+    }, 10_000)
+    return () => window.clearTimeout(timer)
+  }, [])
   const openGameData = openId ? games.find(game => game.id === openId) : undefined
   const pageOpen = !!openGameData
   const wasPageOpen = useRef(false)
@@ -487,6 +495,12 @@ export default function App() {
     </div></div>}
     {editMode && <div className="edit-banner">Edit mode is on · select a title to edit its metadata <button onClick={() => setEditMode(false)}>Done</button></div>}
     {toast && <div className="toast">{toast}</div>}
+    {updateNotice && <div className="update-notice" role="status">
+      <CloudDownload size={16} />
+      <span>Game Lobby {updateNotice.version} is available</span>
+      <button type="button" className="primary-button" onClick={() => { setUpdateNotice(null); void window.lobby.settings.open('updates') }}>View update</button>
+      <button type="button" className="update-notice-close" title="Dismiss" aria-label="Dismiss update notice" onClick={() => setUpdateNotice(null)}><X size={14} /></button>
+    </div>}
   </div>
 }
 

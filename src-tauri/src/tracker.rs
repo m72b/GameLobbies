@@ -1107,6 +1107,28 @@ async fn poll(app: &AppHandle, last_emit: &mut i64) {
     }
 }
 
+/// Ends every tracked play session now, keeping the time saved up to the last poll, as when
+/// tracking is turned off. Called before an update installer closes the app so no session is
+/// left open. Games still running are picked up again as new sessions by the next poll.
+pub fn end_all_sessions(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let (tick, snapshot) = {
+        let mut sessions = state.tracker.sessions();
+        let mut tick = sessions.stop_all();
+        let effects = std::mem::take(&mut tick.effects);
+        if !effects.is_empty() {
+            apply(&state.db.lock(), &mut sessions, effects);
+        }
+        (tick, sessions.snapshot(now_ms()))
+    };
+    if tick.library_changed {
+        let _ = app.emit("library:changed", ());
+    }
+    if tick.running_changed {
+        let _ = app.emit("tracking:changed", &snapshot);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

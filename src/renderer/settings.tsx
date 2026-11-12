@@ -1,14 +1,14 @@
 import './lobby-api'
 import { useEffect, useState } from 'react'
 import { ArrowLeft, Blocks, ChevronRight, CircleHelp, Cloud, FolderSearch, Gamepad2, Image, ImagePlus, Keyboard, Library, ListChecks, Palette, Puzzle, RotateCcw, Settings2, SlidersHorizontal, Sparkles, Star } from 'lucide-react'
-import type { LibraryConnections, Settings, SteamGridDbStyle } from '../shared/types'
+import type { LibraryConnections, Settings, SettingsSection, SteamGridDbStyle } from '../shared/types'
 import { steamGridDbStyles } from '../shared/types'
 import { defaultSettings } from '../shared/defaults'
-import packageInfo from '../../package.json'
 import { applyTheme } from './theme'
 import { StoreIcon } from './store-icons'
 import { EmulatorsSection, LibraryFoldersSection, useLocalScan } from './library-settings'
 import { ReviewSection } from './review-panel'
+import { UpdatesSection } from './updates-section'
 import { createRoot } from 'react-dom/client'
 import './styles.css'
 
@@ -27,15 +27,20 @@ const sections = [
   ['Backup and Sync', 'Export or restore your local library.', Cloud],
   ['Keyboard Shortcuts', 'Browse available keyboard controls.', Keyboard],
   ['Plugins / Add-ons', 'Install declarative community library plugins.', Puzzle],
-  ['About and Updates', 'Version and project information.', CircleHelp]
+  ['About and Updates', 'Version, project information and updates.', CircleHelp]
 ] as const
 
 const sgdbStyleLabels: Record<SteamGridDbStyle, string> = { alternate: 'Alternate', blurred: 'Blurred', white_logo: 'White logo', material: 'Material', no_logo: 'No logo' }
 
 type Section = typeof sections[number][0]
 
+/** Sections other windows can open with `settings.open(id)` (`settings.html?section=<id>`). */
+const sectionIds: Record<SettingsSection, Section> = { updates: 'About and Updates' }
+const sectionFor = (id: string | null): Section | undefined => id !== null && Object.prototype.hasOwnProperty.call(sectionIds, id) ? sectionIds[id as SettingsSection] : undefined
+const initialSection = (): Section => sectionFor(new URLSearchParams(window.location.search).get('section')) ?? 'Libraries'
+
 export function SettingsApp() {
-  const [section, setSection] = useState<Section>('Libraries')
+  const [section, setSection] = useState<Section>(initialSection)
   const [settings, setSettings] = useState<Settings>(defaultSettings)
   const [plugins, setPlugins] = useState<any[]>([])
   const localScan = useLocalScan()
@@ -54,13 +59,14 @@ export function SettingsApp() {
 
   useEffect(() => {
     const offSettings = window.lobby.settings.onChanged(setSettings)
+    const offSection = window.lobby.settings.onSection(id => { const next = sectionFor(id); if (next) setSection(next) })
     void Promise.all([
       window.lobby.settings.get().then(setSettings),
       window.lobby.plugins.list().then(setPlugins),
       window.lobby.library.connections().then(setConnections),
       window.lobby.steamGridDb.status().then(result => setSgdbKeySet(result.keySet)).catch(() => undefined)
     ])
-    return offSettings
+    return () => { offSettings(); offSection() }
   }, [])
   useEffect(() => { applyTheme(settings.theme, settings) }, [settings])
 
@@ -283,12 +289,7 @@ export function SettingsApp() {
           <a className="external-link" href="https://playnite.link/addons.html">Browse the Playnite add-on catalog</a>
         </div>}
 
-        {section === 'About and Updates' && <div className="settings-card">
-          <div className="about-mark"><Gamepad2 /></div><h2>Game Lobby</h2>
-          <p>Version {packageInfo.version} · Local-first library manager</p>
-          <p>Built with Tauri, Rust, React, TypeScript and SQLite.</p>
-          <button className="secondary-button coming-soon-control" disabled>Check for updates · Coming soon</button>
-        </div>}
+        {section === 'About and Updates' && <UpdatesSection autoCheck={settings.autoCheckUpdates} onAutoCheckChange={enabled => void save({ autoCheckUpdates: enabled })} />}
         {message && <div className="settings-toast">{message}</div>}
       </main>
     </div>

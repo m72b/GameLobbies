@@ -51,7 +51,10 @@ async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T> + Send + 'sta
 /// Store scans and library folder scans run side by side, so a large ROM folder doesn't hold
 /// up the store results (each applies its changes and emits `library:changed` as it ends).
 async fn perform(app: &AppHandle) -> Result<LibraryStats> {
-    let (stores, local) = tokio::join!(perform_stores(app), scan_local(app, LocalScope::All, true));
+    let (stores, local) = tokio::join!(
+        perform_stores(app),
+        scan_local(app, LocalScope::All, true, false)
+    );
     let mut stats = stores?;
     match local {
         Ok(summary) => {
@@ -84,11 +87,13 @@ const PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
 
 /// Scans library roots, emitting `library-scan:progress` (at most ~10 per second, plus every
 /// phase change) and `library-scan:finished` with the summary. With `wait` false a scan
-/// that is already running is an error instead of being waited for.
+/// that is already running is an error instead of being waited for. `full` uses the much
+/// higher "scan everything" limits (`localscan::ScanLimits`).
 pub async fn scan_local(
     app: &AppHandle,
     scope: LocalScope,
     wait: bool,
+    full: bool,
 ) -> Result<local::ScanSummary, String> {
     let state = app.state::<AppState>();
     let _guard = if wait {
@@ -121,7 +126,7 @@ pub async fn scan_local(
     let summary = tauri::async_runtime::spawn_blocking(move || {
         let state = worker.state::<AppState>();
         let mut last: Option<(&'static str, std::time::Instant)> = None;
-        local::scan_roots(&state.db, &selected, &mut |progress| {
+        local::scan_roots(&state.db, &selected, full, &mut |progress| {
             let now = std::time::Instant::now();
             let due = match last {
                 Some((phase, at)) => phase != progress.phase || now - at >= PROGRESS_INTERVAL,

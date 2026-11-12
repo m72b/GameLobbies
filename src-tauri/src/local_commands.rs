@@ -137,14 +137,19 @@ pub async fn roots_remove(
     list_roots(&state)
 }
 
-/// Scans one root (`id`) or every enabled root (`null`). Rejects while a folder scan runs.
+/// Scans one root (`id`) or every enabled root (`null`); `full` raises the limits for very
+/// large folders. Rejects while a folder scan runs.
 #[tauri::command]
-pub async fn roots_rescan(app: AppHandle, id: Option<String>) -> CmdResult<local::ScanSummary> {
+pub async fn roots_rescan(
+    app: AppHandle,
+    id: Option<String>,
+    full: Option<bool>,
+) -> CmdResult<local::ScanSummary> {
     let scope = match id {
         Some(id) => LocalScope::Root(id_arg(&id, "Library folder")?),
         None => LocalScope::All,
     };
-    scan::scan_local(&app, scope, false).await
+    scan::scan_local(&app, scope, false, full.unwrap_or(false)).await
 }
 
 // ---------------------------------------------------------------------------
@@ -215,7 +220,7 @@ pub async fn emulators_remove(
 /// Scans every enabled emulator root for known emulators.
 #[tauri::command]
 pub async fn emulators_scan(app: AppHandle) -> CmdResult<local::ScanSummary> {
-    scan::scan_local(&app, LocalScope::Kind("emulators"), false).await
+    scan::scan_local(&app, LocalScope::Kind("emulators"), false, false).await
 }
 
 #[derive(Serialize)]

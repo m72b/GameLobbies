@@ -23,24 +23,37 @@ export function useLocalScan() {
 }
 export type LocalScan = ReturnType<typeof useLocalScan>
 
+/** A quick scan that stopped at its cap: explain it and offer a full scan. Not an error. */
+function FullScanNotice({ notice, busy, onFullScan, onNotNow }: { notice: string; busy: boolean; onFullScan(): void; onNotNow(): void }) {
+  return <div className="inline-warning inline-notice" role="status">
+    <p>{notice}</p>
+    <div className="settings-actions tight">
+      <button type="button" className="primary-button" disabled={busy} onClick={onFullScan}>Scan everything (may take a while)</button>
+      <button type="button" className="secondary-button" onClick={onNotNow}>Not now</button>
+    </div>
+  </div>
+}
+
 const phaseLabels: Record<LocalScanProgress['phase'], string> = { emulators: 'Looking for emulators', games: 'Scanning game folders', library: 'Saving library and checking duplicates', done: 'Finishing' }
 
-function ScanSummary({ summary, onClose, onOpenReview }: { summary: LocalScanSummary; onClose(): void; onOpenReview(): void }) {
-  const problemRoots = summary.roots.filter(root => !root.ok || root.unreadable > 0 || root.truncated)
+function ScanSummary({ summary, busy, notNow, onClose, onOpenReview, onFullScan, onNotNow }: { summary: LocalScanSummary; busy: boolean; notNow: Set<string>; onClose(): void; onOpenReview(): void; onFullScan(id: string): void; onNotNow(id: string): void }) {
+  const problemRoots = summary.roots.filter(root => !root.ok || root.unreadable > 0 || !!root.warning)
+  const noticeRoots = summary.roots.filter(root => root.ok && root.notice && !notNow.has(root.id))
   return <div className="scan-summary" role="status">
     <div className="card-heading"><h3>Last scan · {formatDuration(summary.durationMs)}</h3><button type="button" className="secondary-button" onClick={onClose}>Dismiss</button></div>
     <div className="scan-counts">
       <div><span>Emulators</span><b>{summary.emulators.added} added · {summary.emulators.updated} updated · {summary.emulators.unavailable} unavailable</b></div>
-      <div><span>Games</span><b>{summary.games.added} added · {summary.games.updated} updated · {summary.games.removedOrUninstalled} removed or uninstalled · {summary.games.skipped} skipped · {summary.games.failed} failed</b></div>
+      <div><span>Games</span><b>{summary.games.added} added · {summary.games.updated} updated · {summary.games.removedOrUninstalled} removed or uninstalled · {summary.games.skipped} skipped · {summary.games.failed} failed{summary.games.removalsHeld > 0 ? ' · ' + summary.games.removalsHeld + ' removals held back' : ''}</b></div>
       <div><span>Review</span><b>{summary.review === 0 ? 'Nothing to review' : summary.review + ' item' + (summary.review === 1 ? '' : 's') + ' need a decision'}</b>{summary.review > 0 && <button type="button" className="link-button" onClick={onOpenReview}>Open review</button>}</div>
     </div>
-    {problemRoots.map(root => <div className="inline-warning" key={root.id}>{root.path}: {!root.ok ? (root.error || 'could not be read') : [root.unreadable > 0 ? root.unreadable + ' unreadable folder' + (root.unreadable === 1 ? '' : 's') : '', root.truncated ? 'too many entries, scan was cut short' : ''].filter(Boolean).join(' · ')}</div>)}
+    {problemRoots.map(root => <div className="inline-warning" key={root.id}>{root.path}: {!root.ok ? (root.error || 'could not be read') : [root.unreadable > 0 ? root.unreadable + ' unreadable folder' + (root.unreadable === 1 ? '' : 's') : '', root.warning ?? ''].filter(Boolean).join(' · ')}</div>)}
+    {noticeRoots.map(root => <FullScanNotice key={'notice-' + root.id} notice={root.notice ?? ''} busy={busy} onFullScan={() => onFullScan(root.id)} onNotNow={() => onNotNow(root.id)} />)}
     {summary.unsupportedSamples.length > 0 && <details className="collapsible"><summary>Skipped or unsupported ({summary.unsupportedSamples.length}{summary.games.skipped > summary.unsupportedSamples.length ? ' shown' : ''})</summary>
       <ul className="path-list">{summary.unsupportedSamples.map((item, index) => <li key={index} title={item}>{item}</li>)}</ul></details>}
   </div>
 }
 
-function RootList({ title, kind, hint, roots, scanBusy, activeId, onChange, onRescan, onError }: { title: string; kind: LibraryRootKind; hint: string; roots: LibraryRoot[]; scanBusy: boolean; activeId: string | null; onChange(next: LibraryRoot[]): void; onRescan(id: string): void; onError(text: string): void }) {
+function RootList({ title, kind, hint, roots, scanBusy, activeId, notNow, onChange, onRescan, onFullScan, onNotNow, onError }: { title: string; kind: LibraryRootKind; hint: string; roots: LibraryRoot[]; scanBusy: boolean; activeId: string | null; notNow: Set<string>; onChange(next: LibraryRoot[]): void; onRescan(id: string): void; onFullScan(id: string): void; onNotNow(id: string): void; onError(text: string): void }) {
   const [path, setPath] = useState('')
   const [error, setError] = useState('')
   const [adding, setAdding] = useState(false)
@@ -82,9 +95,11 @@ function RootList({ title, kind, hint, roots, scanBusy, activeId, onChange, onRe
             {!root.enabled && <span className="status-pill">Disabled</span>}
             <span>{formatWhen(root.lastScanAt)}</span>
             {result && (result.ok
-              ? <span>{counts}{result.unreadable > 0 ? ' · ' + result.unreadable + ' unreadable folder' + (result.unreadable === 1 ? '' : 's') : ''}{result.truncated ? ' · cut short (too many entries)' : ''}</span>
+              ? <span>{counts}{result.unreadable > 0 ? ' · ' + result.unreadable + ' unreadable folder' + (result.unreadable === 1 ? '' : 's') : ''}{result.full ? ' · full scan' : ''}</span>
               : <span className="text-warn">Failed: {result.error || 'could not be read'}</span>)}
           </div>
+          {result?.ok && result.warning && <div className="inline-warning">{result.warning}</div>}
+          {result?.ok && result.notice && !notNow.has(root.id) && root.enabled && <FullScanNotice notice={result.notice} busy={scanBusy} onFullScan={() => onFullScan(root.id)} onNotNow={() => onNotNow(root.id)} />}
         </div>
         <label className="root-toggle"><input type="checkbox" checked={root.enabled} onChange={event => void run(() => window.lobby.roots.setEnabled(root.id, event.target.checked))} aria-label={'Enable ' + root.path} /> Enabled</label>
         <button type="button" className="secondary-button" disabled={!root.enabled || scanBusy} onClick={() => onRescan(root.id)}>{activeId === root.id ? 'Scanning…' : 'Rescan'}</button>
@@ -101,13 +116,17 @@ export function LibraryFoldersSection({ scan, onOpenReview, say }: { scan: Local
   const [loadError, setLoadError] = useState('')
   const [scanError, setScanError] = useState('')
   const [activeId, setActiveId] = useState<string | null>(null)
+  // Roots whose "scan everything" offer was answered with "Not now" (until their next scan).
+  const [notNow, setNotNow] = useState<Set<string>>(() => new Set())
+  const hideNotice = (id: string) => setNotNow(current => new Set(current).add(id))
   const reload = useCallback(() => window.lobby.roots.list().then(next => { setRoots(next); setLoadError('') }).catch(caught => setLoadError(errorText(caught, 'Could not load library folders'))), [])
   useEffect(() => { void reload() }, [reload])
   const wasRunning = useRef(false)
   useEffect(() => { if (wasRunning.current && !scan.running) void reload(); wasRunning.current = scan.running }, [scan.running, reload])
-  const rescan = async (id?: string) => {
+  const rescan = async (id?: string, full = false) => {
     setScanError(''); setActiveId(id ?? 'all')
-    try { scan.setSummary(await window.lobby.roots.rescan(id)); await reload() }
+    setNotNow(current => { const next = new Set(current); if (id) next.delete(id); else next.clear(); return next })
+    try { scan.setSummary(await window.lobby.roots.rescan(id, { full })); await reload() }
     catch (caught) { setScanError(alreadyRunning(errorText(caught, 'Scan failed'))) }
     finally { setActiveId(null) }
   }
@@ -115,7 +134,7 @@ export function LibraryFoldersSection({ scan, onOpenReview, say }: { scan: Local
   const { progress } = scan
   return <>
     <div className="settings-card">
-      <div className="card-heading"><div><h3>Library folders</h3><p>Game folders contain one subfolder per system, named like “PS3”, “Sony 3”, “Switch” or “PC”, at any depth. ROMs go inside those. Under “PC”, each game has its own subfolder. Emulator folders are searched for known emulators.</p></div>
+      <div className="card-heading"><div><h3>Library folders</h3><p>Game folders contain one subfolder per system, named like “PS3”, “Sony Playstation 3”, “Switch” or “PC Game”, at any depth (or are one themselves). ROMs go inside those. Under “PC”, each game has its own subfolder. Emulator folders are searched for known emulators.</p></div>
         <button type="button" className="primary-button" disabled={scanning || roots.length === 0} onClick={() => void rescan()}>{activeId === 'all' ? 'Scanning…' : 'Scan all'}</button></div>
       {loadError && <div className="form-error" role="alert">{loadError}</div>}
       {scanError && <div className="form-error" role="alert">{scanError}</div>}
@@ -125,10 +144,10 @@ export function LibraryFoldersSection({ scan, onOpenReview, say }: { scan: Local
         {progress?.root && progress.phase !== 'library' && <div className="scan-path" title={progress.root}>Root: {truncatePath(progress.root)}</div>}
         {progress?.current && <div className="scan-path" title={progress.current}>{truncatePath(progress.current)}</div>}
       </div>}
-      {scan.summary && !scanning && <ScanSummary summary={scan.summary} onClose={scan.dismiss} onOpenReview={onOpenReview} />}
+      {scan.summary && !scanning && <ScanSummary summary={scan.summary} busy={scanning} notNow={notNow} onClose={scan.dismiss} onOpenReview={onOpenReview} onFullScan={id => void rescan(id, true)} onNotNow={hideNotice} />}
     </div>
-    <RootList title="Game folders" kind="games" hint="Folders with your ROMs and PC games, organised by system." roots={roots} scanBusy={scanning} activeId={activeId} onChange={setRoots} onRescan={id => void rescan(id)} onError={say} />
-    <RootList title="Emulator folders" kind="emulators" hint="Folders searched (up to 4 levels deep) for emulator executables such as RetroArch, Dolphin or PCSX2." roots={roots} scanBusy={scanning} activeId={activeId} onChange={setRoots} onRescan={id => void rescan(id)} onError={say} />
+    <RootList title="Game folders" kind="games" hint="Folders with your ROMs and PC games, organised by system. You can also add a single system folder, such as “Sony Playstation 2” or “PC Game”." roots={roots} scanBusy={scanning} activeId={activeId} notNow={notNow} onChange={setRoots} onRescan={id => void rescan(id)} onFullScan={id => void rescan(id, true)} onNotNow={hideNotice} onError={say} />
+    <RootList title="Emulator folders" kind="emulators" hint="Folders searched (up to 5 levels deep) for emulator executables such as RetroArch, Dolphin or PCSX2. An emulator’s own data folders are skipped." roots={roots} scanBusy={scanning} activeId={activeId} notNow={notNow} onChange={setRoots} onRescan={id => void rescan(id)} onFullScan={id => void rescan(id, true)} onNotNow={hideNotice} onError={say} />
   </>
 }
 

@@ -26,6 +26,42 @@ npm test         # Rust unit tests
 npm run build    # release build + NSIS installer in src-tauri/target/release/bundle/nsis
 ```
 
+`npm run build` makes an unsigned installer and needs no signing key. Only the release workflow signs updates.
+
+## Releases and updates
+
+Game Lobby updates itself from the public repository [m72b/GameLobby-releases](https://github.com/m72b/GameLobby-releases). That repository holds only the signed installers and the update manifest (`latest.json`). The app reads `releases/latest/download/latest.json` from it, shows when a new version is available, and installs only after a click. It accepts an installer only when its minisign signature matches the public key in `src-tauri/tauri.conf.json` and is bound to the announced version.
+
+To cut a release:
+
+1. Bump `version` in `package.json` (the app and the installer take their version from it) and commit.
+2. Tag the commit with the same version and push the tag. An annotated tag's message becomes the release notes.
+   ```bash
+   git tag -a v0.4.0 -m "Release notes shown in the app"
+   git push origin v0.4.0
+   ```
+3. `.github/workflows/release.yml` checks that the tag matches `package.json`, builds with `--config src-tauri/tauri.release.conf.json` (which turns on `createUpdaterArtifacts`), writes `latest.json` and publishes both files as release `v0.4.0` in m72b/GameLobby-releases.
+
+The workflow needs these repository secrets:
+
+| Secret | Contents |
+| --- | --- |
+| `TAURI_SIGNING_PRIVATE_KEY` | The updater private key (from `tauri signer generate`) |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Its password |
+| `RELEASES_TOKEN` | A fine-grained personal access token with **Contents: read and write** on m72b/GameLobby-releases only. Not needed when releases are published to this repository itself. |
+
+### Publishing to a different repository
+
+The release repository is set in two places, plus a test that checks them:
+
+1. `RELEASE_REPO` at the top of `.github/workflows/release.yml`. If it names the repository the workflow runs in (for example m72b/GameLobby once it is public), the workflow publishes with the built-in `GITHUB_TOKEN` and `RELEASES_TOKEN` isn't needed.
+2. `plugins.updater.endpoints` in `src-tauri/tauri.conf.json`.
+3. The config test `updater_config_points_at_the_public_releases_repo` in `src-tauri/src/updater.rs`.
+
+Installed copies keep checking the old endpoint until they install a build that points to the new one. When you switch, publish the first release that uses the new endpoint to both repositories: to the old one, so existing installs find it, and to the new one. For example, run the workflow once with each `RELEASE_REPO`.
+
+Never commit the private key or its password, and don't store them in this repository. If the key is lost, installed copies can no longer be updated automatically. If it leaks, anyone holding it can sign an update those copies will accept.
+
 ## Library and emulator support
 
 ### Store libraries

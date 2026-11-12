@@ -1,31 +1,39 @@
-//! Filesystem side of library roots: a bounded directory walker and game discovery.
-//! Nothing here touches the database.
+//! Filesystem side of library roots: folder listing and game discovery (the emulator scan
+//! has its own walk in `emulators`). Nothing here touches the database.
 //!
-//! Walking rules (both emulator and game roots):
+//! Listing rules (both emulator and game roots):
 //! - symbolic links, junctions and other reparse points are never followed (nor reported as
 //!   games), so a scan can't leave its root;
-//! - hidden and system folders/files, names starting with `.`, `$RECYCLE.BIN` and
-//!   `System Volume Information` are skipped;
+//! - Hidden and System attributes are ignored: inside a library root they are common (copied
+//!   from discs, synced or archived folders) and say nothing about whether something is a
+//!   game. Only names starting with `.`, `$RECYCLE.BIN`, `System Volume Information`,
+//!   `desktop.ini` and `Thumbs.db` are skipped;
 //! - a folder that can't be listed completely (the folder itself, any entry, or an entry's
 //!   type or attributes failing to read) is recorded as unreadable, so nothing under it is
 //!   ever treated as gone; the walk carries on; only an unreadable root fails the scan;
-//! - depth and entry-count caps stop runaway scans; hitting the entry cap marks the result
-//!   `truncated` (the caller then never infers removals from it).
+//! - depth and entry-count caps ([`ScanLimits`]: a quick scan by default, a much larger full
+//!   scan on request) stop runaway scans; hitting the entry cap marks the result `truncated`
+//!   (the caller then never infers removals from it).
 //!
 //! Game discovery (see [`scan_games`]):
-//! - The system comes from the nearest folder (the root included) whose name is a catalog
-//!   alias (`Sony 3` → PS3). Files outside any system folder are skipped; first-level folders
-//!   without any recognised system are reported as unsupported.
+//! - The system comes from the nearest folder whose name is a catalog alias (`Sony 3` →
+//!   PS3). The root counts too: a root named `Sony Playstation` is scanned as that system
+//!   folder (ROM files directly in it, per-game subfolders and folder-format games). Files
+//!   outside any system folder are skipped; first-level folders without any recognised system
+//!   are reported as unsupported.
 //! - ROM systems: one game per supported file. Index formats win over the files they list:
 //!   `.m3u` over its discs, `.cue`/`.gdi` over their tracks, `.ccd`/`.mds` over same-named
 //!   `.img`/`.sub`/`.mdf`. Only references inside the index file's own folder count (no
 //!   absolute paths, drive letters or `..`). `(Disc N)` files without an `.m3u` become one
-//!   game that starts the lowest disc. Folder formats (PS3 `PS3_GAME/PARAM.SFO` or
-//!   `USRDIR/EBOOT.BIN`, PS4 `eboot.bin` + `sce_sys`, Wii U `code/*.rpx`, Xbox 360
-//!   `default.xex`) are one game each. Switch updates and DLC are skipped.
+//!   game that starts the lowest disc. Folder formats (PS3 `PS3_DISC.SFB`,
+//!   `PS3_GAME/PARAM.SFO` or `USRDIR/EBOOT.BIN`, PS4 `eboot.bin` + `sce_sys`, Wii U
+//!   `code/*.rpx`, Xbox 360 `default.xex`) are one game each. Switch updates and DLC are
+//!   skipped.
 //! - PC folders: each immediate subfolder is one game whose executable is picked with the
 //!   store importers' ranking (`registry::ranked_executables`); a stored user choice wins.
-//!   When the pick isn't clear the folder is reported as ambiguous instead of guessed.
+//!   When the pick isn't clear the folder is reported as ambiguous instead of guessed. A
+//!   folder name without any letter (`00356`) isn't a title: the executable's version
+//!   resource (ProductName, else FileDescription) or its file name is used instead.
 //! - Shortcuts ([`classify_shortcut`]), directly in the PC folder or the only launcher in a
 //!   game folder: a `.url` counts only when its link passes `launch::validate_launch_uri`,
 //!   and the link itself is stored (never the file). A `.lnk` is read with `IShellLinkW`:
@@ -39,35 +47,64 @@ use anyhow::{bail, Result};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 
-pub const GAME_MAX_DEPTH: usize = 8;
-pub const GAME_MAX_ENTRIES: usize = 250_000;
 /// Paths longer than this are skipped.
 pub const MAX_PATH_CHARS: usize = 4_096;
 /// Index files (`.m3u`, `.cue`, `.gdi`, `PARAM.SFO`) larger than this are not parsed.
 const MAX_INDEX_BYTES: u64 = 1024 * 1024;
 const MAX_SAMPLES: usize = 20;
-const MAX_UNREADABLE: usize = 200;
+pub const MAX_UNREADABLE: usize = 200;
 
-#[derive(Debug, Clone, Copy)]
-pub struct WalkLimits {
-    /// Folders deeper than this (the root is 0) are not listed.
+/// How far a scan may go. Folders deeper than `max_depth` below the root are not listed; after
+/// `max_entries` listed entries the scan stops and is `truncated`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScanLimits {
     pub max_depth: usize,
     pub max_entries: usize,
 }
 
-/// One directory entry passed to a walk visitor.
-#[derive(Debug)]
-pub struct Entry<'a> {
-    pub path: &'a Path,
-    pub name: String,
-    pub is_dir: bool,
+impl ScanLimits {
+    /// Game roots, normal scans.
+    pub const GAMES_QUICK: Self = Self {
+        max_depth: 8,
+        max_entries: 250_000,
+    };
+    /// Game roots, "scan everything".
+    pub const GAMES_FULL: Self = Self {
+        max_depth: 16,
+        max_entries: 3_000_000,
+    };
+    /// Emulator roots, normal scans.
+    pub const EMULATORS_QUICK: Self = Self {
+        max_depth: 5,
+        max_entries: 200_000,
+    };
+    /// Emulator roots, "scan everything".
+    pub const EMULATORS_FULL: Self = Self {
+        max_depth: 8,
+        max_entries: 3_000_000,
+    };
+
+    pub fn games(full: bool) -> Self {
+        if full {
+            Self::GAMES_FULL
+        } else {
+            Self::GAMES_QUICK
+        }
+    }
+
+    pub fn emulators(full: bool) -> Self {
+        if full {
+            Self::EMULATORS_FULL
+        } else {
+            Self::EMULATORS_QUICK
+        }
+    }
 }
 
-#[derive(Debug, Default)]
-pub struct WalkOutcome {
-    pub visited: usize,
-    pub unreadable: Vec<String>,
-    pub truncated: bool,
+impl Default for ScanLimits {
+    fn default() -> Self {
+        Self::GAMES_QUICK
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -87,12 +124,16 @@ pub struct Listing {
 
 fn skipped_name(name: &str) -> bool {
     let lower = name.to_lowercase();
-    name.starts_with('.') || lower == "$recycle.bin" || lower == "system volume information"
+    name.starts_with('.')
+        || lower == "$recycle.bin"
+        || lower == "system volume information"
+        || catalog::SKIPPED_FILE_NAMES.contains(&lower.as_str())
 }
 
-/// Lists a folder: no links/junctions/reparse points, no hidden or system entries; sorted
-/// by name (case-insensitive) for stable results. Errors only when the folder itself can't be
-/// opened; per-entry errors make the listing incomplete instead.
+/// Lists a folder: no links/junctions/reparse points and none of the skipped names (Hidden
+/// and System entries ARE listed, see the module docs); sorted by name (case-insensitive)
+/// for stable results. Errors only when the folder itself can't be opened; per-entry errors
+/// make the listing incomplete instead.
 pub fn list_dir(dir: &Path) -> std::io::Result<Listing> {
     let mut listing = Listing {
         items: Vec::new(),
@@ -113,11 +154,9 @@ pub fn list_dir(dir: &Path) -> std::io::Result<Listing> {
         #[cfg(windows)]
         {
             use std::os::windows::fs::MetadataExt;
-            const HIDDEN: u32 = 0x2;
-            const SYSTEM: u32 = 0x4;
             const REPARSE_POINT: u32 = 0x400;
             match entry.metadata() {
-                Ok(meta) if meta.file_attributes() & (HIDDEN | SYSTEM | REPARSE_POINT) == 0 => {}
+                Ok(meta) if meta.file_attributes() & REPARSE_POINT == 0 => {}
                 Ok(_) => continue,
                 Err(_) => {
                     listing.complete = false;
@@ -139,58 +178,30 @@ pub fn list_dir(dir: &Path) -> std::io::Result<Listing> {
     Ok(listing)
 }
 
-/// Depth-first walk under the rules in the module docs. `visit` returns whether to descend
-/// into a folder. `progress` gets the running entry count and the folder being read.
-pub fn walk(
-    root: &Path,
-    limits: &WalkLimits,
-    progress: &mut dyn FnMut(usize, &Path),
-    visit: &mut dyn FnMut(&Entry) -> bool,
-) -> Result<WalkOutcome> {
-    let mut outcome = WalkOutcome::default();
-    let listing = match list_dir(root) {
-        Ok(listing) => listing,
-        Err(e) => bail!("{} can't be read: {e}", root.display()),
-    };
-    let note_unreadable = |outcome: &mut WalkOutcome, path: &Path| {
-        if outcome.unreadable.len() < MAX_UNREADABLE {
-            outcome.unreadable.push(path.to_string_lossy().into_owned());
-        }
-    };
-    if !listing.complete {
-        note_unreadable(&mut outcome, root);
+/// A user-facing title for a PC game in a folder whose name has no letters (`00356`): the
+/// executable's version resource when it names a product, else its file name (`Cairn`).
+pub fn title_from_executable(exe: &Path) -> String {
+    if let Some(name) = crate::platform::exe_product_name(exe) {
+        return name;
     }
-    let mut stack: Vec<(Vec<Item>, usize)> = vec![(listing.items, 1)];
-    while let Some((items, depth)) = stack.pop() {
-        for item in items {
-            outcome.visited += 1;
-            if outcome.visited > limits.max_entries {
-                outcome.truncated = true;
-                return Ok(outcome);
-            }
-            if item.path.as_os_str().len() > MAX_PATH_CHARS {
-                continue;
-            }
-            let descend = visit(&Entry {
-                path: &item.path,
-                name: item.name.clone(),
-                is_dir: item.is_dir,
-            });
-            if item.is_dir && descend && depth <= limits.max_depth {
-                progress(outcome.visited, &item.path);
-                match list_dir(&item.path) {
-                    Ok(children) => {
-                        if !children.complete {
-                            note_unreadable(&mut outcome, &item.path);
-                        }
-                        stack.push((children.items, depth + 1));
-                    }
-                    Err(_) => note_unreadable(&mut outcome, &item.path),
-                }
-            }
-        }
+    let stem = exe
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    catalog::clean_title(&stem)
+}
+
+/// The title of a PC game folder: the folder name, or — when it has no letters — the title
+/// of the executable it launches.
+fn pc_title(folder_name: &str, exe: Option<&Path>) -> String {
+    let from_folder = catalog::clean_title(folder_name);
+    if from_folder.chars().any(char::is_alphabetic) {
+        return from_folder;
     }
-    Ok(outcome)
+    match exe.filter(|e| e.extension().is_some_and(|x| x.eq_ignore_ascii_case("exe"))) {
+        Some(exe) => title_from_executable(exe),
+        None => from_folder,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -330,6 +341,8 @@ pub struct ScanInputs {
     pub ignored: HashSet<String>,
     pub exe_choices: HashMap<String, String>,
     pub shortcut_ok: HashMap<String, (String, String)>,
+    /// Quick (default) or full scan limits.
+    pub limits: ScanLimits,
 }
 
 pub fn key_of(path: &Path) -> String {
@@ -368,7 +381,7 @@ impl GameWalker<'_> {
 
     fn count_entries(&mut self, n: usize) -> bool {
         self.out.visited += n;
-        if self.out.visited > GAME_MAX_ENTRIES {
+        if self.out.visited > self.inputs.limits.max_entries {
             self.out.truncated = true;
         }
         !self.out.truncated
@@ -441,7 +454,7 @@ impl GameWalker<'_> {
                     continue;
                 }
             }
-            if depth + 1 > GAME_MAX_DEPTH {
+            if depth + 1 > self.inputs.limits.max_depth {
                 continue;
             }
             self.visit(&item.path, depth + 1, child_system, child_top);
@@ -582,7 +595,7 @@ impl GameWalker<'_> {
                         folder: Some(item.path.clone()),
                         source: item.path.clone(),
                         target: choice.to_string_lossy().into_owned(),
-                        title,
+                        title: pc_title(&item.name, Some(&choice)),
                     });
                     found += 1;
                 }
@@ -593,8 +606,8 @@ impl GameWalker<'_> {
                     self.out.pcs.push(PcGame {
                         folder: Some(item.path.clone()),
                         source: item.path.clone(),
+                        title: pc_title(&item.name, Some(&target)),
                         target: target.to_string_lossy().into_owned(),
-                        title,
                     });
                     found += 1;
                 }
@@ -1306,14 +1319,17 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn walks_are_bounded_and_skip_hidden_entries() {
+    fn walks_are_bounded_and_skip_dot_and_metadata_entries() {
         let dir = TempDir::new("scan-bounds");
         dir.file("GBA/.hidden/secret.gba");
         dir.file("GBA/a/b/c/d/e/f/g/h/i/deep.gba");
         dir.file("GBA/Pokemon (USA).gba");
+        dir.file("GBA/desktop.ini");
+        dir.file("GBA/Thumbs.db");
         dir.file("$RECYCLE.BIN/GBA/x.gba");
         let result = scan(&dir);
         assert_eq!(rom_names(&result), ["gba:Pokemon (USA).gba"]);
+        assert_eq!(result.skipped, 0, "{:?}", result.samples);
         // The root itself may be a system folder.
         let sub = scan_games(
             &dir.path().join("GBA"),
@@ -1328,22 +1344,207 @@ pub(crate) mod tests {
             &mut |_, _| {}
         )
         .is_err());
-        let mut count = 0;
-        let outcome = walk(
-            dir.path(),
-            &WalkLimits {
+        // A full scan goes deeper.
+        let full = ScanInputs {
+            limits: ScanLimits::GAMES_FULL,
+            ..Default::default()
+        };
+        let deep = scan_games(dir.path(), &full, &mut |_, _| {}).unwrap();
+        assert_eq!(rom_names(&deep).len(), 2);
+        // The entry cap stops the scan and marks it truncated.
+        let tiny = ScanInputs {
+            limits: ScanLimits {
                 max_depth: 10,
                 max_entries: 3,
             },
+            ..Default::default()
+        };
+        let cut = scan_games(dir.path(), &tiny, &mut |_, _| {}).unwrap();
+        assert!(cut.truncated);
+        assert!(cut.visited > 3);
+    }
+
+    /// Sets Hidden + System, like the user's library (attrib +h +s).
+    #[cfg(windows)]
+    pub(crate) fn hide(path: &Path) {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Storage::FileSystem::{
+            SetFileAttributesW, FILE_ATTRIBUTE_HIDDEN, FILE_ATTRIBUTE_SYSTEM,
+        };
+        let wide: Vec<u16> = path
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let ok = unsafe {
+            SetFileAttributesW(wide.as_ptr(), FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM)
+        };
+        assert_ne!(ok, 0, "SetFileAttributesW failed for {}", path.display());
+    }
+
+    /// The user's games layout (`M:\Retro Project`), Hidden+System almost everywhere.
+    #[cfg(windows)]
+    pub(crate) fn retro_project(dir: &TempDir) -> PathBuf {
+        let base = "Retro Project";
+        let f = |rel: &str| dir.file(&format!("{base}/{rel}"));
+        let d = |rel: &str| dir.dir(&format!("{base}/{rel}"));
+        f("Sony Playstation/Castlevania Symphony of the Night/Castlevania Symphony of the Night.chd");
+        f("Sony Playstation/Castlevania Symphony of the Night/Castlevania Symphony of the Night (Japanese VA).chd");
+        f("Sony Playstation 2/Sly 3 Honor Among Thieves.iso");
+        dir.write(
+            &format!("{base}/Sony Playstation 3/Sly Cooper Thieves in Time/PS3_GAME/PARAM.SFO"),
+            &sfo("Sly Cooper: Thieves in Time"),
+        );
+        f("Sony Playstation 3/Sly Cooper Thieves in Time/PS3_GAME/USRDIR/EBOOT.BIN");
+        f("Sony Playstation 3/Sly Cooper Thieves in Time/PS3_DISC.SFB");
+        d("Sony Playstation 4");
+        f("Sony Playstation Portable/Patapon.cso");
+        f("Nintendo Switch/Celeste [01002B30028F6000][v0].nsp");
+        f("PC Game/00356/Cairn.exe");
+        f("PC Game/00356/RegroupLogs.exe");
+        d("PC Game/00356/Cairn_Data/Managed");
+        f("PC Game/00356/GameAssembly.dll");
+        f("PC Game/00356/baselib.dll");
+        d("PC Game/00356/D3D12");
+        f("PC Game/01003/ObraDinn.exe");
+        d("PC Game/01003/ObraDinn_Data");
+        f("PC Game/01003/UnityPlayer.dll");
+        for i in 0..40 {
+            f(&format!("PC Game/00766/assets/file{i:02}.png"));
+        }
+        f("PC Game/00766/boot.xml");
+        f("PC Game/00766/lime.ndll");
+        f("PC Game/00766/Rogue Legacy.exe");
+        f("Retro Books/00390/Volume 01.cbz");
+        let root = dir.path().join(base);
+        for folder in [
+            "Sony Playstation",
+            "Sony Playstation 2",
+            "Sony Playstation 3",
+            "Sony Playstation 4",
+            "Sony Playstation Portable",
+            "Nintendo Switch",
+            "PC Game",
+            "Retro Books",
+            "Sony Playstation/Castlevania Symphony of the Night",
+            "Sony Playstation 3/Sly Cooper Thieves in Time",
+            "Sony Playstation 3/Sly Cooper Thieves in Time/PS3_GAME",
+            "PC Game/00356",
+            "PC Game/01003",
+            "PC Game/00766",
+            "PC Game/00356/Cairn.exe",
+            "PC Game/00356/RegroupLogs.exe",
+            "PC Game/01003/ObraDinn.exe",
+            "Sony Playstation 2/Sly 3 Honor Among Thieves.iso",
+        ] {
+            hide(&root.join(folder));
+        }
+        root
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn hidden_system_library_scans_from_the_parent_and_from_a_system_folder() {
+        let dir = TempDir::new("scan-retro");
+        let root = retro_project(&dir);
+        let result = scan_games(&root, &ScanInputs::default(), &mut |_, _| {}).unwrap();
+        assert_eq!(
+            rom_names(&result),
+            [
+                "ps1:Castlevania Symphony of the Night (Japanese VA).chd",
+                "ps1:Castlevania Symphony of the Night.chd",
+                "ps2:Sly 3 Honor Among Thieves.iso",
+                "ps3:EBOOT.BIN",
+                "psp:Patapon.cso",
+                "switch:Celeste [01002B30028F6000][v0].nsp",
+            ]
+        );
+        let ps3 = result.roms.iter().find(|g| g.system == "ps3").unwrap();
+        assert_eq!(ps3.title, "Sly Cooper: Thieves in Time");
+        assert_eq!(ps3.format, "folder");
+        assert!(ps3.path.ends_with("PS3_GAME/USRDIR/EBOOT.BIN"));
+        let mut pcs: Vec<(String, String)> = result
+            .pcs
+            .iter()
+            .map(|g| {
+                (
+                    g.title.clone(),
+                    Path::new(&g.target)
+                        .file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned(),
+                )
+            })
+            .collect();
+        pcs.sort();
+        assert_eq!(
+            pcs,
+            [
+                ("Cairn".to_string(), "Cairn.exe".to_string()),
+                ("ObraDinn".to_string(), "ObraDinn.exe".to_string()),
+                ("Rogue Legacy".to_string(), "Rogue Legacy.exe".to_string()),
+            ]
+        );
+        assert!(result.ambiguous.is_empty(), "{:?}", result.ambiguous);
+        assert!(result.unreadable.is_empty());
+        // Retro Books holds no games: reported, nothing added.
+        assert!(result
+            .unsupported
+            .iter()
+            .any(|u| u.path.ends_with("Retro Books")));
+
+        // The same folders added directly as roots.
+        let ps1 = scan_games(
+            &root.join("Sony Playstation"),
+            &ScanInputs::default(),
             &mut |_, _| {},
-            &mut |_| {
-                count += 1;
-                true
-            },
         )
         .unwrap();
-        assert!(outcome.truncated);
-        assert_eq!(count, 3);
+        assert_eq!(rom_names(&ps1).len(), 2);
+        assert!(ps1.unsupported.is_empty());
+        let ps2 = scan_games(
+            &root.join("Sony Playstation 2"),
+            &ScanInputs::default(),
+            &mut |_, _| {},
+        )
+        .unwrap();
+        assert_eq!(rom_names(&ps2), ["ps2:Sly 3 Honor Among Thieves.iso"]);
+        let ps3 = scan_games(
+            &root.join("Sony Playstation 3"),
+            &ScanInputs::default(),
+            &mut |_, _| {},
+        )
+        .unwrap();
+        assert_eq!(ps3.roms[0].title, "Sly Cooper: Thieves in Time");
+        let pc = scan_games(
+            &root.join("PC Game"),
+            &ScanInputs::default(),
+            &mut |_, _| {},
+        )
+        .unwrap();
+        assert_eq!(pc.pcs.len(), 3);
+        // Hidden exes are candidates, and the Unity _Data folder picks Cairn over RegroupLogs.
+        assert_eq!(
+            pick_executable(&root.join("PC Game/00356"), "00356"),
+            Pick::One(root.join("PC Game/00356/Cairn.exe"))
+        );
+    }
+
+    #[test]
+    fn pc_titles_come_from_the_executable_when_the_folder_is_a_number() {
+        let exe = Path::new(r"D:\Games\PC\00356\Cairn.exe");
+        assert_eq!(pc_title("00356", Some(exe)), "Cairn");
+        assert_eq!(pc_title("Hollow Knight", Some(exe)), "Hollow Knight");
+        assert_eq!(
+            pc_title("01003 (v1.2)", Some(Path::new(r"D:\x\ObraDinn.exe"))),
+            "ObraDinn"
+        );
+        assert_eq!(
+            pc_title("00356", Some(Path::new(r"D:\x\play.lnk"))),
+            "00356"
+        );
+        assert_eq!(pc_title("00356", None), "00356");
     }
 
     #[cfg(windows)]

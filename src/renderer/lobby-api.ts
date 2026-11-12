@@ -2,7 +2,7 @@
 // Replaces the Electron preload script; the API shape is unchanged.
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
-import type { ArtChangedEvent, LobbyAPI, LocalScanProgress, LocalScanSummary, RunningGame, Settings, SteamGridDbFetchSummary } from '../shared/types'
+import type { ArtChangedEvent, LobbyAPI, LocalScanProgress, LocalScanSummary, RunningGame, Settings, SettingsSection, SteamGridDbFetchSummary, UpdateProgress } from '../shared/types'
 
 async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   try {
@@ -57,7 +57,8 @@ const api: LobbyAPI = {
     get: () => call('settings_get'),
     save: settings => call('settings_save', { settings }),
     onChanged: callback => subscribe<Settings>('settings:changed', callback),
-    open: () => call('settings_open')
+    open: section => call('settings_open', { section: section ?? null }),
+    onSection: callback => subscribe<SettingsSection>('settings:section', callback)
   },
   theme: {
     load: url => call('theme_load', { url }),
@@ -79,7 +80,7 @@ const api: LobbyAPI = {
     browse: () => call('roots_browse'),
     setEnabled: (id, enabled) => call('roots_set_enabled', { id, enabled }),
     remove: id => call('roots_remove', { id }),
-    rescan: id => call('roots_rescan', { id: id ?? null }),
+    rescan: (id, options) => call('roots_rescan', { id: id ?? null, full: options?.full ?? false }),
     onProgress: callback => subscribe<LocalScanProgress>('library-scan:progress', callback),
     onFinished: callback => subscribe<LocalScanSummary>('library-scan:finished', callback)
   },
@@ -124,6 +125,14 @@ const api: LobbyAPI = {
     chooseLogoFile: gameId => call('art_choose_logo_file', { gameId }),
     setLogoLayout: (gameId, position, scale) => call('art_set_logo_layout', { gameId, position, scale }),
     onChanged: callback => subscribe<ArtChangedEvent>('art:changed', callback)
+  },
+  updates: {
+    check: () => call('updates_check'),
+    autoCheck: () => call('updates_auto_check'),
+    last: () => call('updates_last'),
+    install: () => call('updates_install'),
+    onProgress: callback => subscribe<UpdateProgress>('updates:progress', callback),
+    onReady: callback => subscribe('updates:ready', () => callback())
   },
   app: { quit: () => call('app_quit') }
 }

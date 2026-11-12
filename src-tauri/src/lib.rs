@@ -20,6 +20,7 @@ mod steamgriddb;
 mod theme;
 mod tracker;
 mod types;
+mod updater;
 mod validation;
 mod windows;
 
@@ -93,6 +94,9 @@ fn data_dir_override() -> Option<std::path::PathBuf> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        // Signed updates; used only by the `updates_*` commands (no webview permissions).
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .manage(updater::Updates::default())
         .register_uri_scheme_protocol("lobby-cover", cover_protocol)
         .setup(|app| {
             let data_dir = match data_dir_override() {
@@ -198,6 +202,10 @@ pub fn run() {
             commands::art_set_logo_layout,
             commands::steamgriddb_search_heroes,
             commands::steamgriddb_search_logos,
+            updater::updates_check,
+            updater::updates_auto_check,
+            updater::updates_last,
+            updater::updates_install,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Game Lobby");

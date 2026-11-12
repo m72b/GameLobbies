@@ -79,6 +79,7 @@ const SETTINGS_KEYS: &[&str] = &[
     "steamGridDbHumor",
     "detectExternalLaunches",
     "trackingExcludedGameIds",
+    "autoCheckUpdates",
 ];
 const EMULATOR_KEYS: &[&str] = &[
     "id",
@@ -382,6 +383,7 @@ pub fn settings_patch(value: &Value) -> Result<Map<String, Value>> {
         "steamGridDbNsfw",
         "steamGridDbHumor",
         "detectExternalLaunches",
+        "autoCheckUpdates",
     ] {
         bool_field(&map, key)?;
     }

@@ -2,7 +2,7 @@
 //! pages; allow-listed external links open in the default browser instead.
 
 use tauri::webview::Color;
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use url::Url;
 
 pub const MAIN: &str = "main";
@@ -40,7 +40,14 @@ fn open_if_allowed_external(url: &Url) {
     }
 }
 
+/// Settings pages that `settings_open` may jump to (`settings.html?section=<id>`).
+pub const SETTINGS_SECTIONS: [&str; 1] = ["updates"];
+
 pub fn create(app: &AppHandle, settings: bool) -> tauri::Result<()> {
+    create_page(app, settings, None)
+}
+
+fn create_page(app: &AppHandle, settings: bool, section: Option<&str>) -> tauri::Result<()> {
     let (label, page, title, size, min) = if settings {
         (
             SETTINGS,
@@ -57,6 +64,10 @@ pub fn create(app: &AppHandle, settings: bool) -> tauri::Result<()> {
             (1440.0, 900.0),
             (800.0, 600.0),
         )
+    };
+    let page = match section {
+        Some(section) => format!("{page}?section={section}"),
+        None => page.to_string(),
     };
     WebviewWindowBuilder::new(app, label, WebviewUrl::App(page.into()))
         .title(title)
@@ -75,12 +86,17 @@ pub fn create(app: &AppHandle, settings: bool) -> tauri::Result<()> {
     Ok(())
 }
 
-pub fn open_settings(app: &AppHandle) -> tauri::Result<()> {
+/// Opens (or focuses) the settings window, optionally on one of [`SETTINGS_SECTIONS`]. An open
+/// window is told to switch with a `settings:section` event.
+pub fn open_settings_at(app: &AppHandle, section: Option<&str>) -> tauri::Result<()> {
     match app.get_webview_window(SETTINGS) {
         Some(window) => {
             let _ = window.unminimize();
+            if let Some(section) = section {
+                let _ = app.emit_to(SETTINGS, "settings:section", section);
+            }
             window.set_focus()
         }
-        None => create(app, true),
+        None => create_page(app, true, section),
     }
 }

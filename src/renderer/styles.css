@@ -133,6 +133,8 @@
 .text-warn{color:#e8b44f}
 .form-error{margin:8px 0;padding:8px 10px;border-radius:7px;background:#e487871a;color:#e48787;font-size:11px;line-height:1.5}
 .inline-warning{margin-top:8px;font-size:11px;color:#e8b44f}
+.inline-notice{margin-top:8px;padding:10px 12px;border:1px solid #e8b44f40;border-radius:8px;background:#e8b44f12;font-size:11px;line-height:1.5;color:var(--text)}
+.inline-notice .settings-actions{margin-top:8px}
 .root-add{display:flex;gap:8px;align-items:center}
 .root-add input{flex:1;min-width:0;padding:8px 10px;border:1px solid #ffffff17;border-radius:7px;background:#111316;color:var(--text);outline:none;font-size:11px}
 .root-add .secondary-button,.root-add .primary-button{margin:0;height:34px}
@@ -183,3 +185,16 @@
 .gp-emulator{margin-top:8px;display:grid;gap:6px;font-size:11px}
 .gp-emulator select{width:100%;padding:7px 8px;border:1px solid #ffffff17;border-radius:7px;background:#111316;color:var(--text)}
 .gp-emulator .form-error,.gp-emulator .inline-warning{margin:0}
+.update-notice{position:fixed;z-index:56;right:22px;top:50px;display:flex;align-items:center;gap:10px;max-width:min(440px,calc(100vw - 44px));padding:10px 10px 10px 14px;background:#2a2d32;border:1px solid color-mix(in srgb,var(--accent) 35%,transparent);border-radius:10px;box-shadow:0 10px 30px #0008;font-size:11px}
+.update-notice>svg{color:var(--accent);flex-shrink:0}
+.update-notice span{flex:1}
+.update-notice .primary-button{height:30px}
+.update-notice-close{border:0;background:transparent;color:var(--muted);display:grid;place-items:center;width:26px;height:26px;border-radius:6px}
+.update-notice-close:hover{background:#ffffff12;color:var(--text)}
+.update-status{display:flex;align-items:center;gap:7px;margin:4px 0 10px;font-size:11px;color:var(--accent)}
+.update-available{margin:4px 0 12px;padding:12px;border:1px solid #ffffff0d;border-radius:9px;background:#ffffff06}
+.update-title{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:4px 12px;font-size:12px}
+.update-title span{font-size:10px;color:var(--muted)}
+.update-notes{margin-top:10px;max-height:220px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px;line-height:1.55;color:var(--text);padding:10px;border-radius:7px;background:#111316;border:1px solid #ffffff0d}
+.update-available .settings-actions{margin-top:12px}
+.update-hint{display:block;margin-top:10px;font-size:10px;color:var(--muted);line-height:1.5}

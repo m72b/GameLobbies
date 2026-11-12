@@ -1,0 +1,147 @@
+name: Release
+
+# Builds the signed Windows installer for a version tag and publishes it, with the updater
+# manifest (latest.json), as a GitHub release in RELEASE_REPO. The app checks
+# https://github.com/<RELEASE_REPO>/releases/latest/download/latest.json (tauri.conf.json).
+#
+# Secrets:
+#   TAURI_SIGNING_PRIVATE_KEY, TAURI_SIGNING_PRIVATE_KEY_PASSWORD  updater signing key (minisign)
+#   RELEASES_TOKEN  fine-grained PAT with contents:write on RELEASE_REPO only. Not needed when
+#                   RELEASE_REPO is this repository: the built-in GITHUB_TOKEN is used then.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to release, e.g. v0.3.1 (must match package.json)
+        required: true
+
+env:
+  # Where releases are published. Changing it also needs the endpoint in
+  # src-tauri/tauri.conf.json and the config test in src-tauri/src/updater.rs (see README).
+  RELEASE_REPO: m72b/GameLobby-releases
+  TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      asset: ${{ steps.manifest.outputs.asset }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          fetch-depth: 0
+
+      - name: Check the tag against package.json
+        id: version
+        run: |
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::$TAG is not a vX.Y.Z tag"
+            exit 1
+          fi
+          version="${TAG#v}"
+          package_version="$(node -p "require('./package.json').version")"
+          if [ "$version" != "$package_version" ]; then
+            echo "::error::Tag $TAG does not match package.json version $package_version"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Release notes from the tag message
+        run: |
+          mkdir -p "$RUNNER_TEMP/release"
+          notes="$RUNNER_TEMP/release/notes.txt"
+          # checkout can turn annotated tags into lightweight ones; fetch the tag object itself.
+          git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG"
+          if [ "$(git cat-file -t "refs/tags/$TAG")" = "tag" ]; then
+            git for-each-ref "refs/tags/$TAG" --format='%(contents:subject)%0a%0a%(contents:body)' > "$notes"
+          fi
+          if [ ! -s "$notes" ] || [ -z "$(tr -d '[:space:]' < "$notes")" ]; then
+            echo "Game Lobby ${TAG#v}" > "$notes"
+          fi
+          cat "$notes"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - run: npm ci
+      # Builds out/renderer, which the Rust crate embeds at compile time.
+      - run: npm run build:web
+
+      - name: Build the signed installer
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::error::The TAURI_SIGNING_PRIVATE_KEY secret is not set"
+            exit 1
+          fi
+          npx tauri build --config src-tauri/tauri.release.conf.json
+
+      - name: Write latest.json
+        id: manifest
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          installer="$(node .github/scripts/updater-manifest.mjs "$VERSION" "$RUNNER_TEMP/release" "$RUNNER_TEMP/release/notes.txt")"
+          echo "asset=$(basename "$installer")" >> "$GITHUB_OUTPUT"
+          cat "$RUNNER_TEMP/release/latest.json"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: game-lobby-release
+          path: ${{ runner.temp }}/release/*
+          if-no-files-found: error
+
+  # Only this job can write, and it runs no project code: it downloads the built files and
+  # creates the release.
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: game-lobby-release
+          path: release
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ env.RELEASE_REPO == github.repository && github.token || secrets.RELEASES_TOKEN }}
+          VERSION: ${{ needs.build.outputs.version }}
+          ASSET: ${{ needs.build.outputs.asset }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::The RELEASES_TOKEN secret is not set (needed to publish to $RELEASE_REPO)"
+            exit 1
+          fi
+          prerelease=()
+          # Pre-releases are published but never offered through releases/latest.
+          if [[ "$VERSION" == *-* ]]; then prerelease=(--prerelease); fi
+          gh release create "v$VERSION" --repo "$RELEASE_REPO" \
+            "release/$ASSET" release/latest.json \
+            --title "Game Lobby $VERSION" \
+            --notes-file release/notes.txt \
+            "${prerelease[@]}"

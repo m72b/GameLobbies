@@ -548,6 +548,154 @@ pub fn is_reparse_point(path: &Path) -> bool {
     }
 }
 
+/// Version resources larger than this are not read.
+const MAX_VERSION_INFO_BYTES: u32 = 1024 * 1024;
+
+/// A version-resource name that can serve as a game title: 1 to 100 characters, with a
+/// letter, and not an engine, runtime or operating-system name.
+pub fn sensible_product_name(raw: &str) -> Option<String> {
+    let name = raw.trim_matches(|c: char| c == '\0' || c.is_whitespace());
+    let name = name.split_whitespace().collect::<Vec<_>>().join(" ");
+    if name.is_empty() || name.chars().count() > 100 || !name.chars().any(char::is_alphabetic) {
+        return None;
+    }
+    let lower = name.to_lowercase();
+    const GENERIC: &[&str] = &[
+        "unity",
+        "unityplayer",
+        "unity player",
+        "game",
+        "launcher",
+        "application",
+        "app",
+        "bootstrap",
+        "bootstrappackagedgame",
+        "unreal engine",
+        "ue4",
+        "ue5",
+        "ue4game",
+        "godot engine",
+        "godot",
+        "nw.js",
+        "electron",
+        "lime",
+        "hxcpp",
+        "java",
+        "python",
+        "mono",
+        "renpy",
+        "love",
+        "sdl",
+        "directx",
+        "setup",
+        "installer",
+    ];
+    if GENERIC.contains(&lower.as_str())
+        || lower.contains("windows")
+        || lower.contains("microsoft")
+        || lower.contains("operating system")
+    {
+        return None;
+    }
+    Some(name)
+}
+
+/// A game title from an executable's version resource: `ProductName`, else
+/// `FileDescription`, when [`sensible_product_name`]. Bounded and never panics; `None` when
+/// the file has no usable version information.
+#[cfg(windows)]
+pub fn exe_product_name(path: &Path) -> Option<String> {
+    use std::ffi::c_void;
+    use std::os::windows::ffi::OsStrExt;
+    use windows::core::PCWSTR;
+    use windows::Win32::Storage::FileSystem::{
+        GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW,
+    };
+    let file: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    unsafe {
+        let size = GetFileVersionInfoSizeW(PCWSTR(file.as_ptr()), None);
+        if size == 0 || size > MAX_VERSION_INFO_BYTES {
+            return None;
+        }
+        let mut data = vec![0u8; size as usize];
+        GetFileVersionInfoW(
+            PCWSTR(file.as_ptr()),
+            None,
+            size,
+            data.as_mut_ptr() as *mut c_void,
+        )
+        .ok()?;
+        let start = data.as_ptr() as usize;
+        let end = start + data.len();
+        // Looks a value up; the result must lie entirely inside `data`.
+        let query = |sub: &str| -> Option<(*const u8, usize)> {
+            let key = wide(sub);
+            let mut ptr: *mut c_void = std::ptr::null_mut();
+            let mut len: u32 = 0;
+            let ok = VerQueryValueW(
+                data.as_ptr() as *const c_void,
+                PCWSTR(key.as_ptr()),
+                &mut ptr,
+                &mut len,
+            );
+            if !ok.as_bool() || ptr.is_null() {
+                return None;
+            }
+            Some((ptr as *const u8, len as usize))
+        };
+        let in_bounds = |ptr: *const u8, bytes: usize| {
+            let p = ptr as usize;
+            p >= start && p.checked_add(bytes).is_some_and(|e| e <= end)
+        };
+        let mut languages: Vec<(u16, u16)> = Vec::new();
+        if let Some((ptr, len)) = query(r"\VarFileInfo\Translation") {
+            if in_bounds(ptr, len) {
+                let bytes = std::slice::from_raw_parts(ptr, len);
+                for pair in bytes.as_chunks::<4>().0.iter().take(16) {
+                    languages.push((
+                        u16::from_le_bytes([pair[0], pair[1]]),
+                        u16::from_le_bytes([pair[2], pair[3]]),
+                    ));
+                }
+            }
+        }
+        languages.extend([(0x0409, 0x04b0), (0x0409, 0x04e4), (0x0000, 0x04b0)]);
+        for field in ["ProductName", "FileDescription"] {
+            for (language, codepage) in &languages {
+                let sub = format!(r"\StringFileInfo\{language:04x}{codepage:04x}\{field}");
+                let Some((ptr, chars)) = query(&sub) else {
+                    continue;
+                };
+                // `chars` counts UTF-16 units (including the terminator).
+                let Some(bytes) = chars.checked_mul(2) else {
+                    continue;
+                };
+                if chars == 0
+                    || chars > 512
+                    || !in_bounds(ptr, bytes)
+                    || !(ptr as usize).is_multiple_of(2)
+                {
+                    continue;
+                }
+                let units = std::slice::from_raw_parts(ptr as *const u16, chars);
+                if let Some(name) = sensible_product_name(&String::from_utf16_lossy(units)) {
+                    return Some(name);
+                }
+            }
+        }
+        None
+    }
+}
+
+#[cfg(not(windows))]
+pub fn exe_product_name(_path: &Path) -> Option<String> {
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -648,5 +796,50 @@ mod tests {
         let sealed = protect(b"secret").unwrap();
         assert_ne!(sealed, b"secret");
         assert_eq!(unprotect(&sealed).unwrap(), b"secret");
+    }
+    #[test]
+    fn product_names_must_look_like_a_title() {
+        assert_eq!(
+            sensible_product_name("  Return of the ").as_deref(),
+            Some("Return of the")
+        );
+        assert_eq!(sensible_product_name("Cairn").as_deref(), Some("Cairn"));
+        for bad in [
+            "",
+            "   ",
+            "1.0.0.0",
+            "Unity Player",
+            "UnityPlayer",
+            "Microsoft® Windows® Operating System",
+            "Electron",
+            &"x".repeat(101),
+        ] {
+            assert_eq!(sensible_product_name(bad), None, "{bad}");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn version_resources_are_read_safely() {
+        // A file without a version resource, a missing file and a real Windows program.
+        let dir = std::env::temp_dir().join(format!("gamelobby-test-ver-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let fake = dir.join("Cairn.exe");
+        std::fs::write(&fake, b"MZ not really").unwrap();
+        assert_eq!(exe_product_name(&fake), None);
+        assert_eq!(exe_product_name(&dir.join("missing.exe")), None);
+        std::fs::remove_dir_all(&dir).unwrap();
+        let windows = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
+        let notepad = std::path::Path::new(&windows)
+            .join("System32")
+            .join("notepad.exe");
+        if notepad.is_file() {
+            // ProductName is the generic OS name, so FileDescription ("Notepad") is used.
+            let name = exe_product_name(&notepad);
+            assert!(
+                name.as_deref().is_none_or(|n| !n.contains("Windows")),
+                "{name:?}"
+            );
+        }
     }
 }

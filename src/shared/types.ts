@@ -46,7 +46,9 @@ export interface Settings { scanIntervalHours: number; posterWidth: number; show
    * `lastPlayed`. Distinct ids, each at most 512 characters, at most 5000. Default [].
    * Prefer `tracking.setExcluded(gameId, excluded)` to change a single game.
    */
-  trackingExcludedGameIds: string[] }
+  trackingExcludedGameIds: string[]
+  /** Check for a new release about 10 s after startup, at most once a day. Never installs without a click. Default true. */
+  autoCheckUpdates: boolean }
 /** Grid styles accepted by `Settings.steamGridDbStyles` (the backend rejects anything else). */
 export const steamGridDbStyles = ['alternate', 'blurred', 'white_logo', 'material', 'no_logo'] as const
 export type SteamGridDbStyle = typeof steamGridDbStyles[number]
@@ -78,8 +80,15 @@ export type SteamGridDbStyle = typeof steamGridDbStyles[number]
 export interface EmulatorProfile { id: string; name: string; executable: string; args: string; romFolders: string[]; extensions: string[]; systems?: string[]; enabled?: boolean; source?: 'discovered' | 'manual'; detectedAs?: string; available?: boolean; needsConfiguration?: boolean; addedAt?: number }
 /** A system from the built-in catalog. `aliases` are folder names meaning it (matched ignoring case, spaces and punctuation: "Sony 3" = "PS3" = "PlayStation 3"). `extensions` are lower-case with a dot; empty for `pc`. */
 export interface CatalogSystem { id: string; name: string; aliases: string[]; extensions: string[] }
-/** A known emulator. `executables`: lower-case file names recognised in emulator folders. `defaultArgs`: the template new profiles get. `needsConfiguration`: that template must be edited first (RetroArch: replace CORE_NAME with a core). */
-export interface KnownEmulator { id: string; name: string; executables: string[]; systems: string[]; defaultArgs: string; needsConfiguration: boolean; note: string }
+/**
+ * A known emulator. `executables`: lower-case file names recognised in emulator folders, preferred
+ * build first (GUI before `nogui`). `prefixes`: lower-case name prefixes also recognised
+ * (`desmume` matches `desmume_x432r_x64.exe`; helpers such as updaters, uninstallers, `-cli` or
+ * launchers never match). `defaultArgs`: the template new profiles get. `needsConfiguration`: that
+ * template must be edited first (RetroArch: replace CORE_NAME with a core; FinalBurn Neo: check the
+ * ROM-set arguments); such profiles are never picked automatically.
+ */
+export interface KnownEmulator { id: string; name: string; executables: string[]; prefixes: string[]; systems: string[]; defaultArgs: string; needsConfiguration: boolean; note: string }
 /** `emulators.catalog()`: static built-in data. */
 export interface EmulatorCatalog { systems: CatalogSystem[]; emulators: KnownEmulator[] }
 /** A path on an ignore list (executables of removed emulator profiles, or game files/folders scans skip). */
@@ -95,16 +104,36 @@ export interface EmulatorScanCounts { added: number; updated: number; unavailabl
  * of a root's games (and more than 20) vanished at once; see `RootScanOutcome.warning`.
  */
 export interface GameScanCounts { added: number; updated: number; removedOrUninstalled: number; skipped: number; failed: number; removalsHeld: number }
-/** One root in a scan. `ok: false`: the folder couldn't be read (e.g. offline drive) and nothing in the library changed for it. `truncated`: the entry cap was hit, so games were added but none marked missing. `unreadable`: subfolders that couldn't be read. `warning`: the scan worked but removals were skipped (too many at once, or the folder became unreadable before they were applied); show it to the user. */
-export interface RootScanOutcome { id: string; path: string; kind: LibraryRootKind; ok: boolean; error?: string; truncated: boolean; unreadable: number; warning?: string }
-/** `LibraryRoot.lastResult`: the outcome plus that root's counts and duration. */
-export interface RootScanResult extends RootScanOutcome { durationMs: number; emulators?: EmulatorScanCounts; games?: GameScanCounts }
 /**
- * A library folder. `emulators` folders are searched (up to 4 folders deep) for known emulator
- * executables. `games` folders hold system folders (`PS2`, `Sony 3`, `Nintendo Switch`, `PC`, ... at
- * any level; the nearest one wins; the root itself may be one) containing ROMs, folder games (PS3,
- * PS4, Wii U, Xbox 360), or under a PC folder one subfolder per game. `path` is normalized
- * (`D:\Roms`). `online`: the folder exists right now.
+ * One root in a scan.
+ * - `ok: false`: the folder couldn't be read (e.g. offline drive); nothing in the library changed for it.
+ * - `truncated`: the scan reached its entry cap. Not an error: what was found was kept and nothing
+ *   was marked missing. `notice` then holds the user-facing explanation; offer a full scan
+ *   (`roots.rescan(id, { full: true })`).
+ * - `notice`: see `truncated`. Absent otherwise.
+ * - `full`: this was a full ("scan everything") scan.
+ * - `unreadable`: subfolders that couldn't be read.
+ * - `warning`: the scan worked but removals were skipped (too many at once, or the folder became
+ *   unreadable before they were applied); show it to the user.
+ */
+export interface RootScanOutcome { id: string; path: string; kind: LibraryRootKind; ok: boolean; error?: string; truncated: boolean; unreadable: number; warning?: string; notice?: string; full: boolean }
+/** `LibraryRoot.lastResult`: the outcome plus that root's counts and duration (`visited`: entries listed by an emulator scan). Results stored before `full` existed lack it. */
+export interface RootScanResult extends Omit<RootScanOutcome, 'full'> { full?: boolean; durationMs: number; emulators?: EmulatorScanCounts; games?: GameScanCounts; visited?: number }
+/**
+ * A library folder.
+ * - `emulators` folders are searched for known emulator executables (quick scan: 5 folders deep,
+ *   200,000 entries; full scan: 8 deep, 3,000,000). A folder holding a known emulator isn't searched
+ *   further (its subfolders are that emulator's data), and data folders such as `dev_hdd0`, `cores`
+ *   or `shaders` are skipped.
+ * - `games` folders hold system folders (`PS2`, `Sony 3`, `Sony Playstation 2`, `Nintendo Switch`,
+ *   `PC`, `PC Game`, ... at any level; the nearest one wins). The root itself may be a system folder
+ *   (e.g. `M:\Retro Project\Sony Playstation`): ROMs directly in it, per-game subfolders and folder
+ *   games all count. Folder games: PS3 (disc layout with `PS3_DISC.SFB`/`PS3_GAME`, titled from
+ *   PARAM.SFO), PS4, Wii U, Xbox 360. Under a PC folder each subfolder is one game; a numeric folder
+ *   name is replaced by the executable's product name or file name. Quick scan: 8 deep, 250,000
+ *   entries; full scan: 16 deep, 3,000,000.
+ * Hidden/System attributes are ignored (such files and folders are scanned); links and junctions are
+ * never followed. `path` is normalized (`D:\Roms`). `online`: the folder exists right now.
  */
 export interface LibraryRoot { id: string; kind: LibraryRootKind; path: string; enabled: boolean; addedAt: number; lastScanAt?: number; lastResult?: RootScanResult; online: boolean }
 /**
@@ -173,13 +202,14 @@ export interface AddedLocalGame { gameId: string; games: Game[] }
  * - setEnabled(id, enabled): turned-off roots are skipped by scans; their games stay as they are.
  * - remove(id): games found only under it become not installed (removed when they have no user
  *   data); emulator profiles found in it stay. Waits for a running folder scan to finish.
- * - rescan(id?): scans one root (it must be enabled) or every enabled root. Rejects while a folder
- *   scan is already running. Emits progress, `library:changed`, `review:changed` and
- *   `library-scan:finished`.
+ * - rescan(id?, options?): scans one root (it must be enabled) or every enabled root. A quick scan by
+ *   default; `{ full: true }` uses much higher limits for very large folders (can take several
+ *   minutes; still never follows links). Rejects while a folder scan is already running. Emits
+ *   progress, `library:changed`, `review:changed` and `library-scan:finished`.
  * - onProgress(cb) / onFinished(cb): folder scan events, also during `library.scan()` and
  *   `emulators.scan()`. Return an unsubscribe function.
  */
-export interface RootsAPI { list(): Promise<LibraryRoot[]>; add(kind: LibraryRootKind, path: string): Promise<LibraryRoot[]>; browse(): Promise<string | null>; setEnabled(id: string, enabled: boolean): Promise<LibraryRoot[]>; remove(id: string): Promise<LibraryRoot[]>; rescan(id?: string): Promise<LocalScanSummary>; onProgress(callback: (progress: LocalScanProgress) => void): () => void; onFinished(callback: (summary: LocalScanSummary) => void): () => void }
+export interface RootsAPI { list(): Promise<LibraryRoot[]>; add(kind: LibraryRootKind, path: string): Promise<LibraryRoot[]>; browse(): Promise<string | null>; setEnabled(id: string, enabled: boolean): Promise<LibraryRoot[]>; remove(id: string): Promise<LibraryRoot[]>; rescan(id?: string, options?: { full?: boolean }): Promise<LocalScanSummary>; onProgress(callback: (progress: LocalScanProgress) => void): () => void; onFinished(callback: (summary: LocalScanSummary) => void): () => void }
 /**
  * Emulator profiles.
  * - list(): every profile with `available` / `needsConfiguration` computed.
@@ -333,6 +363,36 @@ export interface ArtAPI {
   setLogoLayout(gameId: string, position: LogoPosition, scale: number): Promise<GamePageCustom>
   onChanged(callback: (event: ArtChangedEvent) => void): () => void
 }
+/**
+ * `updates.check()` result. `version`, `date` (ms since the epoch) and `notes` (plain text, at most
+ * about 4 KB; render as text, never as HTML) are present when `available`.
+ */
+export interface UpdateInfo { available: boolean; currentVersion: string; version?: string; date?: number; notes?: string }
+/** `updates.onProgress`: bytes downloaded so far; `total` when the server sent a size. Throttled. */
+export interface UpdateProgress { downloaded: number; total?: number }
+/** Settings pages `settings.open(section)` can show. */
+export type SettingsSection = 'updates'
+/**
+ * Signed updates (all work happens in the backend; one check or install at a time, a concurrent
+ * call rejects).
+ * - check(): asks the release server; rejects with a user-facing message (offline, no release yet,
+ *   timeout, ...). Only newer versions count as available.
+ * - autoCheck(): the startup check. Resolves null without asking the server when `autoCheckUpdates`
+ *   is off or the last check was under 24 h ago; never rejects. Main window only.
+ * - last(): the update found by the last check in this run, or null (no request).
+ * - install(): downloads the update found by the last check, verifies its signature, ends play
+ *   sessions, backs up the library and starts the installer; Game Lobby then closes and restarts.
+ *   Rejects (nothing installed) when the signature does not match or the download fails.
+ * - onReady: the installer is about to start (show "Restarting…").
+ */
+export interface UpdatesAPI {
+  check(): Promise<UpdateInfo>
+  autoCheck(): Promise<UpdateInfo | null>
+  last(): Promise<UpdateInfo | null>
+  install(): Promise<void>
+  onProgress(callback: (progress: UpdateProgress) => void): () => void
+  onReady(callback: () => void): () => void
+}
 export interface LobbyAPI {
   window: { minimize(): Promise<void>; toggleMaximize(): Promise<void>; close(): Promise<void>; isMaximized(): Promise<boolean> }
   library: { list(): Promise<Game[]>; scan(): Promise<LibraryStats>; launch(id: string, route?: number): Promise<void>; save(game: Partial<Game> & { id: string }): Promise<Game[]>; remove(id: string): Promise<Game[]>; merge(targetId: string, sourceId: string): Promise<Game[]>; resetPlaytime(): Promise<Game[]>; setCover(id: string, dataUrl: string | null): Promise<Game[]>; chooseCover(id: string): Promise<Game[]>; chooseInstallFolder(id: string): Promise<void>; add(title: string, target: string): Promise<Game[]>; connections(): Promise<LibraryConnections>; saveConnections(input: LibraryConnectionInput): Promise<LibraryConnections>; chooseLegendary(): Promise<string | null>; chooseGogDatabase(): Promise<string | null>; onChanged(callback: () => void): () => void
@@ -349,7 +409,11 @@ export interface LobbyAPI {
      * (`review.onChanged` fires).
      */
     addLocalGame(): Promise<AddedLocalGame | null> }
-  settings: { get(): Promise<Settings>; save(settings: Partial<Settings>): Promise<Settings>; onChanged(callback: (settings: Settings) => void): () => void; open(): Promise<void> }
+  settings: { get(): Promise<Settings>; save(settings: Partial<Settings>): Promise<Settings>; onChanged(callback: (settings: Settings) => void): () => void
+    /** Opens or focuses the settings window, optionally on a given section. */
+    open(section?: SettingsSection): Promise<void>
+    /** Settings window only: the main window asked to show a section. */
+    onSection(callback: (section: SettingsSection) => void): () => void }
   theme: { load(url: string): Promise<Settings>; reset(): Promise<Settings> }
   emulators: EmulatorsAPI
   roots: RootsAPI
@@ -359,6 +423,7 @@ export interface LobbyAPI {
   steamGridDb: SteamGridDbAPI
   tracking: TrackingAPI
   art: ArtAPI
+  updates: UpdatesAPI
   app: { quit(): Promise<void> }
 }
 declare global { interface Window { lobby: LobbyAPI } }

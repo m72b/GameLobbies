@@ -38,6 +38,7 @@ pub struct FolderFormat {
 
 const PS3_FOLDER: FolderFormat = FolderFormat {
     markers: &[
+        "PS3_DISC.SFB",
         "PS3_GAME/PARAM.SFO",
         "PS3_GAME/USRDIR/EBOOT.BIN",
         "USRDIR/EBOOT.BIN",
@@ -110,7 +111,12 @@ pub static SYSTEMS: &[System] = &[
     System {
         id: "psp",
         name: "PlayStation Portable",
-        aliases: &["PSP", "PlayStation Portable", "Sony PSP"],
+        aliases: &[
+            "PSP",
+            "PlayStation Portable",
+            "Sony PSP",
+            "Sony PlayStation Portable",
+        ],
         extensions: exts![".iso", ".cso", ".chd", ".pbp", ".elf"],
         folder_formats: &[],
     },
@@ -286,6 +292,7 @@ pub static SYSTEMS: &[System] = &[
         aliases: &[
             "PC",
             "Windows",
+            "PC Game",
             "PC Games",
             "Windows Games",
             "Win",
@@ -352,20 +359,24 @@ pub const IGNORED_EXTENSIONS: &[&str] = &[
 // ---------------------------------------------------------------------------
 // Known emulators
 
-/// A known emulator. `executables` are lower-case file names matched exactly.
+/// A known emulator. `executables` are lower-case file names matched exactly; `prefixes`
+/// match any `<prefix>*.exe` that isn't a helper (see [`HELPER_EXE_WORDS`]).
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct KnownEmulator {
     pub id: &'static str,
     pub name: &'static str,
-    /// Lower-case executable file names.
+    /// Lower-case executable file names, preferred first (a GUI build before a `nogui` one).
     pub executables: &'static [&'static str],
+    /// Lower-case file name prefixes (`desmume` matches `desmume_x432r_x64.exe`).
+    pub prefixes: &'static [&'static str],
     /// Systems in preference order relative to other emulators: see [`preference`].
     pub systems: &'static [&'static str],
     /// Default argument template (`{rom}`, `{romdir}`, `{romname}`); editable per profile.
     pub default_args: &'static str,
-    /// The default template can't work as is (RetroArch needs a core): such a profile is
-    /// never picked automatically until its arguments are changed.
+    /// The default template can't be trusted as is: such a profile is never picked
+    /// automatically and won't launch until its arguments are changed (see
+    /// `emulators::needs_configuration`).
     pub needs_configuration: bool,
     /// One line shown next to the profile.
     pub note: &'static str,
@@ -374,258 +385,211 @@ pub struct KnownEmulator {
 /// RetroArch's template placeholder that must be replaced with a real core.
 pub const RETROARCH_CORE_PLACEHOLDER: &str = "CORE_NAME";
 
-pub static EMULATORS: &[KnownEmulator] = &[
-    KnownEmulator {
-        id: "dolphin",
-        name: "Dolphin",
-        executables: &["dolphin.exe"],
-        systems: &["gc", "wii"],
-        default_args: "-b -e {rom}",
-        needs_configuration: false,
-        note: "GameCube and Wii.",
-    },
-    KnownEmulator {
-        id: "pcsx2",
-        name: "PCSX2",
-        executables: &[
-            "pcsx2-qt.exe",
-            "pcsx2-qtx64.exe",
-            "pcsx2-qtx64-avx2.exe",
-            "pcsx2.exe",
-            "pcsx2x64.exe",
-            "pcsx2x64-avx2.exe",
-        ],
-        systems: &["ps2"],
-        default_args: "-batch -- {rom}",
-        needs_configuration: false,
-        note: "PlayStation 2.",
-    },
-    KnownEmulator {
-        id: "rpcs3",
-        name: "RPCS3",
-        executables: &["rpcs3.exe"],
-        systems: &["ps3"],
-        default_args: "--no-gui {rom}",
-        needs_configuration: false,
-        note: "PlayStation 3. Folder games launch their EBOOT.BIN.",
-    },
-    KnownEmulator {
-        id: "duckstation",
-        name: "DuckStation",
-        executables: &[
-            "duckstation-qt-x64-releaseltcg.exe",
-            "duckstation-qt-arm64-releaseltcg.exe",
-            "duckstation-qt.exe",
-            "duckstation.exe",
-        ],
-        systems: &["ps1"],
-        default_args: "-batch -- {rom}",
-        needs_configuration: false,
-        note: "PlayStation.",
-    },
-    KnownEmulator {
-        id: "ppsspp",
-        name: "PPSSPP",
-        executables: &[
-            "ppssppwindows64.exe",
-            "ppssppwindows.exe",
-            "ppssppwindowsarm64.exe",
-        ],
-        systems: &["psp"],
-        default_args: "{rom}",
-        needs_configuration: false,
-        note: "PlayStation Portable.",
-    },
-    KnownEmulator {
-        id: "ryujinx",
-        name: "Ryujinx",
-        executables: &["ryujinx.exe", "ryujinx.ava.exe"],
-        systems: &["switch"],
-        default_args: "{rom}",
-        needs_configuration: false,
-        note: "Nintendo Switch (Ryujinx and its forks).",
-    },
-    KnownEmulator {
-        id: "yuzu",
-        name: "yuzu-based",
-        executables: &[
-            "yuzu.exe",
-            "suyu.exe",
-            "sudachi.exe",
-            "citron.exe",
-            "eden.exe",
-            "torzu.exe",
-        ],
-        systems: &["switch"],
-        default_args: "-g {rom}",
-        needs_configuration: false,
-        note: "Nintendo Switch (yuzu forks: suyu, Sudachi, Citron, Eden, torzu).",
-    },
-    KnownEmulator {
-        id: "cemu",
-        name: "Cemu",
-        executables: &["cemu.exe"],
-        systems: &["wiiu"],
-        default_args: "-g {rom}",
-        needs_configuration: false,
-        note: "Wii U.",
-    },
-    KnownEmulator {
-        id: "xemu",
-        name: "xemu",
-        executables: &["xemu.exe"],
-        systems: &["xbox"],
-        default_args: "-dvd_path {rom}",
-        needs_configuration: false,
-        note: "Original Xbox (needs its BIOS files configured in xemu).",
-    },
-    KnownEmulator {
-        id: "xenia-canary",
-        name: "Xenia Canary",
-        executables: &["xenia_canary.exe"],
-        systems: &["xbox360"],
-        default_args: "{rom}",
-        needs_configuration: false,
-        note: "Xbox 360.",
-    },
-    KnownEmulator {
-        id: "xenia",
-        name: "Xenia",
-        executables: &["xenia.exe"],
-        systems: &["xbox360"],
-        default_args: "{rom}",
-        needs_configuration: false,
-        note: "Xbox 360.",
-    },
-    KnownEmulator {
-        id: "melonds",
-        name: "melonDS",
-        executables: &["melonds.exe"],
-        systems: &["nds"],
-        default_args: "{rom}",
-        needs_configuration: false,
-        note: "Nintendo DS.",
-    },
-    KnownEmulator {
-        id: "azahar",
-        name: "Azahar",
-        executables: &["azahar.exe"],
-        systems: &["n3ds"],
-        default_args: "{rom}",
-        needs_configuration: false,
-        note: "Nintendo 3DS.",
-    },
-    KnownEmulator {
-        id: "lime3ds",
-        name: "Lime3DS",
-        executables: &["lime3ds.exe", "lime3ds-gui.exe", "lime3ds-qt.exe"],
-        systems: &["n3ds"],
-        default_args: "{rom}",
-        needs_configuration: false,
-        note: "Nintendo 3DS.",
-    },
-    KnownEmulator {
-        id: "citra",
-        name: "Citra",
-        executables: &["citra-qt.exe", "citra.exe"],
-        systems: &["n3ds"],
-        default_args: "{rom}",
-        needs_configuration: false,
-        note: "Nintendo 3DS.",
-    },
-    KnownEmulator {
-        id: "mgba",
-        name: "mGBA",
-        executables: &["mgba.exe"],
-        systems: &["gba", "gb"],
-        default_args: "{rom}",
-        needs_configuration: false,
-        note: "Game Boy Advance, Game Boy and Game Boy Color.",
-    },
-    KnownEmulator {
-        id: "project64",
-        name: "Project64",
-        executables: &["project64.exe"],
-        systems: &["n64"],
-        default_args: "{rom}",
-        needs_configuration: false,
-        note: "Nintendo 64.",
-    },
-    KnownEmulator {
-        id: "snes9x",
-        name: "Snes9x",
-        executables: &["snes9x-x64.exe", "snes9x.exe"],
-        systems: &["snes"],
-        default_args: "{rom}",
-        needs_configuration: false,
-        note: "Super Nintendo.",
-    },
-    KnownEmulator {
-        id: "mesen",
-        name: "Mesen",
-        executables: &["mesen.exe"],
-        systems: &["nes", "snes", "gb"],
-        default_args: "{rom}",
-        needs_configuration: false,
-        note: "NES, SNES and Game Boy (Mesen 2).",
-    },
-    KnownEmulator {
-        id: "flycast",
-        name: "Flycast",
-        executables: &["flycast.exe"],
-        systems: &["dreamcast"],
-        default_args: "{rom}",
-        needs_configuration: false,
-        note: "Dreamcast.",
-    },
-    KnownEmulator {
-        id: "vita3k",
-        name: "Vita3K",
-        executables: &["vita3k.exe"],
-        systems: &["psvita"],
-        default_args: "{rom}",
-        needs_configuration: false,
-        note: "PlayStation Vita. Opening a .vpk installs it in Vita3K.",
-    },
-    KnownEmulator {
-        id: "shadps4",
-        name: "shadPS4",
-        executables: &["shadps4.exe"],
-        systems: &["ps4"],
-        default_args: "-g {rom}",
-        needs_configuration: false,
-        note: "PlayStation 4. Folder games launch their eboot.bin.",
-    },
-    KnownEmulator {
-        id: "retroarch",
-        name: "RetroArch",
-        executables: &["retroarch.exe"],
-        systems: &[
-            "nes",
-            "snes",
-            "gb",
-            "gba",
-            "n64",
-            "nds",
-            "genesis",
-            "ps1",
-            "psp",
-            "saturn",
-            "dreamcast",
-            "arcade",
-        ],
-        default_args: "-L cores\\CORE_NAME_libretro.dll {rom}",
-        needs_configuration: true,
-        note: "Needs a core: replace CORE_NAME in the arguments (e.g. snes9x, mgba, swanstation).",
-    },
+/// Words that mark an executable as a helper, never the emulator itself (prefix matches only;
+/// exact names are listed explicitly).
+pub const HELPER_EXE_WORDS: &[&str] = &[
+    "update", "uninst", "unins", "setup", "install", "room", "cli", "cmd", "tool", "launcher",
+    "helper", "crash", "debug", "server", "nogui", "headless", "manager",
 ];
+
+/// Folder names an emulator scan never enters: emulator data (virtual consoles' drives,
+/// shader and save data, cores, assets, ...) that can hold tens of thousands of files and
+/// never contains another emulator's executable. Lower-case.
+pub const HEAVY_EMULATOR_DIRS: &[&str] = &[
+    "dev_hdd0",
+    "dev_hdd1",
+    "dev_flash",
+    "dev_flash2",
+    "dev_flash3",
+    "dev_usb000",
+    "dev_usb",
+    "dev_bdvd",
+    "dev_blind",
+    "shaders",
+    "shader",
+    "shadercache",
+    "shader_cache",
+    "cache",
+    "caches",
+    "pipelinecache",
+    "cores",
+    "assets",
+    "system",
+    "saves",
+    "savestates",
+    "states",
+    "sstates",
+    "screenshots",
+    "snaps",
+    "thumbnails",
+    "nand",
+    "sdmc",
+    "user",
+    "users",
+    "playlists",
+    "database",
+    "overlays",
+    "autoconfig",
+    "downloads",
+    "logs",
+    "memcards",
+    "games",
+    "roms",
+    "isos",
+    "textures",
+    "load",
+    "dump",
+    "dumps",
+    "covers",
+    "cheats",
+    "gamesettings",
+    "inputprofiles",
+    "resources",
+    "translations",
+    "locale",
+    "lang",
+    "languages",
+    "data",
+    "qt",
+    "plugins",
+    "platforms",
+    "imageformats",
+    "styles",
+    "iconengines",
+    "__pycache__",
+    "node_modules",
+];
+
+/// File names skipped everywhere (Windows folder metadata).
+pub const SKIPPED_FILE_NAMES: &[&str] = &["desktop.ini", "thumbs.db"];
+
+macro_rules! emu {
+    ($id:literal, $name:literal, [$($exe:literal),* $(,)?], [$($prefix:literal),* $(,)?],
+     [$($sys:literal),* $(,)?], $args:literal, $needs:literal, $note:literal) => {
+        KnownEmulator {
+            id: $id,
+            name: $name,
+            executables: &[$($exe),*],
+            prefixes: &[$($prefix),*],
+            systems: &[$($sys),*],
+            default_args: $args,
+            needs_configuration: $needs,
+            note: $note,
+        }
+    };
+}
+
+/// Catalog order is also the default-emulator preference within a system (see
+/// [`preference`]): dedicated emulators first, multi-system ones (BizHawk, Mednafen) after,
+/// RetroArch last.
+pub static EMULATORS: &[KnownEmulator] = &[
+    emu!("dolphin", "Dolphin", ["dolphin.exe"], [], ["gc", "wii"], "-b -e {rom}", false,
+        "GameCube and Wii."),
+    emu!("pcsx2", "PCSX2",
+        ["pcsx2-qtx64-avx2.exe", "pcsx2-qtx64.exe", "pcsx2-qt.exe", "pcsx2.exe", "pcsx2x64.exe",
+         "pcsx2x64-avx2.exe"], [],
+        ["ps2"], "-batch -- {rom}", false, "PlayStation 2."),
+    emu!("rpcs3", "RPCS3", ["rpcs3.exe"], [], ["ps3"], "--no-gui {rom}", false,
+        "PlayStation 3. Folder games launch their EBOOT.BIN."),
+    emu!("duckstation", "DuckStation",
+        ["duckstation-qt-x64-releaseltcg.exe", "duckstation-qt-arm64-releaseltcg.exe",
+         "duckstation-qt.exe", "duckstation.exe", "duckstation-nogui-x64-releaseltcg.exe",
+         "duckstation-nogui.exe"], [],
+        ["ps1"], "-batch -- {rom}", false, "PlayStation."),
+    emu!("ppsspp", "PPSSPP", ["ppssppwindows64.exe", "ppssppwindows.exe", "ppssppwindowsarm64.exe"],
+        [], ["psp"], "{rom}", false, "PlayStation Portable."),
+    emu!("ryujinx", "Ryujinx", ["ryujinx.exe", "ryujinx.ava.exe"], [], ["switch"], "{rom}", false,
+        "Nintendo Switch (Ryujinx and forks such as Ryubing)."),
+    emu!("eden", "Eden", ["eden.exe"], [], ["switch"], "-g {rom}", false, "Nintendo Switch."),
+    emu!("citron", "Citron", ["citron.exe"], [], ["switch"], "-g {rom}", false, "Nintendo Switch."),
+    emu!("eglantine", "Eglantine", ["eglantine.exe"], [], ["switch"], "-g {rom}", false,
+        "Nintendo Switch (Eden-based)."),
+    emu!("lichii", "Lichii", ["lichii.exe"], [], ["switch"], "-g {rom}", false,
+        "Nintendo Switch (Eden-based)."),
+    emu!("orchid", "Orchid", ["orchid.exe"], [], ["switch"], "-g {rom}", false,
+        "Nintendo Switch (Eden-based)."),
+    emu!("selevet", "Selevet", ["selevet.exe"], [], ["switch"], "-g {rom}", false,
+        "Nintendo Switch (Eden-based)."),
+    emu!("sudachi", "Sudachi", ["sudachi.exe"], [], ["switch"], "-g {rom}", false,
+        "Nintendo Switch."),
+    emu!("suyu", "suyu", ["suyu.exe"], [], ["switch"], "-g {rom}", false, "Nintendo Switch."),
+    emu!("torzu", "torzu", ["torzu.exe"], [], ["switch"], "-g {rom}", false, "Nintendo Switch."),
+    emu!("yuzu", "yuzu", ["yuzu.exe"], [], ["switch"], "-g {rom}", false, "Nintendo Switch."),
+    emu!("cemu", "Cemu", ["cemu.exe"], [], ["wiiu"], "-g {rom}", false, "Wii U."),
+    emu!("xemu", "xemu", ["xemu.exe"], [], ["xbox"], "-dvd_path {rom}", false,
+        "Original Xbox (needs its BIOS files configured in xemu)."),
+    emu!("xenia-canary", "Xenia Canary", ["xenia_canary.exe"], [], ["xbox360"], "{rom}", false,
+        "Xbox 360."),
+    emu!("xenia", "Xenia", ["xenia.exe"], [], ["xbox360"], "{rom}", false, "Xbox 360."),
+    emu!("melonds", "melonDS", ["melonds.exe"], [], ["nds"], "{rom}", false, "Nintendo DS."),
+    emu!("desmume", "DeSmuME", ["desmume.exe"], ["desmume"], ["nds"], "{rom}", false,
+        "Nintendo DS."),
+    emu!("azahar", "Azahar", ["azahar.exe"], [], ["n3ds"], "{rom}", false, "Nintendo 3DS."),
+    emu!("lime3ds", "Lime3DS", ["lime3ds.exe", "lime3ds-gui.exe", "lime3ds-qt.exe"], [], ["n3ds"],
+        "{rom}", false, "Nintendo 3DS."),
+    emu!("citra", "Citra", ["citra-qt.exe", "citra.exe"], [], ["n3ds"], "{rom}", false,
+        "Nintendo 3DS."),
+    emu!("mgba", "mGBA", ["mgba.exe"], [], ["gba", "gb"], "{rom}", false,
+        "Game Boy Advance, Game Boy and Game Boy Color."),
+    emu!("vbam", "VisualBoyAdvance-M", ["visualboyadvance-m.exe", "vbam.exe"], [], ["gba", "gb"],
+        "{rom}", false, "Game Boy Advance, Game Boy and Game Boy Color."),
+    emu!("project64", "Project64", ["project64.exe"], [], ["n64"], "{rom}", false,
+        "Nintendo 64."),
+    emu!("snes9x", "Snes9x", ["snes9x-x64.exe", "snes9x.exe"], [], ["snes"], "{rom}", false,
+        "Super Nintendo."),
+    emu!("bsnes", "bsnes", ["bsnes.exe", "bsnes_hd.exe"], [], ["snes"], "{rom}", false,
+        "Super Nintendo (bsnes and bsnes-hd)."),
+    emu!("mesen", "Mesen", ["mesen.exe"], [], ["nes", "snes", "gb"], "{rom}", false,
+        "NES, SNES and Game Boy (Mesen 2)."),
+    emu!("fceux", "FCEUX", ["fceux64.exe", "fceux.exe"], [], ["nes"], "{rom}", false, "NES."),
+    emu!("kega-fusion", "Kega Fusion", ["fusion.exe"], [], ["genesis"], "{rom}", false,
+        "Genesis / Mega Drive."),
+    emu!("flycast", "Flycast", ["flycast.exe"], [], ["dreamcast"], "{rom}", false, "Dreamcast."),
+    emu!("redream", "Redream", ["redream.exe"], [], ["dreamcast"], "{rom}", false, "Dreamcast."),
+    emu!("vita3k", "Vita3K", ["vita3k.exe"], [], ["psvita"], "{rom}", false,
+        "PlayStation Vita. Opening a .vpk installs it in Vita3K."),
+    emu!("shadps4", "shadPS4", ["shadps4.exe"], [], ["ps4"], "-g {rom}", false,
+        "PlayStation 4. Folder games launch their eboot.bin."),
+    emu!("fbneo", "FinalBurn Neo", ["fbneo64.exe", "fbneo.exe"], [], ["arcade"], "{romname}", true,
+        "Arcade. FinalBurn Neo starts a game by its ROM set name and looks for it in its own ROM folders: add your arcade folder in FinalBurn Neo first, then confirm the arguments here."),
+    emu!("bizhawk", "BizHawk", ["emuhawk.exe"], [],
+        ["nes", "snes", "gb", "gba", "n64", "nds", "genesis", "ps1", "saturn"], "{rom}", false,
+        "Many systems; dedicated emulators are preferred when present."),
+    emu!("mednafen", "Mednafen", ["mednafen.exe"], [],
+        ["ps1", "saturn", "nes", "snes", "gba", "gb", "genesis"], "{rom}", false,
+        "Many systems; dedicated emulators are preferred when present."),
+    emu!("retroarch", "RetroArch", ["retroarch.exe"], [],
+        ["nes", "snes", "gb", "gba", "n64", "nds", "genesis", "ps1", "psp", "saturn",
+         "dreamcast", "arcade"],
+        "-L cores\\CORE_NAME_libretro.dll {rom}", true,
+        "Needs a core: replace CORE_NAME in the arguments (e.g. snes9x, mgba, swanstation)."),
+];
+
+/// The known emulator an executable file name belongs to (`"Dolphin.exe"` → Dolphin), and
+/// the index of the matched name in its `executables` (prefix matches rank after them).
+pub fn match_executable(file_name: &str) -> Option<(&'static KnownEmulator, usize)> {
+    let lower = file_name.to_lowercase();
+    if let Some((known, index)) = EMULATORS.iter().find_map(|e| {
+        e.executables
+            .iter()
+            .position(|x| *x == lower)
+            .map(|i| (e, i))
+    }) {
+        return Some((known, index));
+    }
+    let stem = lower.strip_suffix(".exe")?;
+    if HELPER_EXE_WORDS.iter().any(|w| stem.contains(w)) {
+        return None;
+    }
+    EMULATORS
+        .iter()
+        .find(|e| e.prefixes.iter().any(|p| stem.starts_with(p)))
+        .map(|e| (e, e.executables.len()))
+}
 
 /// The known emulator an executable file name belongs to (`"Dolphin.exe"` → Dolphin).
 pub fn emulator_for_executable(file_name: &str) -> Option<&'static KnownEmulator> {
-    let lower = file_name.to_lowercase();
-    EMULATORS
-        .iter()
-        .find(|e| e.executables.contains(&lower.as_str()))
+    match_executable(file_name).map(|(known, _)| known)
 }
 
 pub fn known_emulator(id: &str) -> Option<&'static KnownEmulator> {
@@ -711,6 +675,15 @@ mod tests {
     fn folder_aliases_ignore_case_spaces_and_punctuation() {
         for (name, id) in [
             ("Sony 3", "ps3"),
+            ("Sony Playstation", "ps1"),
+            ("Sony Playstation 2", "ps2"),
+            ("Sony Playstation 3", "ps3"),
+            ("Sony Playstation 4", "ps4"),
+            ("Sony Playstation Portable", "psp"),
+            ("sony   playstation portable", "psp"),
+            ("PC Game", "pc"),
+            ("PC Games", "pc"),
+            ("pcgame", "pc"),
             ("PlayStation 3", "ps3"),
             ("ps3", "ps3"),
             ("PS-3", "ps3"),
@@ -771,12 +744,15 @@ mod tests {
             for s in e.systems {
                 assert!(is_system_id(s), "{} lists unknown system {s}", e.id);
             }
+            for prefix in e.prefixes {
+                assert_eq!(*prefix, prefix.to_lowercase());
+            }
             for exe in e.executables {
                 assert!(exe.ends_with(".exe") && *exe == exe.to_lowercase());
                 assert!(exes.insert(*exe), "{exe} listed twice");
             }
             assert!(
-                e.default_args.contains("{rom}"),
+                e.default_args.contains("{rom"),
                 "{} template lacks {{rom}}",
                 e.id
             );
@@ -787,27 +763,70 @@ mod tests {
 
     #[test]
     fn executables_map_to_known_emulators() {
-        assert_eq!(
-            emulator_for_executable("Dolphin.exe").unwrap().id,
-            "dolphin"
-        );
-        assert_eq!(emulator_for_executable("pcsx2-qt.exe").unwrap().id, "pcsx2");
-        assert_eq!(
-            emulator_for_executable("Ryujinx.exe").unwrap().id,
-            "ryujinx"
-        );
-        assert_eq!(emulator_for_executable("citron.exe").unwrap().id, "yuzu");
-        assert_eq!(
-            emulator_for_executable("xenia_canary.exe").unwrap().id,
-            "xenia-canary"
-        );
-        assert_eq!(
-            emulator_for_executable("retroarch.exe").unwrap().id,
-            "retroarch"
-        );
-        assert!(emulator_for_executable("DolphinTool.exe").is_none());
-        assert!(emulator_for_executable("yuzu-cmd.exe").is_none());
-        assert!(emulator_for_executable("dolphin.dll").is_none());
+        let id = |name: &str| emulator_for_executable(name).map(|e| e.id);
+        for (exe, expected) in [
+            ("Dolphin.exe", "dolphin"),
+            ("pcsx2-qtx64-avx2.exe", "pcsx2"),
+            ("pcsx2-qt.exe", "pcsx2"),
+            ("duckstation-qt-x64-ReleaseLTCG.exe", "duckstation"),
+            ("duckstation-nogui-x64-ReleaseLTCG.exe", "duckstation"),
+            ("PPSSPPWindows64.exe", "ppsspp"),
+            ("Ryujinx.exe", "ryujinx"),
+            ("citra-qt.exe", "citra"),
+            ("citron.exe", "citron"),
+            ("eden.exe", "eden"),
+            ("eglantine.exe", "eglantine"),
+            ("lichii.exe", "lichii"),
+            ("orchid.exe", "orchid"),
+            ("selevet.exe", "selevet"),
+            ("yuzu.exe", "yuzu"),
+            ("shadPS4.exe", "shadps4"),
+            ("xenia_canary.exe", "xenia-canary"),
+            ("retroarch.exe", "retroarch"),
+            ("DeSmuME_X432R_x64.exe", "desmume"),
+            ("DeSmuME.exe", "desmume"),
+            ("EmuHawk.exe", "bizhawk"),
+            ("fceux64.exe", "fceux"),
+            ("bsnes_hd.exe", "bsnes"),
+            ("Fusion.exe", "kega-fusion"),
+            ("mednafen.exe", "mednafen"),
+            ("redream.exe", "redream"),
+            ("visualboyadvance-m.exe", "vbam"),
+            ("fbneo64.exe", "fbneo"),
+            ("Mesen.exe", "mesen"),
+            ("Vita3K.exe", "vita3k"),
+            ("Cemu.exe", "cemu"),
+            ("azahar.exe", "azahar"),
+            ("melonDS.exe", "melonds"),
+            ("Project64.exe", "project64"),
+            ("snes9x-x64.exe", "snes9x"),
+            ("xemu.exe", "xemu"),
+        ] {
+            assert_eq!(id(exe), Some(expected), "{exe}");
+        }
+        for exe in [
+            "DolphinTool.exe",
+            "yuzu-cmd.exe",
+            "eden-cli.exe",
+            "dolphin.dll",
+            "XeniaManager.exe",
+            "GR2Launcher.exe",
+            "blueMSX.exe",
+            "kyty_emulator.exe",
+            "SharpEmu.exe",
+            "RegroupLogs.exe",
+            "desmume-updater.exe",
+            "desmume_uninstall.exe",
+            "DeSmuME-cli.exe",
+            "desmume_room.exe",
+            "Mesen.2.1.exe",
+        ] {
+            assert_eq!(id(exe), None, "{exe}");
+        }
+        // The GUI build ranks before the no-GUI one.
+        let (_, qt) = match_executable("duckstation-qt-x64-ReleaseLTCG.exe").unwrap();
+        let (_, nogui) = match_executable("duckstation-nogui-x64-ReleaseLTCG.exe").unwrap();
+        assert!(qt < nogui);
     }
 
     #[test]

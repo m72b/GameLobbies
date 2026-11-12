@@ -153,7 +153,8 @@ fn executable_path(entry: &RegistryEntry, install_path: &str) -> Option<PathBuf>
 }
 
 /// The `.exe` files in `folder` and one level below, best first: each word (longer than
-/// three characters) of `name` found in the file name scores 5. Installers, uninstallers,
+/// three characters) of `name` found in the file name scores 5, and an exe with a matching
+/// `<name>_Data` folder (Unity) scores 10. Installers, uninstallers,
 /// crash handlers and updaters are left out. Ties are sorted by path. Any error listing
 /// `folder` or a subfolder (or reading an entry's type) is returned, so a partial listing is
 /// never mistaken for the whole folder.
@@ -176,6 +177,12 @@ pub fn ranked_executables(folder: &Path, name: &str) -> std::io::Result<Vec<(Pat
             dirs.push(path);
         }
     }
+    // Unity games ship `<Game>.exe` next to `<Game>_Data`: a strong sign of the main exe.
+    let data_dirs: std::collections::HashSet<String> = dirs
+        .iter()
+        .map(|d| file_name_lower(d))
+        .filter(|n| n.ends_with("_data"))
+        .collect();
     for dir in dirs {
         for (path, kind) in entries(&dir)? {
             if kind.is_file() && file_name_lower(&path).ends_with(".exe") {
@@ -193,7 +200,13 @@ pub fn ranked_executables(folder: &Path, name: &str) -> std::io::Result<Vec<(Pat
         .filter(|p| !IGNORED_EXE.is_match(&file_name_lower(p)))
         .map(|p| {
             let name = file_name_lower(&p);
-            let score = terms.iter().filter(|t| name.contains(*t)).count() * 5;
+            let stem = name.strip_suffix(".exe").unwrap_or(&name);
+            let data_bonus = if data_dirs.contains(&format!("{stem}_data")) {
+                10
+            } else {
+                0
+            };
+            let score = terms.iter().filter(|t| name.contains(*t)).count() * 5 + data_bonus;
             (p, score)
         })
         .collect();

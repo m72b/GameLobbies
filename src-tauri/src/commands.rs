@@ -385,9 +385,20 @@ pub async fn settings_save(
 }
 
 // Must be async: creating a window from a synchronous (main-thread) command deadlocks on Windows.
+/// `section`: optional page to show (only the ids in `windows::SETTINGS_SECTIONS`).
 #[tauri::command]
-pub async fn settings_open(app: AppHandle) -> CmdResult<()> {
-    windows::open_settings(&app).map_err(err)
+pub async fn settings_open(app: AppHandle, section: Option<String>) -> CmdResult<()> {
+    let section = match section.as_deref() {
+        None => None,
+        Some(id) => Some(
+            windows::SETTINGS_SECTIONS
+                .iter()
+                .copied()
+                .find(|known| *known == id)
+                .ok_or_else(|| "Unknown settings section.".to_string())?,
+        ),
+    };
+    windows::open_settings_at(&app, section).map_err(err)
 }
 
 #[tauri::command]

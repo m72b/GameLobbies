@@ -68,7 +68,8 @@ pub struct RootOutcome {
     pub ok: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
-    /// The entry cap was reached: results were added but nothing was marked missing.
+    /// The entry cap was reached: results were added but nothing was marked missing (see
+    /// `notice`).
     pub truncated: bool,
     /// Subfolders that couldn't be read.
     pub unreadable: usize,
@@ -76,6 +77,43 @@ pub struct RootOutcome {
     /// folder became unreadable before removals were applied).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub warning: Option<String>,
+    /// Not an error: the folder is so large that the scan stopped at its entry cap (see
+    /// [`truncation_notice`]). Offer a full scan.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notice: Option<String>,
+    /// Whether this was a full scan (much higher limits).
+    pub full: bool,
+}
+
+/// The user-facing text for a scan that stopped at its entry cap.
+pub fn truncation_notice(path: &str, kind: &str, cap: usize, full: bool) -> String {
+    let what = if kind == "emulators" {
+        "Emulators"
+    } else {
+        "Games"
+    };
+    let cap = group_thousands(cap);
+    if full {
+        format!(
+            "{path} has a very large number of files (more than {cap}), so even the full scan stopped early. {what} found so far were kept and nothing was marked missing. Consider adding smaller subfolders instead."
+        )
+    } else {
+        format!(
+            "{path} has a very large number of files (more than {cap}), so the quick scan stopped early. {what} found so far were kept and nothing was marked missing. A full scan can take several minutes."
+        )
+    }
+}
+
+fn group_thousands(n: usize) -> String {
+    let digits = n.to_string();
+    let mut out = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
 }
 
 #[derive(Serialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -159,6 +197,7 @@ fn scan_inputs(conn: &Connection) -> Result<ScanInputs> {
         ignored: db::ignore_keys(conn, db::IGNORE_PATH)?,
         exe_choices,
         shortcut_ok: db::shortcut_confirmations(conn)?,
+        limits: localscan::ScanLimits::default(),
     })
 }
 
@@ -418,6 +457,7 @@ pub fn refresh_duplicates(conn: &Connection) -> Result<()> {
 pub fn scan_roots(
     db: &Db,
     roots: &[LibraryRoot],
+    full: bool,
     progress: &mut dyn FnMut(Progress),
 ) -> Result<ScanSummary> {
     let started = Instant::now();
@@ -432,6 +472,7 @@ pub fn scan_roots(
             path: root.path.clone(),
             kind: root.kind.clone(),
             ok: true,
+            full,
             ..Default::default()
         };
         let phase = if root.kind == "emulators" {
@@ -458,7 +499,8 @@ pub fn scan_roots(
         let mut root_counts = json!({});
         if root.kind == "emulators" {
             let ignored = db::ignore_keys(&db.lock(), db::IGNORE_EMULATOR)?;
-            match emulators::discover(&root_path, &ignored, &mut report) {
+            let limits = localscan::ScanLimits::emulators(full);
+            match emulators::discover(&root_path, &ignored, limits, &mut report) {
                 Ok(found) => {
                     let mut counts = emulators::apply_discovered(&db.lock(), &found)?;
                     // Availability needs the filesystem: check it without the database lock.
@@ -469,8 +511,16 @@ pub fn scan_roots(
                     summary.emulators.updated += counts.updated;
                     summary.emulators.unavailable += counts.unavailable;
                     outcome.truncated = found.truncated;
+                    if found.truncated {
+                        outcome.notice = Some(truncation_notice(
+                            &root.path,
+                            &root.kind,
+                            limits.max_entries,
+                            full,
+                        ));
+                    }
                     outcome.unreadable = found.unreadable.len();
-                    root_counts = json!({ "emulators": counts });
+                    root_counts = json!({ "emulators": counts, "visited": found.visited });
                 }
                 Err(e) => {
                     outcome.ok = false;
@@ -478,7 +528,8 @@ pub fn scan_roots(
                 }
             }
         } else {
-            let inputs = scan_inputs(&db.lock())?;
+            let mut inputs = scan_inputs(&db.lock())?;
+            inputs.limits = localscan::ScanLimits::games(full);
             match localscan::scan_games(&root_path, &inputs, &mut report) {
                 Ok(scan) => {
                     // The walk may have taken a while: re-check the root, then lock.
@@ -493,6 +544,14 @@ pub fn scan_roots(
                     g.failed += counts.failed;
                     g.removals_held += counts.removals_held;
                     outcome.truncated = scan.truncated;
+                    if scan.truncated && scan.visited > inputs.limits.max_entries {
+                        outcome.notice = Some(truncation_notice(
+                            &root.path,
+                            &root.kind,
+                            inputs.limits.max_entries,
+                            full,
+                        ));
+                    }
                     outcome.unreadable = scan.unreadable.len();
                     for sample in scan
                         .unsupported
@@ -1028,7 +1087,7 @@ mod tests {
 
         fn scan(&self) -> ScanSummary {
             let roots = crate::roots::list(&self.db.lock()).unwrap();
-            scan_roots(&self.db, &roots, &mut |_| {}).unwrap()
+            scan_roots(&self.db, &roots, false, &mut |_| {}).unwrap()
         }
 
         fn games(&self) -> Vec<Game> {
@@ -1630,5 +1689,66 @@ mod tests {
             panic!("confirmed shortcut")
         };
         assert_eq!(key_of(Path::new(&g.routes[0].launch_target)), key_of(&lnk));
+    }
+    #[cfg(windows)]
+    #[test]
+    fn the_users_hidden_library_scans_as_a_parent_and_as_a_system_folder_root() {
+        let f = Fixture::new("local-retro");
+        crate::localscan::tests::retro_project(&f.dir);
+        f.add_root("games", "Retro Project");
+        let summary = f.scan();
+        assert!(summary.roots[0].ok && !summary.roots[0].truncated);
+        assert_eq!(summary.roots[0].notice, None);
+        assert_eq!(summary.games.added, 9, "6 ROM/folder games and 3 PC games");
+        let titles: Vec<String> = f.games().into_iter().map(|g| g.title).collect();
+        for title in [
+            "Cairn",
+            "ObraDinn",
+            "Rogue Legacy",
+            "Sly Cooper: Thieves in Time",
+            "Sly 3 Honor Among Thieves",
+        ] {
+            assert!(titles.contains(&title.to_string()), "{title} in {titles:?}");
+        }
+        // The two Castlevania files are separate games and one duplicate item.
+        let items = review::list(&f.db.lock(), false).unwrap();
+        assert!(items.iter().any(|i| i.kind == DUPLICATE));
+        // A title the user typed always wins over the executable's.
+        let cairn = f.game("Cairn");
+        db::save_game(
+            &f.db.lock(),
+            &GamePatch {
+                title: Some("Cairn (my copy)".into()),
+                ..GamePatch::new(cairn.id.clone())
+            },
+        )
+        .unwrap();
+        let again = f.scan();
+        assert_eq!((again.games.added, again.games.updated), (0, 0));
+        assert_eq!(f.game("Cairn (my copy)").id, cairn.id);
+
+        // The system folder itself as the root.
+        let g = Fixture::new("local-retro-system");
+        crate::localscan::tests::retro_project(&g.dir);
+        g.add_root("games", "Retro Project/Sony Playstation");
+        g.add_root("games", "Retro Project/PC Game");
+        let summary = g.scan();
+        assert_eq!(summary.games.added, 5, "2 PlayStation games and 3 PC games");
+        assert!(g.games().iter().any(|game| game.title == "ObraDinn"));
+    }
+
+    #[test]
+    fn truncation_is_a_notice_not_an_error() {
+        let quick = truncation_notice(r"C:\Retro\Emulators", "emulators", 200_000, false);
+        assert!(quick.contains("more than 200,000"), "{quick}");
+        assert!(quick.contains("quick scan stopped early"));
+        assert!(quick.contains("Emulators found so far were kept"));
+        assert!(quick.contains("full scan can take several minutes"));
+        assert!(!quick.contains("cut short"));
+        let full = truncation_notice(r"D:\Roms", "games", 3_000_000, true);
+        assert!(full.contains("more than 3,000,000") && full.contains("even the full scan"));
+        assert!(full.contains("Games found so far were kept"));
+        assert_eq!(group_thousands(999), "999");
+        assert_eq!(group_thousands(1_000), "1,000");
     }
 }
