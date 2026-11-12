@@ -1,4 +1,22 @@
-# Rust migration analysis (`Rusted` branch)
+# Rust migration (`Rusted` branch)
+
+> **Status: done.** Game Lobby now runs on Tauri 2 with a Rust backend in `src-tauri/`; the React UI is unchanged apart from `src/renderer/lobby-api.ts`, which maps the old `window.lobby` API onto Tauri commands. The native addon described below was a first step and has been folded into `src-tauri/src/platform.rs`. The analysis is kept for context.
+
+## What moved where
+
+| Electron (TypeScript) | Tauri (Rust) |
+| --- | --- |
+| `src/main/index.ts` (windows, IPC, launching, scans) | `lib.rs`, `windows.rs`, `commands.rs`, `launch.rs`, `scan.rs` |
+| `src/main/db/index.ts` (better-sqlite3) | `db.rs` (rusqlite, same schema) |
+| `src/main/validation.ts` (zod) | `validation.rs` |
+| `src/main/importers/*` (PowerShell, `reg.exe`) | `importers/*` (WinRT PackageManager, `winreg`) |
+| `src/main/process-tracker.ts` (PowerShell CIM) | `tracker.rs` + `platform.rs` (Toolhelp32) |
+| `src/main/secrets.ts` (`safeStorage`) | `launch.rs` + `platform.rs` (DPAPI) |
+| `src/main/themes/loader.ts` | `theme.rs` |
+| `src/preload/index.ts` | `src/renderer/lobby-api.ts` |
+
+---
+
 
 ## Current architecture
 

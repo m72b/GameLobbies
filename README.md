@@ -13,7 +13,18 @@ Game Lobby is an independent community project with its own name, codebase, and 
 - Windows playtime tracking for launched games and sorting by last played or playtime.
 - Custom cover management and JSON library backup and restore.
 - A separate settings window for library sources, appearance, emulator profiles, and remote MyUI themes.
-- A narrow preload API between the Electron renderer and main process.
+- A small native Rust backend (Tauri 2) behind a narrow, validated command API; the React UI runs in the system WebView2.
+
+## Building
+
+Requirements: Node.js 24, Rust (stable, MSVC toolchain via `rustup`), and the Visual Studio C++ Build Tools. Windows 10/11 ship the WebView2 runtime.
+
+```bash
+npm install
+npm run dev      # app with hot reload
+npm test         # Rust unit tests
+npm run build    # release build + NSIS installer in src-tauri/target/release/bundle/nsis
+```
 
 ## Library and emulator support
 
@@ -30,7 +41,7 @@ The Windows scanners support these sources:
 | itch.io | Installed games found in the local itch app folders |
 | Xbox / Microsoft Store | Best-effort installed game-package scan; package-name matching can miss games |
 
-To import Steam ownership, enter a SteamID64 and Web API key in **Settings → Libraries**. Steam must make the profile's game details public for the API to return the library. The key is stored using Windows secure storage. For Epic ownership, install and sign in to [Legendary](https://github.com/legendary-gl/legendary), then select its executable in the same settings page. GOG Galaxy is auto-detected when possible; otherwise, select its database file.
+To import Steam ownership, enter a SteamID64 and Web API key in **Settings → Libraries**. Steam must make the profile's game details public for the API to return the library. The key is encrypted with Windows DPAPI for your user account. For Epic ownership, install and sign in to [Legendary](https://github.com/legendary-gl/legendary), then select its executable in the same settings page. GOG Galaxy is auto-detected when possible; otherwise, select its database file.
 
 Scanning combines routes when their stable source and external app identity match. Games with the same title remain separate unless a source provides a shared identity; use **Link another game** in a game's detail panel to manually combine cross-store duplicates. This avoids merging unrelated games such as different releases with identical names. Open a game's detail panel to choose **Play from** a particular store. Installed discovery for the other listed stores is local-only; those integrations do not retrieve complete online account catalogs.
 
@@ -40,7 +51,7 @@ Emulator profiles can store an executable path, launch arguments, ROM folders, a
 
 ## Extensions
 
-Library integrations follow the `Importer` contract in `src/main/importers/types.ts`. An importer discovers games in the main process and returns normalized game records with one or more launch routes. The source registry currently lives in `src/main/index.ts`.
+Library integrations live in `src-tauri/src/importers/`. Each importer discovers games in the Rust backend and returns normalized game records with one or more launch routes. Scans are orchestrated in `src-tauri/src/scan.rs`.
 
 Community integrations are intended to use declarative manifests for identity and metadata. A manifest does not make downloaded code safe: third-party JavaScript should not be downloaded and executed inside the renderer or main process.
 
@@ -62,7 +73,7 @@ Theme JSON example: [`themes/example.json`](themes/example.json). CSS themes sho
 
 ## Local data and privacy
 
-The SQLite database is managed by `src/main/db/index.ts` and is stored in Electron's per-user application data directory. It uses write-ahead logging and foreign-key checks. JSON backups include game metadata, launch routes, settings, and emulator profiles. Only the optional Steam ownership import uses a credential entered in Game Lobby; the Steam API key is encrypted with Windows secure storage. Epic ownership uses the separately installed Legendary client and its existing sign-in.
+The SQLite database is managed by `src-tauri/src/db.rs` and is stored in `%APPDATA%\app.gamelobby.desktop`. On first launch, Game Lobby copies an existing library and custom covers from the earlier Electron build (`%APPDATA%\game-lobby`), leaving the original untouched; re-enter a Steam API key once, because keys encrypted by the Electron build can't be read. It uses write-ahead logging and foreign-key checks. JSON backups include game metadata, launch routes, settings, and emulator profiles. Only the optional Steam ownership import uses a credential entered in Game Lobby; the Steam API key is encrypted with Windows DPAPI. Epic ownership uses the separately installed Legendary client and its existing sign-in.
 
 ## License
 

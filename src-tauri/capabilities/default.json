@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Game Lobby's own windows may call the app's commands and listen for its events. No plugin APIs (file system, shell, dialogs) are exposed to the web pages; Rust opens dialogs itself.",
+  "windows": ["main", "settings"],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:window:allow-start-dragging",
+    "core:window:allow-internal-toggle-maximize"
+  ]
+}

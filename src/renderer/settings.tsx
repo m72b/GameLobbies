@@ -1,9 +1,12 @@
+import './lobby-api'
 import { useEffect, useState } from 'react'
-import { ArrowLeft, Blocks, ChevronRight, CircleHelp, Cloud, Gamepad2, Image, Keyboard, Library, Palette, Puzzle, RotateCcw, Settings2, SlidersHorizontal, Sparkles, Star } from 'lucide-react'
-import type { EmulatorProfile, LibraryConnections, Settings } from '../shared/types'
+import { ArrowLeft, Blocks, ChevronRight, CircleHelp, Cloud, Gamepad2, Image, ImagePlus, Keyboard, Library, Palette, Puzzle, RotateCcw, Settings2, SlidersHorizontal, Sparkles, Star } from 'lucide-react'
+import type { EmulatorProfile, LibraryConnections, Settings, SteamGridDbStyle } from '../shared/types'
+import { steamGridDbStyles } from '../shared/types'
 import { defaultSettings } from '../shared/defaults'
 import packageInfo from '../../package.json'
 import { applyTheme } from './theme'
+import { StoreIcon } from './store-icons'
 import { createRoot } from 'react-dom/client'
 import './styles.css'
 
@@ -11,6 +14,7 @@ const sections = [
   ['Libraries', 'Connect stores and choose how often Game Lobby scans.', Library],
   ['Emulators', 'Manage emulator profiles and ROM folders.', Gamepad2],
   ['Covers and Metadata', 'Choose metadata sources and configure artwork.', Image],
+  ['SteamGridDB', 'Cover art from SteamGridDB: API key and preferences.', ImagePlus],
   ['Themes (MyUI)', 'Load themes from a remote JSON or CSS link.', Palette],
   ['Appearance', 'Tune poster size, badges and motion.', SlidersHorizontal],
   ['Startup and Behavior', 'Choose how the app opens and closes.', Settings2],
@@ -21,6 +25,8 @@ const sections = [
   ['Plugins / Add-ons', 'Install declarative community library plugins.', Puzzle],
   ['About and Updates', 'Version and project information.', CircleHelp]
 ] as const
+
+const sgdbStyleLabels: Record<SteamGridDbStyle, string> = { alternate: 'Alternate', blurred: 'Blurred', white_logo: 'White logo', material: 'Material', no_logo: 'No logo' }
 
 type Section = typeof sections[number][0]
 
@@ -35,6 +41,12 @@ export function SettingsApp() {
   const [busy, setBusy] = useState(false)
   const [connections, setConnections] = useState<LibraryConnections>({ steamId: '', steamApiKeySet: false, legendaryPath: '', gogDatabasePath: '' })
   const [steamApiKey, setSteamApiKey] = useState('')
+  const [sgdbKeySet, setSgdbKeySet] = useState(false)
+  const [sgdbKey, setSgdbKey] = useState('')
+  const [sgdbBusy, setSgdbBusy] = useState(false)
+  const [sgdbFetching, setSgdbFetching] = useState(false)
+  const [sgdbTest, setSgdbTest] = useState<{ ok: boolean; message: string } | null>(null)
+  const [sgdbTesting, setSgdbTesting] = useState(false)
 
   useEffect(() => {
     const offSettings = window.lobby.settings.onChanged(setSettings)
@@ -42,7 +54,8 @@ export function SettingsApp() {
       window.lobby.settings.get().then(setSettings),
       window.lobby.plugins.list().then(setPlugins),
       window.lobby.emulators.list().then(setEmulators),
-      window.lobby.library.connections().then(setConnections)
+      window.lobby.library.connections().then(setConnections),
+      window.lobby.steamGridDb.status().then(result => setSgdbKeySet(result.keySet)).catch(() => undefined)
     ])
     return offSettings
   }, [])
@@ -51,6 +64,41 @@ export function SettingsApp() {
   const say = (text: string) => {
     setMessage(text)
     window.setTimeout(() => setMessage(''), 3500)
+  }
+  const saveSgdbKey = async (key: string) => {
+    setSgdbBusy(true)
+    try {
+      const result = await window.lobby.steamGridDb.saveKey(key)
+      setSgdbKeySet(result.keySet)
+      setSgdbKey('')
+      setSgdbTest(null)
+      say(result.keySet ? 'SteamGridDB key saved' : 'SteamGridDB key removed')
+    } catch (error) { say(error instanceof Error ? error.message : 'Could not save the SteamGridDB key') }
+    finally { setSgdbBusy(false) }
+  }
+  const testSgdbKey = async () => {
+    setSgdbTesting(true)
+    try {
+      const result = await window.lobby.steamGridDb.testKey()
+      setSgdbTest(result)
+      say(result.message)
+    } catch (error) {
+      const text = error instanceof Error ? error.message : 'Could not test the SteamGridDB key'
+      setSgdbTest({ ok: false, message: text })
+      say(text)
+    } finally { setSgdbTesting(false) }
+  }
+  const toggleSgdbStyle = (style: SteamGridDbStyle) => {
+    const current = settings.steamGridDbStyles
+    void save({ steamGridDbStyles: current.includes(style) ? current.filter(item => item !== style) : [...current, style] })
+  }
+  const fetchSgdbCovers = async () => {
+    setSgdbFetching(true)
+    try {
+      const result = await window.lobby.steamGridDb.fetchMissing()
+      say('Added ' + result.updated + ' cover' + (result.updated === 1 ? '' : 's') + ' · ' + result.notFound + ' not found' + (result.errors.length ? ' · ' + result.errors[0] : ''))
+    } catch (error) { say(error instanceof Error ? error.message : 'Cover fetch failed') }
+    finally { setSgdbFetching(false) }
   }
   const save = async (patch: Partial<Settings>) => {
     try { setSettings(await window.lobby.settings.save(patch)) }
@@ -118,7 +166,7 @@ export function SettingsApp() {
   return <div className="settings-shell">
     <header className="titlebar settings-titlebar">
       <button className="back-button" onClick={() => window.close()}><ArrowLeft size={15} /></button>
-      <div className="brand">Game Lobby <span>/ Settings</span></div><div className="drag-space" />
+      <div className="brand">Game Lobby <span>/ Settings</span></div><div className="drag-space" data-tauri-drag-region />
       <button className="title-action" onClick={() => window.lobby.window.minimize()}>—</button>
       <button className="title-action" onClick={() => window.lobby.window.toggleMaximize()}>□</button>
       <button className="title-action close" onClick={() => window.lobby.window.close()}>×</button>
@@ -140,8 +188,8 @@ export function SettingsApp() {
               ['Steam', 'Installed manifests + public-profile ownership', connections.steamApiKeySet ? 'Ownership ready' : 'Installed scan'],
               ['Epic Games', 'Installed manifests + Legendary account list', connections.legendaryPath ? 'Legendary configured' : 'Installed scan'],
               ['GOG', 'Owned library from Galaxy database', connections.gogDatabasePath ? 'Database configured' : 'Auto-detect Galaxy']
-            ].map(([name, description, status]) => <div className="feature-row" key={name}><span className="store-badge small">{name[0]}</span><span className="feature-name">{name}<small>{description}</small></span><span className="status-pill">{status}</span></div>)}
-            {['EA app', 'Battle.net', 'Xbox / Microsoft Store', 'Ubisoft Connect', 'itch.io', 'Amazon Games'].map(name => <div className="feature-row" key={name}><span className="store-badge small">{name[0]}</span><span className="feature-name">{name}</span><span className="status-pill">Local scan</span></div>)}
+            ].map(([name, description, status]) => <div className="feature-row" key={name}><span className="store-badge small"><StoreIcon store={name} /></span><span className="feature-name">{name}<small>{description}</small></span><span className="status-pill">{status}</span></div>)}
+            {['EA app', 'Battle.net', 'Xbox / Microsoft Store', 'Ubisoft Connect', 'itch.io', 'Amazon Games'].map(name => <div className="feature-row" key={name}><span className="store-badge small"><StoreIcon store={name} /></span><span className="feature-name">{name}</span><span className="status-pill">Local scan</span></div>)}
           </div>
           <div className="settings-card">
             <h3>Ownership imports</h3>
@@ -154,6 +202,7 @@ export function SettingsApp() {
             <button className="secondary-button" onClick={async () => { const path = await window.lobby.library.chooseGogDatabase(); if (path) setConnections({ ...connections, gogDatabasePath: path }) }}>Browse for Galaxy database</button>
             <div className="settings-actions"><button className="secondary-button" onClick={() => void saveConnections()}>Save connections</button><button className="primary-button" onClick={() => void scanLibraries()}><Library size={15} /> Scan libraries</button></div>
           </div>
+          <div className="settings-card"><div className="toggle-row"><div><b>Show only installed games</b><small>Hide games you own but haven't installed</small></div><input type="checkbox" checked={settings.showOnlyInstalled} onChange={event => void save({ showOnlyInstalled: event.target.checked })} /></div></div>
           <label className="setting-row">Scan interval<select value={settings.scanIntervalHours} onChange={event => void save({ scanIntervalHours: +event.target.value })}><option value={0}>Manual only</option><option value={6}>Every 6 hours</option><option value={12}>Every 12 hours</option><option value={24}>Daily</option></select></label>
         </>}
 
@@ -173,11 +222,37 @@ export function SettingsApp() {
 
         {section === 'Covers and Metadata' && <div className="settings-card">
           <h3>Metadata providers</h3><p>Steam cover art is used automatically when an app ID is available.</p>
-          <div className="feature-row"><span>SteamGridDB cover search</span><span className="coming-soon">COMING SOON</span></div>
+          <div className="feature-row"><span className="feature-name">SteamGridDB<small>API key and cover preferences</small></span><button className="secondary-button" onClick={() => setSection('SteamGridDB')}>Configure</button></div>
           <div className="feature-row"><span>Default artwork style</span><span>Poster (2:3)</span></div>
           <div className="feature-row"><span>Cover cache</span><span className="status-pill">Stored locally</span></div>
           <div className="feature-row"><span>Custom cover images</span><span className="status-pill">User data folder</span></div>
         </div>}
+
+        {section === 'SteamGridDB' && <>
+          <div className="settings-card">
+          <div className="sgdb-card plain">
+            <h3>SteamGridDB</h3>
+            <p>SteamGridDB provides community cover art. It needs a free API key: sign in at steamgriddb.com, then open Profile → Preferences → API. <a className="external-link" href="https://www.steamgriddb.com/profile/preferences/api">Get an API key</a></p>
+            <form className="sgdb-key-row" onSubmit={event => { event.preventDefault(); if (sgdbKey.trim()) void saveSgdbKey(sgdbKey.trim()) }}>
+              <input type="password" aria-label="SteamGridDB API key" value={sgdbKey} onChange={event => setSgdbKey(event.target.value)} placeholder={sgdbKeySet ? 'Enter a new key to replace' : 'Paste your API key'} autoComplete="new-password" spellCheck={false} />
+              <button className="secondary-button" disabled={sgdbBusy || !sgdbKey.trim()}>Save</button>
+              {sgdbKeySet && <button type="button" className="secondary-button" disabled={sgdbBusy} onClick={() => void saveSgdbKey('')}>Remove key</button>}
+            </form>
+            <div className="sgdb-status-row"><span className="sgdb-status">{sgdbKeySet ? 'Key saved' : 'No key set'}</span><button className="secondary-button" disabled={!sgdbKeySet || sgdbTesting} onClick={() => void testSgdbKey()}>{sgdbTesting ? 'Testing…' : 'Test key'}</button>{sgdbTest && <span className={'sgdb-test ' + (sgdbTest.ok ? 'ok' : 'fail')}>{sgdbTest.ok ? '✓' : '✗'} {sgdbTest.message}</span>}</div>
+            <div className="toggle-row"><div><b>Fetch missing covers after each scan</b><small>Fill games that have no cover from SteamGridDB</small></div><input type="checkbox" checked={settings.steamGridDbAutoFetch} onChange={event => void save({ steamGridDbAutoFetch: event.target.checked })} /></div>
+            <button className="secondary-button" disabled={!sgdbKeySet || sgdbFetching} onClick={() => void fetchSgdbCovers()}>{sgdbFetching ? 'Fetching covers…' : 'Fetch missing covers now'}</button>
+          </div>
+          </div>
+          <div className="settings-card">
+            <h3>Cover preferences</h3>
+            <p className="muted-text">Applied when searching for covers and when fetching missing ones.</p>
+            <div className="chip-group" role="group" aria-label="Cover styles">{steamGridDbStyles.map(style => <button key={style} type="button" className={'chip ' + (settings.steamGridDbStyles.includes(style) ? 'active' : '')} aria-pressed={settings.steamGridDbStyles.includes(style)} onClick={() => toggleSgdbStyle(style)}>{sgdbStyleLabels[style]}</button>)}</div>
+            <small className="chip-hint">None selected = any style</small>
+            <div className="toggle-row"><div><b>Include animated covers</b></div><input type="checkbox" checked={settings.steamGridDbAnimated} onChange={event => void save({ steamGridDbAnimated: event.target.checked })} /></div>
+            <div className="toggle-row"><div><b>Include adult (NSFW) covers</b></div><input type="checkbox" checked={settings.steamGridDbNsfw} onChange={event => void save({ steamGridDbNsfw: event.target.checked })} /></div>
+            <div className="toggle-row"><div><b>Include humor covers</b></div><input type="checkbox" checked={settings.steamGridDbHumor} onChange={event => void save({ steamGridDbHumor: event.target.checked })} /></div>
+          </div>
+        </>}
 
         {section === 'Themes (MyUI)' && <>
           <div className="settings-card">
@@ -202,6 +277,7 @@ export function SettingsApp() {
 
         {section === 'Playtime and Stats' && <div className="settings-card">
           <div className="toggle-row"><div><b>Track playtime</b><small>Store session time in the local library</small></div><input type="checkbox" checked={settings.tracking} onChange={event => void save({ tracking: event.target.checked })} /></div>
+          <div className="toggle-row"><div><b>Detect games launched outside Game Lobby</b><small>Tracks games started from Steam, Epic or shortcuts while Game Lobby is open</small></div><input type="checkbox" checked={settings.detectExternalLaunches} disabled={!settings.tracking} onChange={event => void save({ detectExternalLaunches: event.target.checked })} /></div>
           <button className="secondary-button" onClick={() => void resetPlaytime()}>Reset playtime stats</button>
         </div>}
 

@@ -1,0 +1,612 @@
+//! Input validation for everything that crosses the renderer → Rust boundary.
+//! Mirrors the zod schemas of the Electron build: unknown fields are rejected,
+//! strings are trimmed where they were before, and sizes are bounded.
+
+use crate::types::*;
+use anyhow::{anyhow, bail, Result};
+use regex::Regex;
+use serde::de::DeserializeOwned;
+use serde_json::{Map, Value};
+use std::sync::LazyLock;
+
+static COLOR: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)^#(?:[\da-f]{3,4}|[\da-f]{6}|[\da-f]{8})$").unwrap());
+static PIXELS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\d{1,2}px$").unwrap());
+static FONT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"^[\w ,"'-]{1,80}$"#).unwrap());
+static EXTENSION: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^\.[\da-z]{1,16}$").unwrap());
+static PLUGIN_ID: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)^[a-z0-9][a-z0-9._-]{1,63}$").unwrap());
+static VERSION: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\d+\.\d+\.\d+(?:[-+][\w.-]+)?$").unwrap());
+
+const ROUTE_KEYS: &[&str] = &[
+    "sourceId",
+    "store",
+    "appId",
+    "launchTarget",
+    "launchArgs",
+    "installPath",
+    "owned",
+    "installed",
+    "installStates",
+    "playtimeMinutes",
+    "lastPlayed",
+];
+const GAME_KEYS: &[&str] = &[
+    "id",
+    "title",
+    "cover",
+    "defaultCover",
+    "store",
+    "genre",
+    "playtimeMinutes",
+    "playtimeSeconds",
+    "lastPlayed",
+    "hidden",
+    "favorite",
+    "routes",
+];
+const THEME_KEYS: &[&str] = &[
+    "name",
+    "bg",
+    "surface",
+    "surface2",
+    "accent",
+    "text",
+    "muted",
+    "radius",
+    "gap",
+    "font",
+    "hover",
+    "backgroundImage",
+];
+const SETTINGS_KEYS: &[&str] = &[
+    "scanIntervalHours",
+    "posterWidth",
+    "showBadges",
+    "animations",
+    "tracking",
+    "theme",
+    "themeUrl",
+    "themeName",
+    "steamGridDbAutoFetch",
+    "showOnlyInstalled",
+    "steamGridDbStyles",
+    "steamGridDbAnimated",
+    "steamGridDbNsfw",
+    "steamGridDbHumor",
+    "detectExternalLaunches",
+    "trackingExcludedGameIds",
+];
+const EMULATOR_KEYS: &[&str] = &[
+    "id",
+    "name",
+    "executable",
+    "args",
+    "romFolders",
+    "extensions",
+];
+const CONNECTION_KEYS: &[&str] = &["steamId", "steamApiKey", "legendaryPath", "gogDatabasePath"];
+const PLUGIN_KEYS: &[&str] = &["id", "name", "version", "kind", "store", "manifestFolder"];
+const BACKUP_KEYS: &[&str] = &["games", "settings", "emulators"];
+
+fn object<'a>(value: &'a Value, what: &str) -> Result<&'a Map<String, Value>> {
+    value
+        .as_object()
+        .ok_or_else(|| anyhow!("{what} must be an object."))
+}
+
+/// Rejects keys outside `allowed`, like zod's `.strict()`. `null` values are dropped first
+/// because JSON has no `undefined`.
+fn strict(value: &Value, allowed: &[&str], what: &str) -> Result<Value> {
+    let map = object(value, what)?;
+    let mut clean = Map::new();
+    for (key, v) in map {
+        if !allowed.contains(&key.as_str()) {
+            bail!("{what} has an unrecognized field \"{key}\".");
+        }
+        if !v.is_null() {
+            clean.insert(key.clone(), v.clone());
+        }
+    }
+    Ok(Value::Object(clean))
+}
+
+fn decode<T: DeserializeOwned>(value: Value, what: &str) -> Result<T> {
+    serde_json::from_value(value).map_err(|e| anyhow!("{what} is invalid: {e}"))
+}
+
+fn short_text(value: &mut String, max: usize, what: &str) -> Result<()> {
+    *value = value.trim().to_string();
+    let len = value.chars().count();
+    if len == 0 || len > max {
+        bail!("{what} must be between 1 and {max} characters.");
+    }
+    Ok(())
+}
+
+fn max_len(value: &Option<String>, max: usize, what: &str) -> Result<()> {
+    if value.as_ref().is_some_and(|v| v.chars().count() > max) {
+        bail!("{what} must be at most {max} characters.");
+    }
+    Ok(())
+}
+
+fn range(value: Option<i64>, min: i64, max: i64, what: &str) -> Result<()> {
+    if value.is_some_and(|v| v < min || v > max) {
+        bail!("{what} must be between {min} and {max}.");
+    }
+    Ok(())
+}
+
+fn store(value: &str) -> Result<()> {
+    if !STORES.contains(&value) {
+        bail!("Unknown store \"{value}\".");
+    }
+    Ok(())
+}
+
+pub fn is_https_url(raw: &str) -> bool {
+    url::Url::parse(raw).is_ok_and(|u| {
+        u.scheme() == "https"
+            && u.username().is_empty()
+            && u.password().is_none()
+            && u.host().is_some()
+    })
+}
+
+pub fn https_url(raw: &str) -> Result<String> {
+    if !is_https_url(raw) {
+        bail!("URL must use HTTPS without credentials.");
+    }
+    Ok(raw.to_string())
+}
+
+fn route(value: &Value) -> Result<GameRoute> {
+    let mut r: GameRoute = decode(strict(value, ROUTE_KEYS, "Launch route")?, "Launch route")?;
+    short_text(&mut r.source_id, 128, "Route source")?;
+    store(&r.store)?;
+    max_len(&r.app_id, 256, "Route app ID")?;
+    short_text(&mut r.launch_target, 8_192, "Launch target")?;
+    max_len(&r.launch_args, 8_192, "Launch arguments")?;
+    max_len(&r.install_path, 8_192, "Install path")?;
+    if r.install_states
+        .as_ref()
+        .is_some_and(|s| s.keys().any(|k| k.chars().count() > 128))
+    {
+        bail!("Install state keys must be at most 128 characters.");
+    }
+    range(r.playtime_minutes, 0, 1_000_000_000, "Route playtime")?;
+    range(r.last_played, 0, 8_640_000_000_000_000, "Route last played")?;
+    Ok(r)
+}
+
+fn routes(value: Option<&Value>) -> Result<Option<Vec<GameRoute>>> {
+    let Some(value) = value else { return Ok(None) };
+    let list = value
+        .as_array()
+        .ok_or_else(|| anyhow!("Routes must be a list."))?;
+    if list.len() > 128 {
+        bail!("A game can have at most 128 launch routes.");
+    }
+    list.iter().map(route).collect::<Result<_>>().map(Some)
+}
+
+/// `library:save` — a partial game.
+pub fn game_patch(value: &Value) -> Result<GamePatch> {
+    let clean = strict(value, GAME_KEYS, "Game")?;
+    let routes = routes(clean.get("routes"))?;
+    let mut without_routes = clean.clone();
+    without_routes.as_object_mut().unwrap().remove("routes");
+    let mut g: GamePatch = decode(without_routes, "Game")?;
+    g.routes = routes;
+    short_text(&mut g.id, 512, "Game ID")?;
+    if let Some(title) = g.title.as_mut() {
+        short_text(title, 300, "Title")?;
+    }
+    if let Some(s) = &g.store {
+        store(s)?;
+    }
+    max_len(&g.cover, 8_192, "Cover")?;
+    max_len(&g.default_cover, 8_192, "Default cover")?;
+    max_len(&g.genre, 500, "Genre")?;
+    range(g.playtime_minutes, 0, 1_000_000_000, "Playtime")?;
+    range(g.playtime_seconds, 0, 60_000_000_000, "Playtime")?;
+    range(g.last_played, 0, 8_640_000_000_000_000, "Last played")?;
+    Ok(g)
+}
+
+/// A complete game (backup files).
+pub fn game(value: &Value) -> Result<Game> {
+    let map = object(value, "Game")?;
+    for key in [
+        "id",
+        "title",
+        "store",
+        "playtimeMinutes",
+        "hidden",
+        "favorite",
+        "routes",
+    ] {
+        if map.get(key).is_none_or(Value::is_null) {
+            bail!("Game is missing \"{key}\".");
+        }
+    }
+    let p = game_patch(value)?;
+    Ok(Game {
+        id: p.id,
+        title: p.title.unwrap_or_default(),
+        cover: p.cover,
+        default_cover: p.default_cover,
+        store: p.store.unwrap_or_default(),
+        genre: p.genre,
+        playtime_minutes: p.playtime_minutes.unwrap_or(0),
+        playtime_seconds: p.playtime_seconds,
+        last_played: p.last_played,
+        hidden: p.hidden.unwrap_or(false),
+        favorite: p.favorite.unwrap_or(false),
+        routes: p.routes.unwrap_or_default(),
+    })
+}
+
+pub fn theme(value: &Value) -> Result<ThemeTokens> {
+    let mut t: ThemeTokens = decode(strict(value, THEME_KEYS, "Theme")?, "Theme")?;
+    short_text(&mut t.name, 80, "Theme name")?;
+    for color in [&t.bg, &t.surface, &t.surface2, &t.accent, &t.text, &t.muted] {
+        if !COLOR.is_match(color) {
+            bail!("Theme color \"{color}\" is not a hex color.");
+        }
+    }
+    if !PIXELS.is_match(&t.radius) || !PIXELS.is_match(&t.gap) {
+        bail!("Theme radius and gap must be pixel values.");
+    }
+    if !FONT.is_match(&t.font) {
+        bail!("Theme font is invalid.");
+    }
+    if !["lift", "glow", "none"].contains(&t.hover.as_str()) {
+        bail!("Theme hover must be lift, glow, or none.");
+    }
+    if let Some(image) = &t.background_image {
+        https_url(image)?;
+    }
+    Ok(t)
+}
+
+fn int_field(map: &Map<String, Value>, key: &str, min: i64, max: i64) -> Result<()> {
+    if let Some(v) = map.get(key) {
+        let n = v
+            .as_i64()
+            .ok_or_else(|| anyhow!("{key} must be a whole number."))?;
+        range(Some(n), min, max, key)?;
+    }
+    Ok(())
+}
+
+fn bool_field(map: &Map<String, Value>, key: &str) -> Result<()> {
+    if map.get(key).is_some_and(|v| !v.is_boolean()) {
+        bail!("{key} must be true or false.");
+    }
+    Ok(())
+}
+
+pub const MAX_EXCLUDED_GAMES: usize = 5_000;
+pub const MAX_GAME_ID_LEN: usize = 512;
+
+/// `trackingExcludedGameIds`: distinct, non-empty game ids of at most [`MAX_GAME_ID_LEN`]
+/// characters, at most [`MAX_EXCLUDED_GAMES`] of them.
+fn excluded_game_ids(value: &Value) -> Result<()> {
+    let items = value
+        .as_array()
+        .ok_or_else(|| anyhow!("trackingExcludedGameIds must be a list."))?;
+    if items.len() > MAX_EXCLUDED_GAMES {
+        bail!("trackingExcludedGameIds may list at most {MAX_EXCLUDED_GAMES} games.");
+    }
+    let mut seen = std::collections::HashSet::new();
+    for item in items {
+        let id = item
+            .as_str()
+            .filter(|id| !id.is_empty() && id.chars().count() <= MAX_GAME_ID_LEN)
+            .ok_or_else(|| {
+                anyhow!("trackingExcludedGameIds must contain game ids of up to {MAX_GAME_ID_LEN} characters.")
+            })?;
+        if !seen.insert(id) {
+            bail!("trackingExcludedGameIds lists a game more than once.");
+        }
+    }
+    Ok(())
+}
+
+/// `steamGridDbStyles`: an array of distinct known SteamGridDB styles (empty = any style).
+fn grid_styles(value: &Value) -> Result<()> {
+    let items = value
+        .as_array()
+        .ok_or_else(|| anyhow!("steamGridDbStyles must be a list."))?;
+    let mut seen: Vec<&str> = Vec::new();
+    for item in items {
+        let style = item
+            .as_str()
+            .filter(|s| STEAM_GRID_DB_STYLES.contains(s))
+            .ok_or_else(|| {
+                anyhow!(
+                    "steamGridDbStyles may only contain: {}.",
+                    STEAM_GRID_DB_STYLES.join(", ")
+                )
+            })?;
+        if seen.contains(&style) {
+            bail!("steamGridDbStyles lists \"{style}\" more than once.");
+        }
+        seen.push(style);
+    }
+    Ok(())
+}
+
+/// `settings:save` — returns a JSON patch for `db::put_settings`.
+pub fn settings_patch(value: &Value) -> Result<Map<String, Value>> {
+    let Value::Object(mut map) = strict(value, SETTINGS_KEYS, "Settings")? else {
+        unreachable!()
+    };
+    int_field(&map, "scanIntervalHours", 0, 168)?;
+    int_field(&map, "posterWidth", 120, 250)?;
+    for key in [
+        "showBadges",
+        "animations",
+        "tracking",
+        "steamGridDbAutoFetch",
+        "showOnlyInstalled",
+        "steamGridDbAnimated",
+        "steamGridDbNsfw",
+        "steamGridDbHumor",
+        "detectExternalLaunches",
+    ] {
+        bool_field(&map, key)?;
+    }
+    if let Some(v) = map.get("steamGridDbStyles") {
+        grid_styles(v)?;
+    }
+    if let Some(v) = map.get("trackingExcludedGameIds") {
+        excluded_game_ids(v)?;
+    }
+    if let Some(t) = map.get("theme") {
+        let t = theme(t)?;
+        map.insert("theme".into(), serde_json::to_value(t)?);
+    }
+    if let Some(v) = map.get("themeUrl") {
+        https_url(
+            v.as_str()
+                .ok_or_else(|| anyhow!("themeUrl must be text."))?,
+        )?;
+    }
+    if let Some(v) = map.get("themeName") {
+        max_len(
+            &Some(
+                v.as_str()
+                    .ok_or_else(|| anyhow!("themeName must be text."))?
+                    .to_string(),
+            ),
+            80,
+            "Theme name",
+        )?;
+    }
+    Ok(map)
+}
+
+pub fn settings(value: &Value) -> Result<Settings> {
+    let map = settings_patch(value)?;
+    for key in [
+        "scanIntervalHours",
+        "posterWidth",
+        "showBadges",
+        "animations",
+        "tracking",
+        "theme",
+    ] {
+        if !map.contains_key(key) {
+            bail!("Settings are missing \"{key}\".");
+        }
+    }
+    decode(Value::Object(map), "Settings")
+}
+
+pub fn emulator(value: &Value) -> Result<EmulatorProfile> {
+    let mut p: EmulatorProfile = decode(
+        strict(value, EMULATOR_KEYS, "Emulator profile")?,
+        "Emulator profile",
+    )?;
+    short_text(&mut p.id, 256, "Emulator ID")?;
+    short_text(&mut p.name, 128, "Emulator name")?;
+    short_text(&mut p.executable, 8_192, "Emulator executable")?;
+    max_len(&Some(p.args.clone()), 8_192, "Emulator arguments")?;
+    if p.rom_folders.len() > 128 || p.extensions.len() > 256 {
+        bail!("Too many ROM folders or extensions.");
+    }
+    for folder in &mut p.rom_folders {
+        short_text(folder, 8_192, "ROM folder")?;
+    }
+    if let Some(bad) = p.extensions.iter().find(|e| !EXTENSION.is_match(e)) {
+        bail!("\"{bad}\" is not a file extension like .iso.");
+    }
+    Ok(p)
+}
+
+pub fn connections(value: &Value) -> Result<LibraryConnectionInput> {
+    let c: LibraryConnectionInput = decode(
+        strict(value, CONNECTION_KEYS, "Library connections")?,
+        "Library connections",
+    )?;
+    max_len(&Some(c.steam_id.clone()), 64, "Steam ID")?;
+    max_len(&c.steam_api_key, 256, "Steam API key")?;
+    max_len(&Some(c.legendary_path.clone()), 8_192, "Legendary path")?;
+    max_len(
+        &Some(c.gog_database_path.clone()),
+        8_192,
+        "GOG database path",
+    )?;
+    Ok(c)
+}
+
+pub fn plugin_manifest(value: &Value) -> Result<PluginManifest> {
+    let mut m: PluginManifest = decode(
+        strict(value, PLUGIN_KEYS, "Plugin manifest")?,
+        "Plugin manifest",
+    )?;
+    if !PLUGIN_ID.is_match(&m.id) {
+        bail!("Plugin ID is invalid.");
+    }
+    short_text(&mut m.name, 128, "Plugin name")?;
+    if m.version.len() > 64 || !VERSION.is_match(&m.version) {
+        bail!("Plugin version must look like 1.2.3.");
+    }
+    if m.kind != "library" {
+        bail!("Only library plugins are supported.");
+    }
+    store(&m.store)?;
+    max_len(&m.manifest_folder, 8_192, "Manifest folder")?;
+    Ok(m)
+}
+
+pub fn backup(value: &Value) -> Result<Backup> {
+    let clean = strict(value, BACKUP_KEYS, "Backup")?;
+    let games = clean
+        .get("games")
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow!("Backup has no games list."))?;
+    if games.len() > 100_000 {
+        bail!("Backup has too many games.");
+    }
+    let games = games.iter().map(game).collect::<Result<Vec<_>>>()?;
+    let settings = clean.get("settings").map(settings).transpose()?;
+    let emulators = match clean.get("emulators") {
+        Some(Value::Array(list)) if list.len() <= 1_000 => {
+            Some(list.iter().map(emulator).collect::<Result<Vec<_>>>()?)
+        }
+        Some(_) => bail!("Backup emulators are invalid."),
+        None => None,
+    };
+    Ok(Backup {
+        games,
+        settings,
+        emulators,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn route() -> Value {
+        json!({ "sourceId": "steam", "store": "Steam", "appId": "570", "launchTarget": "steam://run/570", "installed": true })
+    }
+    fn game_json() -> Value {
+        json!({ "id": "steam:570", "title": "Dota 2", "store": "Steam", "playtimeMinutes": 0, "hidden": false, "favorite": false, "routes": [route()] })
+    }
+    fn settings_json() -> Value {
+        json!({ "scanIntervalHours": 0, "posterWidth": 172, "showBadges": true, "animations": true, "tracking": true,
+            "theme": { "name": "Default", "bg": "#101113", "surface": "#181a1d", "surface2": "#22252a", "accent": "#75d18a", "text": "#f2f3f4", "muted": "#969ba3", "radius": "10px", "gap": "9px", "font": "Inter, Segoe UI, sans-serif", "hover": "lift" } })
+    }
+    fn with(mut v: Value, key: &str, extra: Value) -> Value {
+        v.as_object_mut().unwrap().insert(key.into(), extra);
+        v
+    }
+
+    #[test]
+    fn library_and_backup_accept_app_data_and_reject_unexpected_fields() {
+        assert_eq!(
+            game_patch(&with(game_json(), "favorite", json!(true)))
+                .unwrap()
+                .favorite,
+            Some(true)
+        );
+        assert_eq!(game(&game_json()).unwrap().routes.len(), 1);
+        assert_eq!(
+            backup(&json!({ "games": [game_json()], "settings": settings_json() }))
+                .unwrap()
+                .games
+                .len(),
+            1
+        );
+        assert!(game_patch(&with(game_json(), "arbitrary", json!("value"))).is_err());
+        assert!(
+            backup(&json!({ "games": [with(game_json(), "unexpected", json!(true))] })).is_err()
+        );
+        assert!(
+            game_patch(&json!({ "id": "x", "routes": [with(route(), "extra", json!(1))] }))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn settings_emulator_and_plugin_enforce_bounds_and_known_fields() {
+        assert_eq!(
+            settings_patch(&json!({ "posterWidth": 220, "tracking": false })).unwrap()
+                ["posterWidth"],
+            220
+        );
+        assert!(settings_patch(&json!({ "posterWidth": 999 })).is_err());
+        assert!(settings_patch(&json!({ "tracking": true, "unknownSetting": true })).is_err());
+        assert_eq!(
+            settings_patch(&json!({ "steamGridDbAutoFetch": false })).unwrap()
+                ["steamGridDbAutoFetch"],
+            false
+        );
+        assert!(settings_patch(&json!({ "steamGridDbAutoFetch": "yes" })).is_err());
+        let patch = settings_patch(&json!({
+            "showOnlyInstalled": false,
+            "steamGridDbStyles": ["alternate", "no_logo"],
+            "steamGridDbAnimated": true,
+            "steamGridDbNsfw": true,
+            "steamGridDbHumor": false
+        }))
+        .unwrap();
+        assert_eq!(patch["steamGridDbStyles"], json!(["alternate", "no_logo"]));
+        assert!(settings_patch(&json!({ "steamGridDbStyles": [] })).is_ok());
+        assert!(settings_patch(&json!({
+            "trackingExcludedGameIds": (0..MAX_EXCLUDED_GAMES).map(|i| i.to_string()).collect::<Vec<_>>()
+        }))
+        .is_ok());
+        assert!(settings_patch(
+            &json!({ "trackingExcludedGameIds": ["x".repeat(MAX_GAME_ID_LEN)] })
+        )
+        .is_ok());
+        assert_eq!(
+            settings_patch(&json!({ "detectExternalLaunches": false })).unwrap()
+                ["detectExternalLaunches"],
+            false
+        );
+        for bad in [
+            json!({ "showOnlyInstalled": 1 }),
+            json!({ "steamGridDbAnimated": "true" }),
+            json!({ "steamGridDbHumor": [] }),
+            json!({ "detectExternalLaunches": "no" }),
+            json!({ "trackingExcludedGameIds": "steam:1" }),
+            json!({ "trackingExcludedGameIds": ["steam:1", "steam:1"] }),
+            json!({ "trackingExcludedGameIds": [""] }),
+            json!({ "trackingExcludedGameIds": [1] }),
+            json!({ "trackingExcludedGameIds": ["x".repeat(MAX_GAME_ID_LEN + 1)] }),
+            json!({ "trackingExcludedGameIds": (0..=MAX_EXCLUDED_GAMES).map(|i| i.to_string()).collect::<Vec<_>>() }),
+            json!({ "steamGridDbStyles": "alternate" }),
+            json!({ "steamGridDbStyles": ["alternate", "alternate"] }),
+            json!({ "steamGridDbStyles": ["Alternate"] }),
+            json!({ "steamGridDbStyles": ["photo"] }),
+            json!({ "steamGridDbStyles": [1] }),
+            json!({ "steamGridDbStyles": ["alternate,blurred"] }),
+        ] {
+            assert!(settings_patch(&bad).is_err(), "{bad} should be rejected");
+        }
+        let ok = emulator(&json!({ "id": "dolphin", "name": "Dolphin", "executable": "Dolphin.exe", "args": "--exec {rom}", "romFolders": ["D:/Roms"], "extensions": [".iso"] })).unwrap();
+        assert_eq!(ok.extensions[0], ".iso");
+        assert!(emulator(&json!({ "id": "bad", "name": "Bad", "executable": "", "args": "", "romFolders": [], "extensions": ["iso"] })).is_err());
+        let manifest = json!({ "id": "sample-library", "name": "Sample", "version": "1.2.3", "kind": "library", "store": "Custom" });
+        assert_eq!(plugin_manifest(&manifest).unwrap().name, "Sample");
+        assert!(plugin_manifest(&with(manifest, "id", json!("../bad"))).is_err());
+    }
+
+    #[test]
+    fn strings_are_trimmed_and_stores_checked() {
+        let g = game_patch(&json!({ "id": " a ", "title": "  Hi  ", "store": "Steam" })).unwrap();
+        assert_eq!((g.id.as_str(), g.title.as_deref()), ("a", Some("Hi")));
+        assert!(game_patch(&json!({ "id": "a", "store": "Nope" })).is_err());
+        assert!(https_url("http://x.example").is_err());
+        assert!(https_url("https://u:p@x.example").is_err());
+    }
+}
