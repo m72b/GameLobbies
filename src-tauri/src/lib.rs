@@ -6,6 +6,7 @@ mod commands;
 mod covercache;
 mod db;
 mod emulators;
+mod igdb;
 mod importers;
 mod launch;
 mod local;
@@ -135,6 +136,7 @@ pub fn run() {
                 cover_fetch_lock: tokio::sync::Mutex::new(()),
                 local_scan_lock: tokio::sync::Mutex::new(()),
                 covers: Default::default(),
+                igdb: Default::default(),
             });
             scan::configure_schedule(app.handle(), hours);
             tracker::start(app.handle());
@@ -211,6 +213,17 @@ pub fn run() {
             commands::art_set_logo_layout,
             commands::steamgriddb_search_heroes,
             commands::steamgriddb_search_logos,
+            commands::igdb_status,
+            commands::igdb_save_credentials,
+            commands::igdb_clear_credentials,
+            commands::igdb_test,
+            commands::igdb_get,
+            commands::igdb_search,
+            commands::igdb_choose,
+            commands::igdb_reset_match,
+            commands::igdb_fetch_all,
+            commands::igdb_cancel_fetch_all,
+            commands::igdb_progress,
             updater::updates_check,
             updater::updates_auto_check,
             updater::updates_last,

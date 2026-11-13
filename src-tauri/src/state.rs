@@ -18,6 +18,8 @@ pub struct AppState {
     pub local_scan_lock: tokio::sync::Mutex<()>,
     /// Local cover cache (background downloads, retries).
     pub covers: crate::covercache::CacheState,
+    /// IGDB access token (memory only), rate limiter and fetch bookkeeping.
+    pub igdb: crate::igdb::IgdbState,
 }
 
 impl AppState {

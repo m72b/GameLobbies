@@ -64,7 +64,8 @@ fn migrate(db: &Connection, file: Option<&Path>) -> Result<()> {
         CREATE TABLE IF NOT EXISTS local_exe_choice(folderKey TEXT PRIMARY KEY,executable TEXT NOT NULL,chosenAt INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS local_shortcut_ok(shortcutKey TEXT PRIMARY KEY,target TEXT NOT NULL,arguments TEXT NOT NULL,confirmedAt INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS cover_cache(url TEXT PRIMARY KEY,file TEXT NOT NULL,fetchedAt INTEGER NOT NULL);
-        CREATE INDEX IF NOT EXISTS cover_cache_file ON cover_cache(file);",
+        CREATE INDEX IF NOT EXISTS cover_cache_file ON cover_cache(file);
+        CREATE TABLE IF NOT EXISTS game_metadata(gameId TEXT PRIMARY KEY,igdbId INTEGER,json TEXT,fetchedAt INTEGER NOT NULL,source TEXT NOT NULL DEFAULT 'auto');",
         GAMES_TABLE.replace("CREATE TABLE games", "CREATE TABLE IF NOT EXISTS games")
     ))?;
     let columns: HashSet<String> = db
@@ -705,6 +706,7 @@ fn delete_game_rows(db: &Connection, id: &str) -> Result<()> {
         "DELETE FROM play_sessions WHERE gameId=?",
         "DELETE FROM game_art WHERE gameId=?",
         "DELETE FROM game_page_custom WHERE gameId=?",
+        "DELETE FROM game_metadata WHERE gameId=?",
         "DELETE FROM games WHERE id=?",
     ] {
         db.execute(sql, [id])?;
@@ -774,6 +776,16 @@ pub fn merge_games(db: &mut Connection, target_id: &str, source_id: &str) -> Res
     // Page customization: the target's wins; otherwise the source's moves over.
     tx.execute(
         "UPDATE OR IGNORE game_page_custom SET gameId=?1 WHERE gameId=?2",
+        params![target_id, source_id],
+    )?;
+    // IGDB metadata: an automatic match is redone (the routes changed); a match the user
+    // chose is kept, and the source's chosen match moves over when the target has none.
+    tx.execute(
+        "DELETE FROM game_metadata WHERE gameId=? AND source<>'user'",
+        [target_id],
+    )?;
+    tx.execute(
+        "UPDATE OR IGNORE game_metadata SET gameId=?1 WHERE gameId=?2 AND source='user'",
         params![target_id, source_id],
     )?;
     delete_game_rows(&tx, source_id)?;
@@ -937,6 +949,61 @@ pub fn put_cached_art(db: &Connection, game_id: &str, art: &CachedArt) -> Result
             art.fetched_at
         ],
     )?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// IGDB metadata cache
+
+/// One `game_metadata` row. `igdb_id`/`json` are `None` for a cached "no match" result.
+/// `source` is `"auto"` (matched by Game Lobby) or `"user"` (chosen by the user; never
+/// replaced by an automatic match).
+#[derive(Clone, Debug, PartialEq)]
+pub struct CachedMetadata {
+    pub igdb_id: Option<i64>,
+    pub json: Option<String>,
+    pub fetched_at: i64,
+    pub source: String,
+}
+
+pub fn cached_metadata(db: &Connection, game_id: &str) -> Result<Option<CachedMetadata>> {
+    Ok(db
+        .query_row(
+            "SELECT igdbId,json,fetchedAt,source FROM game_metadata WHERE gameId=?",
+            [game_id],
+            |row| {
+                Ok(CachedMetadata {
+                    igdb_id: row.get(0)?,
+                    json: row.get(1)?,
+                    fetched_at: row.get(2)?,
+                    source: row.get(3)?,
+                })
+            },
+        )
+        .optional()?)
+}
+
+/// Stores metadata for a game that still exists. A user-chosen row is only replaced by
+/// another user choice, or refreshed by an automatic fetch of the same IGDB id (it stays
+/// `user`). Returns whether a row was written.
+pub fn put_metadata(db: &Connection, game_id: &str, entry: &CachedMetadata) -> Result<bool> {
+    let source = if entry.source == "user" {
+        "user"
+    } else {
+        "auto"
+    };
+    let changed = db.execute(
+        "INSERT INTO game_metadata(gameId,igdbId,json,fetchedAt,source) SELECT ?1,?2,?3,?4,?5 WHERE EXISTS(SELECT 1 FROM games WHERE id=?1)
+         ON CONFLICT(gameId) DO UPDATE SET igdbId=excluded.igdbId,json=excluded.json,fetchedAt=excluded.fetchedAt,
+           source=CASE WHEN game_metadata.source='user' THEN 'user' ELSE excluded.source END
+         WHERE game_metadata.source<>'user' OR excluded.source='user' OR game_metadata.igdbId IS excluded.igdbId",
+        params![game_id, entry.igdb_id, entry.json, entry.fetched_at, source],
+    )?;
+    Ok(changed > 0)
+}
+
+pub fn delete_metadata(db: &Connection, game_id: &str) -> Result<()> {
+    db.execute("DELETE FROM game_metadata WHERE gameId=?", [game_id])?;
     Ok(())
 }
 
