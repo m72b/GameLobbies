@@ -1,37 +1,21 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import Fuse from 'fuse.js'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { Boxes, ChevronDown, Clock3, CloudDownload, EyeOff, Gamepad2, Heart, Library, ListFilter, MoreHorizontal, Pencil, Play, Plus, Search, Settings2, Star, X } from 'lucide-react'
-import type { Game, Settings, Store as StoreName } from '../shared/types'
+import { Boxes, Clock3, CloudDownload, EyeOff, Gamepad2, Heart, Library, ListFilter, MoreHorizontal, Pencil, Play, Plus, Search, Settings2, Star, X } from 'lucide-react'
+import { StoreIcon } from './store-icons'
+import type { Game, RunningGame, Settings, Store as StoreName, SteamGridDbCover, UpdateInfo } from '../shared/types'
 import { defaultSettings } from '../shared/defaults'
 import { applyTheme } from './theme'
+import { coverStyle } from './cover'
+import { GamePage, type GamePageActions } from './game-page'
+import { elapsedSeconds, formatClock, useNow } from './format'
 
 type View = 'All Games' | 'Favorites' | 'Recently Played' | 'Hidden'
 type SortBy = 'title' | 'lastPlayed' | 'playtime'
-type MenuAction = 'Play' | 'Edit metadata' | 'Set custom cover' | 'Hide' | 'Unhide' | 'Add to collection' | 'Link another game' | 'Open install folder' | 'Remove'
+type MenuAction = 'Play' | 'Edit metadata' | 'Set custom cover' | 'Find cover on SteamGridDB' | 'Hide' | 'Unhide' | 'Add to collection' | 'Link another game' | 'Open install folder' | 'Remove'
 
+const isInstalled = (game: Game) => game.routes.some(route => route.installed === true)
 const stores: StoreName[] = ['Steam', 'Epic Games', 'GOG', 'EA app', 'Battle.net', 'Xbox', 'Ubisoft', 'Emulator', 'itch.io', 'Amazon Games', 'Custom']
-const colors = ['#224d67', '#563339', '#32513d', '#544433', '#34394e', '#6c3c2b']
-const storeIcon: Record<string, string> = { Steam: 'S', 'Epic Games': 'E', GOG: 'G', 'EA app': 'EA', 'Battle.net': 'B', Xbox: 'X', Ubisoft: 'U', Emulator: '⌘', 'itch.io': 'i', 'Amazon Games': 'a', Custom: '+' }
-
-function coverImage(value?: string) {
-  if (!value) return undefined
-  try {
-    const url = new URL(value, window.location.href)
-    if (url.protocol !== 'https:' && url.protocol !== 'lobby-cover:') return undefined
-    const escaped = url.href.replace(/[\\"\r\n\f]/g, character => `\\${character}`)
-    return `url("${escaped}")`
-  } catch { return undefined }
-}
-
-function coverStyle(game: Game, index: number): CSSProperties {
-  const color = colors[index % colors.length]
-  const image = coverImage(game.cover)
-  return {
-    background: 'linear-gradient(155deg, ' + color + ', #161719)',
-    backgroundImage: image ? `linear-gradient(0deg,rgba(0,0,0,.22),transparent 50%),${image}` : undefined
-  }
-}
 
 export default function App() {
   const [games, setGames] = useState<Game[]>([])
@@ -40,17 +24,28 @@ export default function App() {
   const [store, setStore] = useState('All Games')
   const [view, setView] = useState<View>('All Games')
   const [sortBy, setSortBy] = useState<SortBy>('title')
-  const [selected, setSelected] = useState<Game | null>(null)
+  const [openId, setOpenId] = useState<string | null>(null)
+  const [running, setRunning] = useState<RunningGame[]>([])
+  const [libraryVersion, setLibraryVersion] = useState(0)
+  const savedScroll = useRef(0)
   const [linkingGame, setLinkingGame] = useState<Game | null>(null)
   const [linkQuery, setLinkQuery] = useState('')
   const [menu, setMenu] = useState<{ x: number; y: number; game: Game } | null>(null)
   const [scanBusy, setScanBusy] = useState(false)
+  const [localBusy, setLocalBusy] = useState(false)
   const [toast, setToast] = useState('')
+  const [updateNotice, setUpdateNotice] = useState<UpdateInfo | null>(null)
   const [adding, setAdding] = useState(false)
   const [editingGame, setEditingGame] = useState<Game | null>(null)
   const [editTitle, setEditTitle] = useState('')
   const [editGenre, setEditGenre] = useState('')
   const [editFavorite, setEditFavorite] = useState(false)
+  const [sgdbGame, setSgdbGame] = useState<Game | null>(null)
+  const [sgdbCovers, setSgdbCovers] = useState<SteamGridDbCover[]>([])
+  const [sgdbState, setSgdbState] = useState<'loading' | 'ready' | 'nokey' | 'error'>('loading')
+  const [sgdbError, setSgdbError] = useState('')
+  const [sgdbApplying, setSgdbApplying] = useState(false)
+  const sgdbRun = useRef(0)
   const [editMode, setEditMode] = useState(false)
   const [collapsed, setCollapsed] = useState(true)
   const [gridWidth, setGridWidth] = useState(1200)
@@ -80,10 +75,12 @@ export default function App() {
       notice(error instanceof Error ? error.message : 'Could not launch game')
     }
   }
-  const detail = (game: Game) => {
-    setSelected(game)
+  const openGame = (game: Game) => {
+    savedScroll.current = scrollRef.current?.scrollTop ?? savedScroll.current
+    setOpenId(game.id)
     setMenu(null)
   }
+  const closeGame = () => setOpenId(null)
   const beginEdit = (game: Game) => {
     setEditingGame(game)
     setEditTitle(game.title)
@@ -98,7 +95,6 @@ export default function App() {
       await window.lobby.library.save({ ...editingGame, title: editTitle.trim(), genre: editGenre.trim() || undefined, favorite: editFavorite })
       const nextGames = await window.lobby.library.list()
       setGames(nextGames)
-      setSelected(nextGames.find(game => game.id === editingGame.id) || null)
       setEditingGame(null)
       notice('Game details saved')
     } catch (error) {
@@ -108,7 +104,43 @@ export default function App() {
   const setCover = async (game: Game) => {
     await window.lobby.library.chooseCover(game.id)
     await refresh()
-    setSelected((await window.lobby.library.list()).find(item => item.id === game.id) || null)
+  }
+  const findCover = async (game: Game) => {
+    const run = ++sgdbRun.current
+    setMenu(null)
+    setSgdbGame(game)
+    setSgdbCovers([])
+    setSgdbError('')
+    setSgdbApplying(false)
+    setSgdbState('loading')
+    try {
+      const { keySet } = await window.lobby.steamGridDb.status()
+      if (run !== sgdbRun.current) return
+      if (!keySet) { setSgdbState('nokey'); return }
+      const covers = await window.lobby.steamGridDb.search(game.id)
+      if (run !== sgdbRun.current) return
+      setSgdbCovers(covers)
+      setSgdbState('ready')
+    } catch (error) {
+      if (run !== sgdbRun.current) return
+      setSgdbError(error instanceof Error ? error.message : 'Could not search SteamGridDB')
+      setSgdbState('error')
+    }
+  }
+  const closeFindCover = () => { sgdbRun.current++; setSgdbGame(null); setSgdbApplying(false) }
+  const applySgdbCover = async (cover: SteamGridDbCover) => {
+    if (!sgdbGame || sgdbApplying) return
+    const game = sgdbGame
+    setSgdbApplying(true)
+    try {
+      const nextGames = await window.lobby.steamGridDb.apply(game.id, cover.url)
+      setGames(nextGames)
+      closeFindCover()
+      notice('Cover updated')
+    } catch (error) {
+      setSgdbApplying(false)
+      notice(error instanceof Error ? error.message : 'Could not apply cover')
+    }
   }
   const linkAnotherGame = (game: Game) => {
     setLinkingGame(game)
@@ -120,7 +152,6 @@ export default function App() {
     try {
       const nextGames = await window.lobby.library.merge(linkingGame.id, source.id)
       setGames(nextGames)
-      setSelected(nextGames.find(game => game.id === linkingGame.id) || null)
       setLinkingGame(null)
       notice(`Linked ${source.title} to ${linkingGame.title}`)
     } catch (error) {
@@ -132,16 +163,17 @@ export default function App() {
     if (action === 'Play') return launch(game)
     if (action === 'Edit metadata') return beginEdit(game)
     if (action === 'Set custom cover') return setCover(game)
+    if (action === 'Find cover on SteamGridDB') return findCover(game)
     if (action === 'Link another game') return linkAnotherGame(game)
     if (action === 'Hide' || action === 'Unhide') {
       const nextGames = await window.lobby.library.save({ ...game, hidden: action === 'Hide' })
       setGames(nextGames)
-      setSelected(current => current?.id === game.id ? nextGames.find(item => item.id === game.id) || null : current)
       return
     }
     if (action === 'Open install folder') return window.lobby.library.chooseInstallFolder(game.id)
     if (action === 'Remove' && window.confirm('Remove ' + game.title + ' from your library?')) {
       await window.lobby.library.remove(game.id)
+      setOpenId(current => current === game.id ? null : current)
       await refresh()
     }
   }
@@ -157,6 +189,21 @@ export default function App() {
       setScanBusy(false)
     }
   }
+  const addLocalGame = async () => {
+    setLocalBusy(true)
+    try {
+      const result = await window.lobby.library.addLocalGame()
+      if (!result) return
+      setGames(result.games)
+      const added = result.games.find(game => game.id === result.gameId)
+      if (added) openGame(added)
+      notice(added ? 'Added ' + added.title : 'Game added')
+    } catch (error) {
+      notice(error instanceof Error ? error.message : 'Could not add the game')
+    } finally {
+      setLocalBusy(false)
+    }
+  }
   const addGame = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     const data = new FormData(event.currentTarget)
@@ -168,8 +215,11 @@ export default function App() {
 
   useEffect(() => {
     void refresh()
-    const offLibrary = window.lobby.library.onChanged(() => void refresh())
+    const offLibrary = window.lobby.library.onChanged(() => { setLibraryVersion(value => value + 1); void refresh() })
+    void window.lobby.tracking.status().then(setRunning).catch(() => {})
+    const offTracking = window.lobby.tracking.onChanged(setRunning)
     const offSettings = window.lobby.settings.onChanged(setSettings)
+    const offSgdb = window.lobby.steamGridDb.onFetched(summary => { if (summary.updated > 0) notice('SteamGridDB added ' + summary.updated + ' cover' + (summary.updated === 1 ? '' : 's')) })
     const resize = () => setGridWidth(scrollRef.current?.clientWidth || window.innerWidth - 90)
     const observer = new ResizeObserver(resize)
     if (scrollRef.current) observer.observe(scrollRef.current)
@@ -183,13 +233,15 @@ export default function App() {
         return
       }
       if (event.key === 'Escape') {
-        setSelected(null)
+        if (!menu && !adding && !editingGame && !sgdbGame && !linkingGame) setOpenId(null)
         setMenu(null)
         setAdding(false)
         setEditingGame(null)
+        sgdbRun.current++
+        setSgdbGame(null)
         return
       }
-      if (!typing && !selected && ['ArrowRight', 'ArrowLeft', 'ArrowDown', 'ArrowUp'].includes(event.key)) {
+      if (!typing && !openId && ['ArrowRight', 'ArrowLeft', 'ArrowDown', 'ArrowUp'].includes(event.key)) {
         event.preventDefault()
         const list = filteredRef.current
         if (!list.length) return
@@ -205,34 +257,75 @@ export default function App() {
         return
       }
       if (event.key === 'Enter' && !typing) {
-        const game = filteredRef.current.find(item => item.id === focusedIdRef.current) || selected
-        if (game && !menu && !adding && !editingGame) {
+        const game = filteredRef.current.find(item => item.id === focusedIdRef.current)
+        if (game && !openId && !menu && !adding && !editingGame && !target.closest('button')) {
           event.preventDefault()
-          void launch(game)
+          openGame(game)
         }
       }
     }
     window.addEventListener('keydown', key)
     return () => {
       offLibrary()
+      offTracking()
       offSettings()
+      offSgdb()
       observer.disconnect()
       window.removeEventListener('keydown', key)
     }
-  }, [selected, menu, adding, editingGame])
+  }, [openId, menu, adding, editingGame, sgdbGame, linkingGame])
 
   useEffect(() => { applyTheme(settings.theme, settings) }, [settings])
+  useEffect(() => {
+    // Startup update check (the backend skips it when turned off or done in the last 24 h).
+    const timer = window.setTimeout(() => {
+      void window.lobby.updates.autoCheck().then(info => { if (info?.available) setUpdateNotice(info) }).catch(() => undefined)
+    }, 10_000)
+    return () => window.clearTimeout(timer)
+  }, [])
+  const openGameData = openId ? games.find(game => game.id === openId) : undefined
+  const pageOpen = !!openGameData
+  const wasPageOpen = useRef(false)
+  useLayoutEffect(() => {
+    if (wasPageOpen.current && !pageOpen && scrollRef.current) {
+      const top = savedScroll.current
+      scrollRef.current.scrollTop = top
+      requestAnimationFrame(() => { if (scrollRef.current) scrollRef.current.scrollTop = top })
+    }
+    wasPageOpen.current = pageOpen
+  }, [pageOpen])
+  useEffect(() => {
+    const resize = () => setGridWidth(scrollRef.current?.clientWidth || window.innerWidth - 90)
+    if (!scrollRef.current) return
+    const observer = new ResizeObserver(resize)
+    observer.observe(scrollRef.current)
+    resize()
+    return () => observer.disconnect()
+  }, [pageOpen])
+  const runningById = useMemo(() => new Map(running.map(item => [item.gameId, item])), [running])
+  const nowPlaying = useMemo(() => {
+    const item = running.find(entry => entry.state === 'running') || running[0]
+    const game = item && games.find(entry => entry.id === item.gameId)
+    return item && game ? { item, game } : null
+  }, [running, games])
 
+  const setInstalledFilter = async (value: boolean) => {
+    try { setSettings(await window.lobby.settings.save({ showOnlyInstalled: value })) }
+    catch (error) { notice(error instanceof Error ? error.message : 'Settings could not be saved') }
+  }
   const fuzzy = useMemo(() => new Fuse(games, { keys: ['title', 'genre', 'store'], threshold: 0.38, ignoreLocation: true }), [games])
+  const onlyInstalled = settings.showOnlyInstalled
   const filtered = useMemo(() => {
     const candidates = query.trim() ? fuzzy.search(query).map(result => result.item) : games
     return candidates.filter(game =>
+      (!onlyInstalled || isInstalled(game)) &&
       (view === 'Hidden' ? game.hidden : !game.hidden) &&
       (store === 'All Games' || game.store === store) &&
       (view !== 'Favorites' || game.favorite) &&
       (view !== 'Recently Played' || !!game.lastPlayed)
     )
-  }, [games, query, store, view, fuzzy])
+  }, [games, query, store, view, fuzzy, onlyInstalled])
+  const railStores = useMemo(() => stores.filter(item => item === store || games.some(game => game.store === item && !game.hidden && (!onlyInstalled || isInstalled(game)))).slice(0, 8), [games, store, onlyInstalled])
   const ordered = useMemo(() => {
     if (query.trim()) return filtered
     return [...filtered].sort((a, b) =>
@@ -261,6 +354,7 @@ export default function App() {
     { action: 'Play', label: 'Play' },
     { action: 'Edit metadata', label: 'Edit metadata' },
     { action: 'Set custom cover', label: 'Set custom cover' },
+    { action: 'Find cover on SteamGridDB', label: 'Find cover on SteamGridDB' },
     { action: 'Link another game', label: 'Link another game' },
     { action: menu?.game.hidden ? 'Unhide' : 'Hide', label: menu?.game.hidden ? 'Unhide' : 'Hide' },
     { action: 'Add to collection', label: 'Add to collection · Coming soon', disabled: true },
@@ -268,9 +362,23 @@ export default function App() {
     { action: 'Remove', label: 'Remove' }
   ]
 
+  const pageActions: GamePageActions = {
+    back: closeGame,
+    play: (game, route) => void launch(game, route),
+    edit: beginEdit,
+    setCover: game => void setCover(game).catch(error => notice(error instanceof Error ? error.message : 'Could not set cover')),
+    findCover: game => void findCover(game),
+    link: linkAnotherGame,
+    toggleHidden: game => void menuAction(game.hidden ? 'Unhide' : 'Hide', game),
+    toggleFavorite: game => void window.lobby.library.save({ ...game, favorite: !game.favorite }).then(setGames).catch(error => notice(error instanceof Error ? error.message : 'Could not update favorite')),
+    openFolder: game => void window.lobby.library.chooseInstallFolder(game.id).catch(error => notice(error instanceof Error ? error.message : 'Could not open install folder')),
+    remove: game => void menuAction('Remove', game),
+    setEmulator: async (game, routeIndex, emulatorId) => { setGames(await window.lobby.library.setEmulator(game.id, routeIndex, emulatorId)) }
+  }
+
   return <div className="app-shell">
     <header className="titlebar">
-      <div className="brand">Game Lobby</div><div className="drag-space" />
+      <div className="brand">Game Lobby</div>{nowPlaying && !(pageOpen && openId === nowPlaying.game.id) && <NowPlaying game={nowPlaying.game} entry={nowPlaying.item} onOpen={() => openGame(nowPlaying.game)} />}<div className="drag-space" data-tauri-drag-region />
       <button className="title-action" onClick={() => window.lobby.window.minimize()} aria-label="Minimize">—</button>
       <button className="title-action" onClick={() => window.lobby.window.toggleMaximize()} aria-label="Maximize">□</button>
       <button className="title-action close" onClick={() => window.lobby.window.close()} aria-label="Close">×</button>
@@ -284,8 +392,8 @@ export default function App() {
       <button className={'rail-button ' + (view === 'Recently Played' ? 'active' : '')} onClick={() => setView('Recently Played')} title="Recently played"><Clock3 /></button>
       <button className={'rail-button ' + (view === 'Hidden' ? 'active' : '')} onClick={() => setView('Hidden')} title="Hidden games"><EyeOff /></button>
       <div className="rail-sep" />
-      <div className="rail-stores">{stores.slice(0, 8).map(item =>
-        <button key={item} className={'rail-button mini ' + (store === item ? 'active' : '')} title={item} onClick={() => { setStore(store === item ? 'All Games' : item); setView('All Games') }}>{storeIcon[item]}</button>
+      <div className="rail-stores">{railStores.map(item =>
+        <button key={item} className={'rail-button mini ' + (store === item ? 'active' : '')} title={item} onClick={() => { setStore(store === item ? 'All Games' : item); setView('All Games') }}><StoreIcon store={item} size={16} /></button>
       )}<button className="rail-button mini" title="Add source" onClick={() => window.lobby.settings.open()}><Plus /></button></div>
       <div className="rail-bottom">
         <button className="rail-button" title="Export library" onClick={() => void window.lobby.backup.export()}><CloudDownload /></button>
@@ -294,12 +402,15 @@ export default function App() {
         <button className="rail-button" title="Quit" onClick={() => window.lobby.app.quit()}><X /></button>
       </div>
     </aside>
-    <main className="main">
+    <main className={'main' + (pageOpen ? ' page-open' : '')}>
+      {openGameData && <GamePage game={openGameData} index={Math.max(0, games.findIndex(game => game.id === openGameData.id))} settings={settings} running={runningById.get(openGameData.id)} libraryVersion={libraryVersion} actions={pageActions} />}
+      {!pageOpen && <>
       <div className="toolbar">
         <div><div className="eyebrow">YOUR COLLECTION</div><h1>{view === 'All Games' ? (store === 'All Games' ? 'All games' : store) : view}</h1></div>
         <div className="toolbar-actions">
           <label className="searchbox"><Search size={16} /><input ref={searchRef} value={query} onChange={event => setQuery(event.target.value)} placeholder="Search your library" /><kbd>Ctrl K</kbd></label>
           <button className="icon-button" title="Scan libraries" onClick={() => void scan()} disabled={scanBusy}><CloudDownload size={17} className={scanBusy ? 'spin' : ''} /></button>
+          <button className="secondary-button" onClick={() => void addLocalGame()} disabled={localBusy} title="Pick a PC game (.exe, .lnk, .url) or a ROM file"><Plus size={16} /> Add local game</button>
           <button className="primary-button" onClick={() => setAdding(true)}><Plus size={16} /> Add game</button>
         </div>
       </div>
@@ -308,6 +419,7 @@ export default function App() {
         <button onClick={() => setView('Recently Played')}><ListFilter size={13} /> Recently played</button>
         <label className="sort-control">Sort<select value={sortBy} onChange={event => setSortBy(event.target.value as SortBy)}><option value="title">Title</option><option value="lastPlayed">Last played</option><option value="playtime">Playtime</option></select></label>
         <span className="meta-spacer" />
+        <div className="segmented" role="group" aria-label="Installed filter"><button className={onlyInstalled ? 'active' : ''} aria-pressed={onlyInstalled} onClick={() => void setInstalledFilter(true)}>Installed</button><button className={!onlyInstalled ? 'active' : ''} aria-pressed={!onlyInstalled} onClick={() => void setInstalledFilter(false)}>All</button></div>
         <button onClick={() => setView('Favorites')}><Star size={13} /> Favorites</button>
       </div>
       <section className="grid-scroll" ref={scrollRef} onContextMenu={event => { if (!(event.target as HTMLElement).closest('.game-card')) event.preventDefault() }}>
@@ -321,13 +433,14 @@ export default function App() {
                 tabIndex={focusedId === game.id ? 0 : -1}
                 className="game-card"
                 onFocus={() => setFocusedId(game.id)}
-                onClick={() => detail(game)}
+                onClick={() => openGame(game)}
                 onContextMenu={event => { event.preventDefault(); setMenu({ x: event.clientX, y: event.clientY, game }) }}
               >
                 <div className="poster" style={{ ...coverStyle(game, row.index * cols + index), aspectRatio: '2 / 3' }}>
                   <div className="poster-vignette" />
                   <div className="poster-title-mark">{!game.cover && game.title.toUpperCase()}</div>
-                  {settings.showBadges && <span className="store-badge" title={game.store}>{storeIcon[game.store] || '•'}</span>}
+                  {runningById.has(game.id) && <span className={'run-badge ' + runningById.get(game.id)!.state}><span className="gp-live-dot" />{runningById.get(game.id)!.state === 'launching' ? 'Launching' : 'Playing'}</span>}
+                  {settings.showBadges && <span className="store-badge" title={game.store}><StoreIcon store={game.store} /></span>}
                   <button className="play-overlay" onClick={event => { event.stopPropagation(); void launch(game) }}><Play size={14} fill="currentColor" /> Play</button>
                   <button className="card-more" aria-label="Game actions" onClick={event => { event.stopPropagation(); setMenu({ x: event.clientX, y: event.clientY, game }) }}><MoreHorizontal size={17} /></button>
                 </div>
@@ -337,28 +450,10 @@ export default function App() {
             </div>
           })}
         </div>
-        {!filtered.length && <div className="empty"><Gamepad2 size={30} /><h3>{query ? 'No matching games' : view === 'Hidden' ? 'No hidden games' : 'Your library is empty'}</h3><p>{view === 'Hidden' ? 'Games you hide will appear here.' : 'Scan your stores or add a game manually.'}</p><button className="primary-button" onClick={() => void scan()}><CloudDownload size={15} /> Scan libraries</button></div>}
+        {!filtered.length && onlyInstalled && !query && games.some(game => (view === 'Hidden' ? game.hidden : !game.hidden) && (store === 'All Games' || game.store === store) && (view !== 'Favorites' || game.favorite) && (view !== 'Recently Played' || !!game.lastPlayed)) ? <div className="empty"><Gamepad2 size={30} /><h3>No installed games here</h3><p>Uninstalled games are hidden. Show all to see games you own but haven't installed.</p><button className="primary-button" onClick={() => void setInstalledFilter(false)}>Show all games</button></div> : !filtered.length && <div className="empty"><Gamepad2 size={30} /><h3>{query ? 'No matching games' : view === 'Hidden' ? 'No hidden games' : 'Your library is empty'}</h3><p>{view === 'Hidden' ? 'Games you hide will appear here.' : 'Scan your stores or add a game manually.'}</p><button className="primary-button" onClick={() => void scan()}><CloudDownload size={15} /> Scan libraries</button></div>}
       </section>
+      </>}
     </main>
-    {selected && <><div className="panel-scrim" onClick={() => setSelected(null)} /><aside className="detail-panel">
-      <button className="panel-close" onClick={() => setSelected(null)}><X size={17} /></button>
-      <div className="detail-cover" style={coverStyle(selected, games.findIndex(game => game.id === selected.id))} />
-      <div className="detail-store">{selected.store}</div><h2>{selected.title}</h2>
-      <div className="detail-tags"><span>{selected.genre || 'Game'}</span><span>·</span><span>{Math.floor(selected.playtimeMinutes / 60)}h played</span></div>
-      <button className="primary-button wide" onClick={() => void launch(selected)}><Play size={15} fill="currentColor" /> Play</button>
-      <button className="secondary-button wide" onClick={() => beginEdit(selected)}>Edit metadata</button>
-      <button className="secondary-button wide" onClick={() => linkAnotherGame(selected)}>Link another game</button>
-      <div className="detail-section"><div className="detail-label">PLAY FROM</div>{selected.routes.map((route, index) =>
-        <button className="route-row" key={route.sourceId + '-' + index} onClick={() => void launch(selected, index)}>
-          <span className="store-badge small">{storeIcon[route.store] || '•'}</span>
-          <span className="route-name">{route.store}<small>{route.installed ? 'Installed' : route.owned ? 'Owned · not installed' : 'Launch route'}</small></span><ChevronDown size={14} />
-        </button>
-      )}</div>
-      <div className="detail-section"><div className="detail-label">LAST PLAYED</div><div className="muted-text">{selected.lastPlayed ? new Date(selected.lastPlayed).toLocaleDateString() : 'Not played yet'}</div></div>
-      <button className="text-button" onClick={() => void setCover(selected)}>Set custom cover</button>
-      <button className="text-button" onClick={() => void menuAction(selected.hidden ? 'Unhide' : 'Hide', selected)}>{selected.hidden ? 'Unhide game' : 'Hide game'}</button>
-      <button className="text-button danger" onClick={() => void menuAction('Remove', selected)}>Remove from library</button>
-    </aside></>}
     {menu && <><div className="menu-dismiss" onMouseDown={() => setMenu(null)} /><div className="context-menu" style={{ left: Math.min(menu.x, window.innerWidth - 230), top: Math.min(menu.y, window.innerHeight - 330) }}>
       {menuOptions.map(option => <button key={option.action} disabled={option.disabled} className={(option.action === 'Remove' ? 'danger ' : '') + (option.disabled ? 'menu-item-disabled' : '')} onClick={() => { if (!option.disabled) void menuAction(option.action, menu.game) }}>{option.label}</button>)}
     </div></>}
@@ -387,7 +482,33 @@ export default function App() {
       </div>
       <div className="modal-actions"><button className="secondary-button" onClick={() => setLinkingGame(null)}>Cancel</button></div>
     </div></div>}
+    {sgdbGame && <div className="modal-scrim"><div className="modal sgdb-modal" role="dialog" aria-label={'Find cover for ' + sgdbGame.title}>
+      <div className="modal-head"><h2>{sgdbGame.title}</h2><button type="button" aria-label="Close" onClick={closeFindCover}><X size={17} /></button></div>
+      {sgdbState === 'loading' && <div className="empty-inline">Searching SteamGridDB…</div>}
+      {sgdbState === 'nokey' && <div className="empty-inline">Add a free SteamGridDB API key in settings to search for covers.<br /><button className="secondary-button" onClick={() => void window.lobby.settings.open()}>Open settings</button></div>}
+      {sgdbState === 'error' && <div className="empty-inline">{sgdbError}</div>}
+      {sgdbState === 'ready' && sgdbCovers.length === 0 && <div className="empty-inline">No covers found on SteamGridDB for this game</div>}
+      {sgdbState === 'ready' && sgdbCovers.length > 0 && <div className={'sgdb-grid' + (sgdbApplying ? ' busy' : '')}>
+        {sgdbCovers.map(cover => <button type="button" className="sgdb-tile" key={cover.id} disabled={sgdbApplying} onClick={() => void applySgdbCover(cover)} title={cover.author ? 'By ' + cover.author : undefined}><img src={cover.thumb} loading="lazy" alt={cover.author ? 'Cover option by ' + cover.author : 'Cover option ' + cover.id} /></button>)}
+      </div>}
+      <div className="modal-actions"><button className="secondary-button" onClick={closeFindCover}>Cancel</button></div>
+    </div></div>}
     {editMode && <div className="edit-banner">Edit mode is on · select a title to edit its metadata <button onClick={() => setEditMode(false)}>Done</button></div>}
     {toast && <div className="toast">{toast}</div>}
+    {updateNotice && <div className="update-notice" role="status">
+      <CloudDownload size={16} />
+      <span>Game Lobby {updateNotice.version} is available</span>
+      <button type="button" className="primary-button" onClick={() => { setUpdateNotice(null); void window.lobby.settings.open('updates') }}>View update</button>
+      <button type="button" className="update-notice-close" title="Dismiss" aria-label="Dismiss update notice" onClick={() => setUpdateNotice(null)}><X size={14} /></button>
+    </div>}
   </div>
+}
+
+function NowPlaying({ game, entry, onOpen }: { game: Game; entry: RunningGame; onOpen: () => void }) {
+  const now = useNow(true)
+  const launching = entry.state === 'launching'
+  return <button className="now-playing" onClick={onOpen} title={'Open ' + game.title}>
+    <span className="gp-live-dot" />
+    <span className="np-text">{launching ? 'Launching: ' : 'Now playing: '}<b>{game.title}</b>{!launching && ' · ' + formatClock(elapsedSeconds(entry.startedAt, now))}</span>
+  </button>
 }

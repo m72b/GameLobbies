@@ -1,2 +1,5 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Signed test fixtures: byte-exact, never line-ending converted.
+.github/scripts/fixtures/** -text
