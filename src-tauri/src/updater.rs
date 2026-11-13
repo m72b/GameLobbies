@@ -20,9 +20,10 @@ use rusqlite::{params, Connection, OptionalExtension};
 use semver::Version;
 use serde::Serialize;
 use std::cmp::Ordering;
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_updater::{Error as UpdaterError, Update, UpdaterExt};
 
@@ -46,17 +47,35 @@ const PROGRESS_INTERVAL: Duration = Duration::from_millis(150);
 const READY_DELAY: Duration = Duration::from_millis(500);
 const BUSY: &str =
     "Game Lobby is already checking for or installing an update. Wait for it to finish.";
+/// Largest installer accepted: the download stops as soon as more than this has arrived.
+pub const MAX_DOWNLOAD_BYTES: u64 = 300 * 1024 * 1024;
+/// Library backups made before updates; only the newest [`BACKUPS_KEPT`] are kept.
+const BACKUP_PREFIX: &str = "library.sqlite.before-update-";
+const BACKUPS_KEPT: usize = 3;
+/// Minimum gap between manual checks; a quicker repeat gets the previous result.
+const MANUAL_CHECK_INTERVAL: Duration = Duration::from_secs(10);
+const TOO_SOON: &str = "Game Lobby checked for updates a moment ago. Try again in a few seconds.";
+
+/// The last manual check: when it ran, and its result when it succeeded.
+type LastCheck = (Instant, Option<UpdateInfo>);
 
 /// Managed state: one check or install at a time, and the update the last check found.
 #[derive(Default)]
 pub struct Updates {
     busy: tokio::sync::Mutex<()>,
     pending: Mutex<Option<Update>>,
+    last_manual: Mutex<Option<LastCheck>>,
 }
 
 impl Updates {
     fn pending(&self) -> MutexGuard<'_, Option<Update>> {
         self.pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn last_manual(&self) -> MutexGuard<'_, Option<LastCheck>> {
+        self.last_manual
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
@@ -91,7 +110,13 @@ struct Progress {
 #[tauri::command]
 pub async fn updates_check(app: AppHandle, updates: State<'_, Updates>) -> CmdResult<UpdateInfo> {
     let _busy = updates.busy.try_lock().map_err(|_| BUSY.to_string())?;
-    check(&app, &updates).await.map_err(|f| f.message())
+    let now = Instant::now();
+    if let Some(recent) = recent_check(updates.last_manual().as_ref(), now) {
+        return recent;
+    }
+    let result = check(&app, &updates).await.map_err(|f| f.message());
+    *updates.last_manual() = Some((now, result.as_ref().ok().cloned()));
+    result
 }
 
 /// The startup check: runs only when `autoCheckUpdates` is on and the last check that reached
@@ -154,17 +179,18 @@ pub async fn updates_install(app: AppHandle, updates: State<'_, Updates>) -> Cmd
     }
 
     // The signature is checked as part of the download; nothing changes before it passes.
-    let bytes = download(&app, &update)
-        .await
-        .map_err(|e| describe(&e).message())?;
+    let bytes = download(&app, &update).await.map_err(|f| f.message())?;
 
     tracker::end_all_sessions(&app);
     let backup_app = app.clone();
     let version = update.version.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let state = backup_app.state::<AppState>();
-        let conn = state.db.lock();
-        backup_database(&conn, &state.data_dir, &version)
+        let backup = backup_database(&state.db.lock(), &state.data_dir, &version)?;
+        if let Err(e) = prune_backups(&state.data_dir, BACKUPS_KEPT) {
+            eprintln!("Could not remove old update backups: {e}");
+        }
+        anyhow::Ok(backup)
     })
     .await
     .map_err(|e| format!("The library backup failed: {e}"))?
@@ -209,6 +235,13 @@ async fn check(app: &AppHandle, updates: &Updates) -> Result<UpdateInfo, Failure
     }
     let mut found = result.map_err(|e| describe(&e))?;
     if let Some(update) = found.as_mut() {
+        // Only installers published in the configured releases repository are downloaded.
+        let allowed = configured_download_prefix(app)
+            .is_some_and(|prefix| download_url_allowed(update.download_url.as_str(), &prefix));
+        if !allowed {
+            *updates.pending() = None;
+            return Err(Failure::UntrustedLocation);
+        }
         // The installer download is limited per read, not in total (slow connections).
         update.timeout = None;
     }
@@ -217,24 +250,33 @@ async fn check(app: &AppHandle, updates: &Updates) -> Result<UpdateInfo, Failure
     Ok(info)
 }
 
-async fn download(app: &AppHandle, update: &Update) -> Result<Vec<u8>, UpdaterError> {
+async fn download(app: &AppHandle, update: &Update) -> Result<Vec<u8>, Failure> {
     let mut downloaded: u64 = 0;
     let mut total: Option<u64> = None;
     let mut last_emit: Option<Instant> = None;
-    let bytes = update
-        .download(
-            |chunk, content_length| {
-                downloaded += chunk as u64;
-                total = content_length;
-                let now = Instant::now();
-                if progress_due(last_emit, now) {
-                    last_emit = Some(now);
-                    let _ = app.emit("updates:progress", Progress { downloaded, total });
-                }
-            },
-            || {},
-        )
-        .await?;
+    let too_large = tokio::sync::Notify::new();
+    let transfer = update.download(
+        |chunk, content_length| {
+            downloaded = downloaded.saturating_add(chunk as u64);
+            total = content_length;
+            if exceeds_limit(downloaded, total) {
+                too_large.notify_one();
+                return;
+            }
+            let now = Instant::now();
+            if progress_due(last_emit, now) {
+                last_emit = Some(now);
+                let _ = app.emit("updates:progress", Progress { downloaded, total });
+            }
+        },
+        || {},
+    );
+    let bytes = with_size_limit(transfer, &too_large)
+        .await?
+        .map_err(|e| describe(&e))?;
+    if bytes.len() as u64 > MAX_DOWNLOAD_BYTES {
+        return Err(Failure::TooLarge);
+    }
     let _ = app.emit(
         "updates:progress",
         Progress {
@@ -259,8 +301,86 @@ fn info(app: &AppHandle, update: Option<&Update>) -> UpdateInfo {
     }
 }
 
+/// Runs `transfer` until it finishes or `too_large` is notified; then the transfer is dropped,
+/// which aborts the download.
+async fn with_size_limit<F: Future>(
+    transfer: F,
+    too_large: &tokio::sync::Notify,
+) -> Result<F::Output, Failure> {
+    tokio::select! {
+        biased;
+        _ = too_large.notified() => Err(Failure::TooLarge),
+        output = transfer => Ok(output),
+    }
+}
+
+/// `/<owner>/<repo>/releases/download/` for the configured update endpoint.
+fn configured_download_prefix(app: &AppHandle) -> Option<String> {
+    let endpoint = app
+        .config()
+        .plugins
+        .0
+        .get("updater")?
+        .get("endpoints")?
+        .as_array()?
+        .first()?
+        .as_str()?;
+    download_prefix(endpoint)
+}
+
 // ---------------------------------------------------------------------------
 // Pure helpers
+
+/// The path prefix of release downloads in the GitHub repository an endpoint such as
+/// `https://github.com/<owner>/<repo>/releases/latest/download/latest.json` belongs to.
+pub fn download_prefix(endpoint: &str) -> Option<String> {
+    let url = url::Url::parse(endpoint).ok()?;
+    if url.scheme() != "https"
+        || url.host_str() != Some("github.com")
+        || url.port().is_some()
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return None;
+    }
+    let mut segments = url.path_segments()?;
+    let owner = segments.next().filter(|s| !s.is_empty())?;
+    let repo = segments.next().filter(|s| !s.is_empty())?;
+    Some(format!("/{owner}/{repo}/releases/download/"))
+}
+
+/// True when an installer URL from the (unsigned) manifest is a release asset of the
+/// configured repository: https, exactly github.com, no credentials or port, under `prefix`.
+pub fn download_url_allowed(download_url: &str, prefix: &str) -> bool {
+    let Ok(url) = url::Url::parse(download_url) else {
+        return false;
+    };
+    let path = url.path();
+    url.scheme() == "https"
+        && url.host_str() == Some("github.com")
+        && url.port().is_none()
+        && url.username().is_empty()
+        && url.password().is_none()
+        && path.len() > prefix.len()
+        && path.starts_with(prefix)
+        && !path.to_ascii_lowercase().contains("%2e")
+        && !path.contains("/../")
+}
+
+/// True once a download is (or announces itself as) larger than [`MAX_DOWNLOAD_BYTES`].
+pub fn exceeds_limit(downloaded: u64, total: Option<u64>) -> bool {
+    downloaded > MAX_DOWNLOAD_BYTES || total.is_some_and(|t| t > MAX_DOWNLOAD_BYTES)
+}
+
+/// The previous manual check's outcome when it ran under [`MANUAL_CHECK_INTERVAL`] ago: its
+/// result, or a "try again" message when it failed. `None` when a new check may run.
+fn recent_check(last: Option<&LastCheck>, now: Instant) -> Option<CmdResult<UpdateInfo>> {
+    let (at, info) = last?;
+    if now.saturating_duration_since(*at) >= MANUAL_CHECK_INTERVAL {
+        return None;
+    }
+    Some(info.clone().ok_or_else(|| TOO_SOON.to_string()))
+}
 
 /// True when `remote` is a newer release than `current`. Same versions and downgrades are
 /// refused; build metadata (`+…`) does not make a version newer.
@@ -348,6 +468,30 @@ fn backup_database(conn: &Connection, data_dir: &Path, version: &str) -> anyhow:
     result.map(|()| target)
 }
 
+/// Deletes all but the newest `keep` `library.sqlite.before-update-*.bak` files in `dir` (by
+/// modification time). Other files are never touched. Returns the deleted paths.
+fn prune_backups(dir: &Path, keep: usize) -> std::io::Result<Vec<PathBuf>> {
+    let mut backups: Vec<(SystemTime, String, PathBuf)> = std::fs::read_dir(dir)?
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_ok_and(|t| t.is_file()))
+        .filter_map(|entry| {
+            let name = entry.file_name().into_string().ok()?;
+            if !(name.starts_with(BACKUP_PREFIX) && name.ends_with(".bak")) {
+                return None;
+            }
+            let modified = entry.metadata().ok()?.modified().ok()?;
+            Some((modified, name, entry.path()))
+        })
+        .collect();
+    backups.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| b.1.cmp(&a.1)));
+    let mut removed = Vec::new();
+    for (_, _, path) in backups.into_iter().skip(keep) {
+        std::fs::remove_file(&path)?;
+        removed.push(path);
+    }
+    Ok(removed)
+}
+
 fn last_check(conn: &Connection) -> Option<i64> {
     conn.query_row(
         "SELECT value FROM settings WHERE key=?",
@@ -381,6 +525,8 @@ enum Failure {
     BadManifest,
     NoWindowsBuild,
     Download,
+    UntrustedLocation,
+    TooLarge,
     Other(String),
 }
 
@@ -400,6 +546,11 @@ impl Failure {
             Self::BadManifest => "The update information from the server could not be read.".into(),
             Self::NoWindowsBuild => "The latest release has no Windows installer.".into(),
             Self::Download => "The update could not be downloaded. Try again later.".into(),
+            Self::UntrustedLocation => "The update was rejected because it would be downloaded from an unexpected location. Nothing was installed.".into(),
+            Self::TooLarge => format!(
+                "The update was rejected because the download was larger than {} MB. Nothing was installed.",
+                MAX_DOWNLOAD_BYTES / (1024 * 1024)
+            ),
             Self::Other(message) => format!("The update failed: {message}"),
         }
     }
@@ -587,6 +738,171 @@ mod tests {
     }
 
     #[test]
+    fn download_prefix_comes_from_a_github_endpoint() {
+        let endpoint =
+            "https://github.com/m72b/GameLobby-releases/releases/latest/download/latest.json";
+        assert_eq!(
+            download_prefix(endpoint).as_deref(),
+            Some("/m72b/GameLobby-releases/releases/download/")
+        );
+        assert_eq!(
+            download_prefix(
+                "https://github.com/m72b/GameLobby/releases/latest/download/latest.json"
+            )
+            .as_deref(),
+            Some("/m72b/GameLobby/releases/download/")
+        );
+        for bad in [
+            "http://github.com/m72b/GameLobby-releases/releases/latest/download/latest.json",
+            "https://example.com/m72b/GameLobby-releases/latest.json",
+            "https://github.com.evil.example/m72b/GameLobby-releases/latest.json",
+            "https://user@github.com/m72b/GameLobby-releases/latest.json",
+            "https://github.com:444/m72b/GameLobby-releases/latest.json",
+            "https://github.com/m72b",
+            "not a url",
+        ] {
+            assert_eq!(download_prefix(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn installers_are_downloaded_only_from_the_releases_repo() {
+        let prefix = "/m72b/GameLobby-releases/releases/download/";
+        assert!(download_url_allowed(
+            "https://github.com/m72b/GameLobby-releases/releases/download/v0.4.0/GameLobby_0.4.0_x64-setup.exe",
+            prefix
+        ));
+        for bad in [
+            "http://github.com/m72b/GameLobby-releases/releases/download/v0.4.0/a.exe",
+            "https://evil.example/m72b/GameLobby-releases/releases/download/v0.4.0/a.exe",
+            "https://github.com.evil.example/m72b/GameLobby-releases/releases/download/v0.4.0/a.exe",
+            "https://objects.githubusercontent.com/m72b/GameLobby-releases/releases/download/v0.4.0/a.exe",
+            "https://github.com/m72b/Other/releases/download/v0.4.0/a.exe",
+            "https://github.com/someone/GameLobby-releases/releases/download/v0.4.0/a.exe",
+            "https://github.com/m72b/GameLobby-releases/archive/v0.4.0.zip",
+            "https://github.com/m72b/GameLobby-releases/releases/download/",
+            "https://github.com/m72b/GameLobby-releases/releases/download/%2e%2e/%2E%2E/x/a.exe",
+            "https://user:pw@github.com/m72b/GameLobby-releases/releases/download/v0.4.0/a.exe",
+            "https://github.com:8443/m72b/GameLobby-releases/releases/download/v0.4.0/a.exe",
+            "file:///C:/m72b/GameLobby-releases/releases/download/v0.4.0/a.exe",
+            "",
+        ] {
+            assert!(!download_url_allowed(bad, prefix), "{bad}");
+        }
+        // Dot segments are resolved before the check: this one leaves the repository.
+        assert!(!download_url_allowed(
+            "https://github.com/m72b/GameLobby-releases/releases/download/../../../Other/releases/download/v1/a.exe",
+            prefix
+        ));
+    }
+
+    #[test]
+    fn downloads_over_the_size_limit_are_refused() {
+        assert!(!exceeds_limit(0, None));
+        assert!(!exceeds_limit(MAX_DOWNLOAD_BYTES, Some(MAX_DOWNLOAD_BYTES)));
+        assert!(exceeds_limit(MAX_DOWNLOAD_BYTES + 1, None));
+        assert!(
+            exceeds_limit(10, Some(MAX_DOWNLOAD_BYTES + 1)),
+            "announced size"
+        );
+        assert_eq!(MAX_DOWNLOAD_BYTES, 300 * 1024 * 1024);
+    }
+
+    #[tokio::test]
+    async fn the_size_limit_aborts_a_running_download() {
+        // A transfer that would never finish is dropped once the limit is signalled.
+        let notify = tokio::sync::Notify::new();
+        notify.notify_one();
+        let result = with_size_limit(std::future::pending::<()>(), &notify).await;
+        assert_eq!(result, Err(Failure::TooLarge));
+
+        // Signalled from inside the transfer (as the progress callback does).
+        let notify = tokio::sync::Notify::new();
+        let transfer = async {
+            notify.notify_one();
+            std::future::pending::<u8>().await
+        };
+        assert_eq!(
+            with_size_limit(transfer, &notify).await,
+            Err(Failure::TooLarge)
+        );
+
+        let notify = tokio::sync::Notify::new();
+        assert_eq!(with_size_limit(async { 7 }, &notify).await, Ok(7));
+    }
+
+    #[test]
+    fn manual_checks_are_at_most_every_ten_seconds() {
+        let start = Instant::now();
+        assert!(recent_check(None, start).is_none());
+        let found = UpdateInfo {
+            available: true,
+            current_version: "0.3.0".into(),
+            version: Some("0.4.0".into()),
+            date: None,
+            notes: None,
+        };
+        let last = (start, Some(found.clone()));
+        assert_eq!(
+            recent_check(Some(&last), start + Duration::from_secs(3)),
+            Some(Ok(found))
+        );
+        assert!(recent_check(Some(&last), start + MANUAL_CHECK_INTERVAL).is_none());
+        let failed = (start, None);
+        assert_eq!(
+            recent_check(Some(&failed), start + Duration::from_secs(1)),
+            Some(Err(TOO_SOON.to_string()))
+        );
+        assert!(recent_check(Some(&failed), start + Duration::from_secs(11)).is_none());
+        assert_eq!(MANUAL_CHECK_INTERVAL, Duration::from_secs(10));
+    }
+
+    #[test]
+    fn only_the_newest_three_update_backups_are_kept() {
+        let dir = std::env::temp_dir().join(format!("game-lobby-prune-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let base = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let make = |name: &str, age_days: u64| {
+            let path = dir.join(name);
+            let file = std::fs::File::create(&path).unwrap();
+            file.set_modified(base - Duration::from_secs(age_days * 86_400))
+                .unwrap();
+            path
+        };
+        let newest = [
+            make("library.sqlite.before-update-0.9.0.bak", 0),
+            make("library.sqlite.before-update-0.8.0.bak", 1),
+            make("library.sqlite.before-update-0.7.0.bak", 2),
+        ];
+        let older = [
+            make("library.sqlite.before-update-0.6.0.bak", 3),
+            make("library.sqlite.before-update-0.5.0.bak", 4),
+        ];
+        // Never touched, however old.
+        let others = [
+            make("library.sqlite", 30),
+            make("library.sqlite.pre-title-migration-1.bak", 30),
+            make("library.sqlite.before-update-0.1.0.bak.partial", 30),
+            make("xlibrary.sqlite.before-update-0.1.0.bak", 30),
+            make("library.sqlite.before-update-0.1.0.bak.txt", 30),
+        ];
+        std::fs::create_dir(dir.join("library.sqlite.before-update-dir.bak")).unwrap();
+
+        let mut removed = prune_backups(&dir, BACKUPS_KEPT).unwrap();
+        removed.sort();
+        let mut expected = older.to_vec();
+        expected.sort();
+        assert_eq!(removed, expected);
+        for path in newest.iter().chain(others.iter()) {
+            assert!(path.exists(), "{}", path.display());
+        }
+        assert!(dir.join("library.sqlite.before-update-dir.bak").is_dir());
+        // Nothing more to remove.
+        assert!(prune_backups(&dir, BACKUPS_KEPT).unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn progress_events_are_throttled() {
         let start = Instant::now();
         assert!(progress_due(None, start));
@@ -635,9 +951,15 @@ mod tests {
             Failure::BadManifest,
             Failure::NoWindowsBuild,
             Failure::Download,
+            Failure::UntrustedLocation,
+            Failure::TooLarge,
         ] {
             assert!(!failure.message().contains("http"), "{failure:?}");
         }
+        assert!(Failure::UntrustedLocation
+            .message()
+            .contains("rejected because it would be downloaded from an unexpected location"));
+        assert!(Failure::TooLarge.message().contains("larger than 300 MB"));
     }
 
     #[test]
@@ -687,6 +1009,11 @@ mod tests {
             assert_eq!(url.host_str(), Some("github.com"), "{url}");
             assert!(url.path().starts_with("/m72b/GameLobby-releases/"), "{url}");
             assert!(url.query().is_none() && url.username().is_empty(), "{url}");
+            // Installers are accepted only from this repository's release downloads.
+            assert_eq!(
+                download_prefix(url.as_str()).as_deref(),
+                Some("/m72b/GameLobby-releases/releases/download/")
+            );
         }
         // The release workflow publishes to the same repository the app reads from.
         let workflow = std::fs::read_to_string(

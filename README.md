@@ -40,15 +40,27 @@ To cut a release:
    git tag -a v0.4.0 -m "Release notes shown in the app"
    git push origin v0.4.0
    ```
-3. `.github/workflows/release.yml` checks that the tag matches `package.json`, builds with `--config src-tauri/tauri.release.conf.json` (which turns on `createUpdaterArtifacts`), writes `latest.json` and publishes both files as release `v0.4.0` in m72b/GameLobby-releases.
+3. `.github/workflows/release.yml` then runs three jobs:
+   - **build**: checks that the tag matches `package.json` and builds the unsigned installer. It has no secrets, and `npm ci --ignore-scripts` keeps dependency install scripts from running.
+   - **sign**: runs in the `release` environment, the only place the signing key is available. It installs the Tauri CLI version locked in `package-lock.json` into an empty folder, checks it against the lockfile, and signs the installer with the version bound to the signature. It writes `latest.json`, then checks the signature against the public key in `tauri.conf.json` with `.github/scripts/verify-minisign.mjs`, an independent check that uses Node's own crypto.
+   - **publish**: creates release `v0.4.0` in m72b/GameLobby-releases with the installer, its `.sig` and `latest.json`.
 
-The workflow needs these repository secrets:
+   All actions are pinned to commit SHAs. The Rust version comes from `rust-toolchain.toml`. `src-tauri/tauri.release.conf.json` turns on `createUpdaterArtifacts` for a signed build in one step, for example a local test with a throwaway key; CI signs separately instead.
 
-| Secret | Contents |
-| --- | --- |
-| `TAURI_SIGNING_PRIVATE_KEY` | The updater private key (from `tauri signer generate`) |
-| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Its password |
-| `RELEASES_TOKEN` | A fine-grained personal access token with **Contents: read and write** on m72b/GameLobby-releases only. Not needed when releases are published to this repository itself. |
+Secrets:
+
+| Secret | Where | Contents |
+| --- | --- | --- |
+| `TAURI_SIGNING_PRIVATE_KEY` | Environment `release` | The updater private key (from `tauri signer generate`) |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Environment `release` | Its password |
+| `RELEASES_TOKEN` | Repository | A fine-grained personal access token with **Contents: read and write** on m72b/GameLobby-releases only. Not needed when releases are published to this repository itself. |
+
+Set up the `release` environment once, in **Settings → Environments**:
+
+1. Create the environment `release` and add the two signing secrets to it. If they were added as repository secrets earlier, delete those afterwards, so only the sign job can read them.
+2. Add yourself as a **required reviewer**: each release waits for your approval before anything is signed.
+3. Under **Deployment branches and tags**, choose **Selected branches and tags** and add the tag rule `v*`.
+4. Under **Settings → Rules → Rulesets**, add a tag ruleset for `v*` that restricts who can create, update and delete those tags, for example to repository admins only.
 
 ### Publishing to a different repository
 

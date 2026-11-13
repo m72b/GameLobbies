@@ -1,16 +1,20 @@
-// Prepares a release for the repository in RELEASE_REPO (default m72b/GameLobby-releases) after
-// `tauri build --config src-tauri/tauri.release.conf.json`:
+// Prepares a release for the repository in RELEASE_REPO (default m72b/GameLobby-releases) from a
+// signed NSIS installer in BUNDLE_DIR (default src-tauri/target/release/bundle/nsis): the setup
+// .exe and the .sig written by `tauri signer sign` (or by a build with tauri.release.conf.json).
+// It:
 //   - copies the signed NSIS installer to <outDir> under a name without spaces (GitHub
 //     rewrites spaces in asset names, which would break the manifest URL), and
 //   - writes <outDir>/latest.json in Tauri's static updater format.
 //
 // Usage: node .github/scripts/updater-manifest.mjs <version> <outDir> [notesFile]
-// Prints the installer's path in <outDir>.
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+// Prints the bare asset name (the installer's file name in <outDir>) and, on GitHub Actions,
+// also sets the step output `asset` to it. Verify the signature cryptographically with
+// verify-minisign.mjs; this script only checks that it names the version.
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 const RELEASE_REPO = process.env.RELEASE_REPO || 'm72b/GameLobby-releases'
-const BUNDLE_DIR = join('src-tauri', 'target', 'release', 'bundle', 'nsis')
+const BUNDLE_DIR = process.env.BUNDLE_DIR || join('src-tauri', 'target', 'release', 'bundle', 'nsis')
 
 function fail(message) {
   console.error(`::error::${message}`)
@@ -31,7 +35,7 @@ if (installers.length !== 1) fail(`Expected one *${suffix} in ${BUNDLE_DIR}, fou
 const installer = installers[0]
 const signaturePath = join(BUNDLE_DIR, `${installer}.sig`)
 if (!existsSync(signaturePath)) {
-  fail(`${signaturePath} is missing: build with --config src-tauri/tauri.release.conf.json and the TAURI_SIGNING_PRIVATE_KEY secret`)
+  fail(`${signaturePath} is missing: sign the installer first (tauri signer sign --app-version ${version})`)
 }
 const signature = readFileSync(signaturePath, 'utf8').trim()
 
@@ -59,4 +63,6 @@ const manifest = {
   }
 }
 writeFileSync(join(outDir, 'latest.json'), JSON.stringify(manifest, null, 2) + '\n')
-console.log(join(outDir, assetName))
+if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `asset=${assetName}
+`)
+console.log(assetName)

@@ -1,0 +1,6 @@
+# The Rust toolchain for local builds and CI (the release workflow uses the runner's rustup with
+# this file instead of a toolchain action). Update deliberately, then run the full checks.
+[toolchain]
+channel = "1.99.1"
+profile = "minimal"
+components = ["clippy", "rustfmt"]
