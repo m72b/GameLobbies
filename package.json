@@ -13,11 +13,13 @@
     "typecheck": "tsc --noEmit",
     "build:web": "npm run typecheck && vite build",
     "test": "cargo test --manifest-path src-tauri/Cargo.toml",
+    "test:web": "node --test src/shared/*.test.mjs",
     "lint": "cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings",
     "build": "tauri build",
     "tauri": "tauri"
   },
   "dependencies": {
+    "@fontsource/quantico": "5.3.0",
     "@tanstack/react-virtual": "^3.13.12",
     "@tauri-apps/api": "^2.12.4",
     "fuse.js": "^7.1.0",

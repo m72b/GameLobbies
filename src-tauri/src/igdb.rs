@@ -72,7 +72,23 @@ const NO_CREDENTIALS: &str =
 const WORKS: &str = "IGDB connection works.";
 
 /// Fields fetched for the game page.
-pub const GAME_FIELDS: &str = "name,summary,storyline,genres.name,involved_companies.company.name,involved_companies.developer,involved_companies.publisher,aggregated_rating,aggregated_rating_count,rating,rating_count,first_release_date,url";
+pub const GAME_FIELDS: &str = "name,summary,storyline,genres.name,involved_companies.company.name,involved_companies.developer,involved_companies.publisher,aggregated_rating,aggregated_rating_count,rating,rating_count,first_release_date,url,screenshots.image_id,artworks.image_id";
+/// Fields of `game_time_to_beats` (seconds; `count` = number of submissions).
+const TIME_TO_BEAT_FIELDS: &str = "hastily,normally,completely,count";
+/// Version of the cached metadata JSON. Rows written with an older shape (without images or
+/// time to beat) still load, but count as stale so the next view refetches them.
+pub const CACHE_SHAPE: u32 = 2;
+/// Screenshots plus artworks kept per game.
+pub const MAX_IMAGES: usize = 8;
+/// Screenshots kept before artworks fill the rest of [`MAX_IMAGES`].
+const MAX_SCREENSHOTS_FIRST: usize = 5;
+const MAX_IMAGE_ID_LEN: usize = 64;
+/// The only host IGDB images are loaded from.
+pub const IMAGE_HOST: &str = "images.igdb.com";
+/// After trying to cache a game's images, they aren't tried again for this long.
+const IMAGE_RETRY_AFTER: Duration = Duration::from_secs(10 * 60);
+/// Longest time to beat accepted (seconds): 10,000 hours.
+const MAX_TIME_TO_BEAT_SECONDS: u64 = 10_000 * 3600;
 /// Fields fetched for search candidates; `game_type`/`category` mark main games vs DLC.
 const SEARCH_FIELDS: &str =
     "name,first_release_date,platforms.abbreviation,game_type,category,version_parent";
@@ -119,6 +135,72 @@ pub struct GameMetadata {
     /// The IGDB page (https://www.igdb.com/games/...).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
+    /// Validated IGDB image ids (see [`valid_image_id`]); URLs are built from them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub screenshots: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artworks: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_to_beat: Option<TimeToBeat>,
+    /// [`CACHE_SHAPE`] when written; 0 for rows from older versions.
+    #[serde(default)]
+    pub shape: u32,
+}
+
+/// IGDB `game_time_to_beats`, in seconds.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct TimeToBeat {
+    /// Main story ("hastily").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hastily: Option<u64>,
+    /// Main story plus extras ("normally").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub normally: Option<u64>,
+    /// Completionist ("completely").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completely: Option<u64>,
+    /// Number of submissions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub count: Option<u32>,
+}
+
+impl TimeToBeat {
+    fn cleaned(self) -> Option<Self> {
+        let ok = |s: Option<u64>| s.filter(|s| (1..=MAX_TIME_TO_BEAT_SECONDS).contains(s));
+        let t = Self {
+            hastily: ok(self.hastily),
+            normally: ok(self.normally),
+            completely: ok(self.completely),
+            count: self.count.filter(|c| *c > 0),
+        };
+        (t.hastily.is_some() || t.normally.is_some() || t.completely.is_some()).then_some(t)
+    }
+}
+
+/// One picture for the About section: `thumb` and `full` are a cached `lobby-cover://` value
+/// once downloaded, otherwise the https URL on [`IMAGE_HOST`].
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageView {
+    /// `"screenshot"` or `"artwork"`.
+    pub kind: &'static str,
+    pub thumb: String,
+    pub full: String,
+}
+
+/// Time to beat as shown on the page ("42½ h"); absent values are left out.
+#[derive(Serialize, Clone, Debug, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TimeToBeatView {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub main_story: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub main_extras: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completionist: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub count: Option<u32>,
 }
 
 impl GameMetadata {
@@ -136,8 +218,172 @@ impl GameMetadata {
             user_rating: self.user_rating.filter(|r| r.score <= 100),
             release_date: self.release_date,
             url: self.url.and_then(|u| igdb_page_url(&u)),
+            screenshots: clean_image_ids(self.screenshots, MAX_IMAGES),
+            artworks: clean_image_ids(self.artworks, MAX_IMAGES),
+            time_to_beat: self.time_to_beat.and_then(TimeToBeat::cleaned),
+            shape: self.shape,
         })
     }
+
+    /// Up to [`MAX_IMAGES`]: screenshots first (at most [`MAX_SCREENSHOTS_FIRST`] while
+    /// artworks are available), then artworks, then more screenshots.
+    pub fn image_ids(&self) -> Vec<(&'static str, &str)> {
+        let shots: Vec<&str> = self.screenshots.iter().map(String::as_str).collect();
+        let arts: Vec<&str> = self.artworks.iter().map(String::as_str).collect();
+        let first = shots.len().min(if arts.is_empty() {
+            MAX_IMAGES
+        } else {
+            MAX_SCREENSHOTS_FIRST
+        });
+        let mut out: Vec<(&'static str, &str)> = shots[..first]
+            .iter()
+            .map(|id| ("screenshot", *id))
+            .collect();
+        out.extend(arts.iter().map(|id| ("artwork", *id)));
+        out.extend(shots[first..].iter().map(|id| ("screenshot", *id)));
+        out.truncate(MAX_IMAGES);
+        out
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Images and time to beat (pure)
+
+/// IGDB image ids are short lowercase letters and digits; anything else is refused, so an id
+/// can never change the path or host of the URL built from it.
+pub fn valid_image_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= MAX_IMAGE_ID_LEN
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+}
+
+fn clean_image_ids(ids: Vec<String>, max: usize) -> Vec<String> {
+    let mut seen = HashSet::new();
+    ids.into_iter()
+        .filter(|id| valid_image_id(id) && seen.insert(id.clone()))
+        .take(max)
+        .collect()
+}
+
+/// Image sizes used by the page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImageSize {
+    /// `t_screenshot_med` (569x320) for the strip.
+    Thumb,
+    /// `t_1080p` (1920x1080) for the lightbox.
+    Full,
+}
+
+/// `https://images.igdb.com/igdb/image/upload/<size>/<id>.jpg`, built only from a valid id.
+pub fn image_url(id: &str, size: ImageSize) -> Option<String> {
+    if !valid_image_id(id) {
+        return None;
+    }
+    let size = match size {
+        ImageSize::Thumb => "t_screenshot_med",
+        ImageSize::Full => "t_1080p",
+    };
+    Some(format!(
+        "https://{IMAGE_HOST}/igdb/image/upload/{size}/{id}.jpg"
+    ))
+}
+
+/// Every image URL (both sizes) the metadata refers to.
+pub fn image_urls(metadata: &GameMetadata) -> Vec<String> {
+    metadata
+        .image_ids()
+        .into_iter()
+        .flat_map(|(_, id)| {
+            [
+                image_url(id, ImageSize::Thumb),
+                image_url(id, ImageSize::Full),
+            ]
+        })
+        .flatten()
+        .collect()
+}
+
+/// Image URLs referenced by any cached metadata (kept by the cover cache sweep).
+pub fn referenced_image_urls(conn: &rusqlite::Connection) -> Result<HashSet<String>> {
+    let mut stmt = conn.prepare("SELECT json FROM game_metadata WHERE json IS NOT NULL")?;
+    let rows: Vec<String> = stmt
+        .query_map([], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(rows
+        .iter()
+        .filter_map(|j| serde_json::from_str::<GameMetadata>(j).ok())
+        .filter_map(GameMetadata::cleaned)
+        .flat_map(|m| image_urls(&m))
+        .collect())
+}
+
+/// `image_id`s from `screenshots` / `artworks` (objects with `image_id`), validated.
+fn image_ids_field(value: Option<&Value>) -> Vec<String> {
+    let ids = value
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| str_field(item, "image_id"));
+    clean_image_ids(ids.collect(), MAX_IMAGES)
+}
+
+pub fn query_time_to_beat(igdb_id: u64) -> String {
+    format!("fields {TIME_TO_BEAT_FIELDS}; where game_id = {igdb_id}; limit 1;")
+}
+
+/// `POST /game_time_to_beats` → the first entry with any time; missing values are left out.
+pub fn parse_time_to_beat(body: &str) -> Result<Option<TimeToBeat>, IgdbError> {
+    Ok(json_array(body)?.iter().find_map(|item| {
+        let secs = |key: &str| item.get(key).and_then(Value::as_u64);
+        TimeToBeat {
+            hastily: secs("hastily"),
+            normally: secs("normally"),
+            completely: secs("completely"),
+            count: item
+                .get("count")
+                .and_then(Value::as_u64)
+                .map(|c| c.min(u32::MAX as u64) as u32),
+        }
+        .cleaned()
+    }))
+}
+
+/// Hours rounded to the nearest half: "42½ h", "3 h", "½ h".
+pub fn hours_label(seconds: u64) -> String {
+    let halves = ((seconds as f64) / 1800.0).round().max(1.0) as u64;
+    let (whole, half) = (halves / 2, halves % 2 == 1);
+    match (whole, half) {
+        (0, _) => "½ h".into(),
+        (w, true) => format!("{w}½ h"),
+        (w, false) => format!("{w} h"),
+    }
+}
+
+fn time_to_beat_view(t: &TimeToBeat) -> TimeToBeatView {
+    TimeToBeatView {
+        main_story: t.hastily.map(hours_label),
+        main_extras: t.normally.map(hours_label),
+        completionist: t.completely.map(hours_label),
+        count: t.count,
+    }
+}
+
+/// The page's pictures, each URL replaced by `resolve(url)` (the cached local value when there
+/// is one).
+pub fn image_views(metadata: &GameMetadata, resolve: &dyn Fn(&str) -> String) -> Vec<ImageView> {
+    metadata
+        .image_ids()
+        .into_iter()
+        .filter_map(|(kind, id)| {
+            Some(ImageView {
+                kind,
+                thumb: resolve(&image_url(id, ImageSize::Thumb)?),
+                full: resolve(&image_url(id, ImageSize::Full)?),
+            })
+        })
+        .collect()
 }
 
 /// One candidate in the "Search IGDB" picker.
@@ -169,6 +415,11 @@ pub struct MetadataView {
     pub source: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fetched_at: Option<i64>,
+    /// Screenshots and artworks, cached copies once downloaded.
+    #[serde(default)]
+    pub images: Vec<ImageView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub time_to_beat: Option<TimeToBeatView>,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -597,6 +848,10 @@ pub fn parse_game(value: &Value) -> Option<GameMetadata> {
         user_rating: rating(value.get("rating"), value.get("rating_count")),
         release_date: release_ms(value.get("first_release_date")),
         url: str_field(value, "url").and_then(|u| igdb_page_url(&u)),
+        screenshots: image_ids_field(value.get("screenshots")),
+        artworks: image_ids_field(value.get("artworks")),
+        time_to_beat: None,
+        shape: CACHE_SHAPE,
     })
 }
 
@@ -870,6 +1125,8 @@ pub struct IgdbState {
     progress: StdMutex<BulkProgress>,
     /// When the credentials were last rejected, and how (see [`REJECTED_COOLDOWN`]).
     rejected: StdMutex<Option<(Instant, IgdbError)>>,
+    /// Games whose images were last tried, and when (see [`IMAGE_RETRY_AFTER`]).
+    images_tried: StdMutex<HashMap<String, Instant>>,
 }
 
 impl IgdbState {
@@ -1160,9 +1417,27 @@ impl<'a> Api<'a> {
         }
     }
 
-    /// Full metadata for one IGDB id.
+    /// Full metadata for one IGDB id, with its time to beat.
     pub async fn game(&self, igdb_id: u64) -> Result<Option<GameMetadata>, IgdbError> {
-        parse_games(&self.post("games", &query_by_id(igdb_id)).await?)
+        let Some(mut metadata) = parse_games(&self.post("games", &query_by_id(igdb_id)).await?)?
+        else {
+            return Ok(None);
+        };
+        metadata.time_to_beat = self.time_to_beat(metadata.igdb_id).await?;
+        Ok(Some(metadata))
+    }
+
+    /// Time to beat for one IGDB id. A query IGDB doesn't accept (an API change) or a bad entry
+    /// just means none; network, limit and credential errors are passed on.
+    pub async fn time_to_beat(&self, igdb_id: u64) -> Result<Option<TimeToBeat>, IgdbError> {
+        match self
+            .post("game_time_to_beats", &query_time_to_beat(igdb_id))
+            .await
+        {
+            Ok(body) => Ok(parse_time_to_beat(&body).unwrap_or(None)),
+            Err(IgdbError::BadRequest | IgdbError::Http(404)) => Ok(None),
+            Err(e) => Err(e),
+        }
     }
 
     /// The IGDB id linked to a Steam app id, trying both names of the source field.
@@ -1230,7 +1505,18 @@ pub fn is_fresh(cached: &CachedMetadata, now: i64) -> bool {
     } else {
         MISS_TTL_MS
     };
-    cached.fetched_at <= now + FUTURE_SKEW_MS && now - cached.fetched_at < ttl
+    let current_shape = cached.igdb_id.is_none() || cached_shape(cached) >= CACHE_SHAPE;
+    current_shape && cached.fetched_at <= now + FUTURE_SKEW_MS && now - cached.fetched_at < ttl
+}
+
+/// The [`CACHE_SHAPE`] a cached row was written with (0 when unknown).
+fn cached_shape(cached: &CachedMetadata) -> u32 {
+    cached
+        .json
+        .as_deref()
+        .and_then(|j| serde_json::from_str::<Value>(j).ok())
+        .and_then(|v| v.get("shape").and_then(Value::as_u64))
+        .map_or(0, |s| s.min(u32::MAX as u64) as u32)
 }
 
 /// How to refresh a game: a known id (user choice, or an earlier automatic match) is fetched
@@ -1264,7 +1550,12 @@ fn entry(metadata: Option<&GameMetadata>, source: &str, now: i64) -> Result<Cach
     })
 }
 
-fn view(cached: Option<CachedMetadata>, configured: bool, pending: bool) -> MetadataView {
+fn view(
+    cached: Option<CachedMetadata>,
+    configured: bool,
+    pending: bool,
+    resolve: &dyn Fn(&str) -> String,
+) -> MetadataView {
     let Some(cached) = cached else {
         return MetadataView {
             configured,
@@ -1282,6 +1573,14 @@ fn view(cached: Option<CachedMetadata>, configured: bool, pending: bool) -> Meta
         pending,
         checked: true,
         source: metadata.as_ref().map(|_| cached.source.clone()),
+        images: metadata
+            .as_ref()
+            .map(|m| image_views(m, resolve))
+            .unwrap_or_default(),
+        time_to_beat: metadata
+            .as_ref()
+            .and_then(|m| m.time_to_beat.as_ref())
+            .map(time_to_beat_view),
         metadata,
         fetched_at: Some(cached.fetched_at),
     }
@@ -1433,7 +1732,73 @@ pub fn get(app: &AppHandle, game_id: &str) -> Result<MetadataView> {
     if configured && stale && !pending && !state.igdb.recently_failed(game_id) {
         pending = spawn_refresh(app, game);
     }
-    Ok(view(cached, configured, pending))
+    let view = resolved_view(&state, cached, configured, pending);
+    spawn_image_cache(app, game_id, &view);
+    Ok(view)
+}
+
+/// [`view`] with image URLs replaced by cached copies where they exist.
+fn resolved_view(
+    state: &AppState,
+    cached: Option<CachedMetadata>,
+    configured: bool,
+    pending: bool,
+) -> MetadataView {
+    let conn = state.db.lock();
+    let covers_dir = state.covers_dir();
+    view(cached, configured, pending, &|url| {
+        crate::covercache::cached_value(&conn, &covers_dir, url)
+    })
+}
+
+/// Downloads the view's remote images into the cover cache in the background (at most once per
+/// [`IMAGE_RETRY_AFTER`] per game), then tells the page to reload them.
+fn spawn_image_cache(app: &AppHandle, game_id: &str, view: &MetadataView) {
+    let remote: Vec<String> = view
+        .images
+        .iter()
+        .flat_map(|i| [&i.thumb, &i.full])
+        .filter(|v| crate::covercache::needs_caching(Some(v)))
+        .cloned()
+        .collect();
+    if remote.is_empty() {
+        return;
+    }
+    let state = app.state::<AppState>();
+    {
+        let mut tried = state
+            .igdb
+            .images_tried
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        if tried
+            .get(game_id)
+            .is_some_and(|at| at.elapsed() < IMAGE_RETRY_AFTER)
+        {
+            return;
+        }
+        tried.insert(game_id.to_string(), Instant::now());
+    }
+    let app = app.clone();
+    let game_id = game_id.to_string();
+    tauri::async_runtime::spawn(async move {
+        let state = app.state::<AppState>();
+        let mut cached_any = false;
+        for url in remote {
+            let Some(file) = crate::covercache::download_now(&state, &url).await else {
+                continue;
+            };
+            let conn = state.db.lock();
+            match crate::covercache::adopt(&conn, &state.covers_dir(), &url, Some(&file)) {
+                Ok(value) if value != url => cached_any = true,
+                Ok(_) => {}
+                Err(e) => eprintln!("Could not record an IGDB image: {e:#}"),
+            }
+        }
+        if cached_any {
+            emit_metadata(&app, &game_id, true);
+        }
+    });
 }
 
 /// "Wrong game? Search IGDB": candidates for the game's cleaned title, or for `text`.
@@ -1483,8 +1848,16 @@ pub async fn choose(app: &AppHandle, game_id: &str, igdb_id: u64) -> Result<Meta
         db::cached_metadata(&conn, game_id)?
     };
     state.igdb.set_failed(game_id, false);
+    state
+        .igdb
+        .images_tried
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .remove(game_id);
     emit_metadata(app, game_id, true);
-    Ok(view(cached, true, false))
+    let view = resolved_view(&state, cached, true, false);
+    spawn_image_cache(app, game_id, &view);
+    Ok(view)
 }
 
 /// Forgets the stored match (including a user choice) and matches the game again.
@@ -1947,6 +2320,248 @@ mod tests {
         assert_eq!(api.redact(format!("bad {TOKEN}")), "bad [redacted]");
     }
 
+    #[test]
+    fn image_ids_are_validated_and_urls_built_only_from_them() {
+        assert!(valid_image_id("mnljdjtrh44x4snmierh"));
+        assert!(valid_image_id("co1wyy"));
+        for bad in [
+            "",
+            "ABC",
+            "a b",
+            "a/b",
+            "../x",
+            "a.jpg",
+            "a?x=1",
+            "a#b",
+            "%2e%2e",
+            "a\u{0}b",
+            "é",
+            "https://evil.example/x",
+        ] {
+            assert!(!valid_image_id(bad), "{bad:?}");
+            assert_eq!(image_url(bad, ImageSize::Full), None);
+        }
+        assert!(!valid_image_id(&"a".repeat(MAX_IMAGE_ID_LEN + 1)));
+        assert_eq!(
+            image_url("sc6lrc", ImageSize::Full).unwrap(),
+            "https://images.igdb.com/igdb/image/upload/t_1080p/sc6lrc.jpg"
+        );
+        assert_eq!(
+            image_url("sc6lrc", ImageSize::Thumb).unwrap(),
+            "https://images.igdb.com/igdb/image/upload/t_screenshot_med/sc6lrc.jpg"
+        );
+        // The API's own `url` field is never used; bad ids are dropped, duplicates removed.
+        let g = parse_game(&json!({
+            "id": 1, "name": "A",
+            "screenshots": [{"image_id": "s1", "url": "//evil.example/x.jpg"}, {"image_id": "../x"}, {"image_id": "s1"}, {"url": "x"}, 5],
+            "artworks": [{"image_id": "a1"}]
+        }))
+        .unwrap();
+        assert_eq!(g.screenshots, vec!["s1"]);
+        assert_eq!(g.artworks, vec!["a1"]);
+        let urls = image_urls(&g);
+        assert_eq!(urls.len(), 4);
+        assert!(urls.iter().all(|u| {
+            let url = url::Url::parse(u).unwrap();
+            url.scheme() == "https" && url.host_str() == Some(IMAGE_HOST) && url.query().is_none()
+        }));
+    }
+
+    #[test]
+    fn images_mix_screenshots_and_artworks_up_to_the_cap() {
+        let ids = |p: &str, n: usize| (0..n).map(|i| format!("{p}{i}")).collect::<Vec<_>>();
+        let m = GameMetadata {
+            screenshots: ids("s", 8),
+            artworks: ids("a", 8),
+            ..Default::default()
+        };
+        let picked = m.image_ids();
+        assert_eq!(picked.len(), MAX_IMAGES);
+        assert_eq!(picked.iter().filter(|(k, _)| *k == "screenshot").count(), 5);
+        let m = GameMetadata {
+            screenshots: ids("s", 8),
+            ..Default::default()
+        };
+        assert_eq!(m.image_ids().len(), 8);
+        let views = image_views(&m, &|u| {
+            if u.contains("s0.jpg") {
+                "lobby-cover://cache-x.jpg".into()
+            } else {
+                u.to_string()
+            }
+        });
+        assert!(
+            views[0].thumb.contains("t_screenshot_med")
+                || views[0].thumb.starts_with("lobby-cover://")
+        );
+        assert!(views.iter().any(|v| v.full == "lobby-cover://cache-x.jpg"));
+        assert_eq!(views[0].kind, "screenshot");
+    }
+
+    #[test]
+    fn time_to_beat_parses_with_missing_values() {
+        assert_eq!(
+            query_time_to_beat(72),
+            "fields hastily,normally,completely,count; where game_id = 72; limit 1;"
+        );
+        let t = parse_time_to_beat(r#"[{"id":1,"game_id":72,"hastily":153000,"normally":228600,"completely":432000,"count":12}]"#)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            t,
+            TimeToBeat {
+                hastily: Some(153_000),
+                normally: Some(228_600),
+                completely: Some(432_000),
+                count: Some(12)
+            }
+        );
+        let t = parse_time_to_beat(r#"[{"normally": 3600}]"#)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (t.hastily, t.normally, t.completely, t.count),
+            (None, Some(3600), None, None)
+        );
+        // Nothing usable: none; odd values are dropped.
+        assert_eq!(parse_time_to_beat("[]").unwrap(), None);
+        assert_eq!(parse_time_to_beat(r#"[{"count": 5}]"#).unwrap(), None);
+        assert_eq!(
+            parse_time_to_beat(r#"[{"hastily": 0, "normally": -5, "completely": "x"}]"#).unwrap(),
+            None
+        );
+        let huge = MAX_TIME_TO_BEAT_SECONDS + 1;
+        assert_eq!(
+            parse_time_to_beat(&format!(r#"[{{"hastily": {huge}}}]"#)).unwrap(),
+            None
+        );
+        assert!(parse_time_to_beat("{}").is_err());
+    }
+
+    #[test]
+    fn hours_are_formatted_to_the_nearest_half() {
+        assert_eq!(hours_label(153_000), "42½ h"); // 42.5 h
+        assert_eq!(hours_label(3 * 3600), "3 h");
+        assert_eq!(hours_label(3 * 3600 + 500), "3 h");
+        assert_eq!(hours_label(3 * 3600 + 1000 + 800), "3½ h");
+        assert_eq!(hours_label(600), "½ h");
+        assert_eq!(hours_label(1), "½ h");
+        let v = time_to_beat_view(&TimeToBeat {
+            hastily: Some(36_000),
+            normally: None,
+            completely: Some(90_000),
+            count: Some(3),
+        });
+        assert_eq!(v.main_story.as_deref(), Some("10 h"));
+        assert_eq!(v.main_extras, None);
+        assert_eq!(v.completionist.as_deref(), Some("25 h"));
+    }
+
+    #[test]
+    fn old_cache_rows_still_load_and_are_refetched() {
+        let now = 1_000_000_000_000;
+        let old = CachedMetadata {
+            igdb_id: Some(9),
+            json: Some(json!({"igdbId": 9, "name": "Old", "summary": "S"}).to_string()),
+            fetched_at: now - 1000,
+            source: "user".into(),
+        };
+        let v = view(Some(old.clone()), true, false, &|u| u.to_string());
+        let m = v.metadata.unwrap();
+        assert_eq!((m.name.as_str(), m.shape), ("Old", 0));
+        assert!(m.screenshots.is_empty() && m.time_to_beat.is_none());
+        assert!(v.images.is_empty() && v.time_to_beat.is_none());
+        // Recent but in the old shape: stale, so the next view refetches (by id: user choice kept).
+        assert!(!is_fresh(&old, now));
+        assert_eq!(
+            plan(Some(&old)),
+            Plan::ById {
+                igdb_id: 9,
+                source: "user".into()
+            }
+        );
+        let mut new = old.clone();
+        new.json = Some(json!({"igdbId": 9, "name": "New", "shape": CACHE_SHAPE}).to_string());
+        assert!(is_fresh(&new, now));
+        // A cached miss has no JSON and keeps its own lifetime.
+        let miss = CachedMetadata {
+            igdb_id: None,
+            json: None,
+            fetched_at: now - 1000,
+            source: "auto".into(),
+        };
+        assert!(is_fresh(&miss, now));
+    }
+
+    #[tokio::test]
+    async fn games_are_fetched_with_images_and_time_to_beat() {
+        let (base, log) = serve(Arc::new(|req: &Req| {
+            if req.target.starts_with("/oauth2/token") {
+                return token_ok();
+            }
+            match req.target.as_str() {
+                "/v4/games" => (
+                    200,
+                    r#"[{"id":7,"name":"G","screenshots":[{"id":1,"image_id":"abc123"}]}]"#.into(),
+                ),
+                "/v4/game_time_to_beats" => {
+                    (200, r#"[{"game_id":7,"hastily":7200,"count":4}]"#.into())
+                }
+                _ => (404, "{}".into()),
+            }
+        }))
+        .await;
+        let state = IgdbState::default();
+        let api = api_for(&base, &state);
+        let g = api.game(7).await.unwrap().unwrap();
+        assert_eq!(g.screenshots, vec!["abc123"]);
+        assert_eq!(g.shape, CACHE_SHAPE);
+        assert_eq!(g.time_to_beat.unwrap().hastily, Some(7200));
+        let ttb = log
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|r| r.target == "/v4/game_time_to_beats")
+            .unwrap()
+            .body
+            .clone();
+        assert_eq!(ttb, query_time_to_beat(7));
+        assert!(query_by_id(7).contains("screenshots.image_id,artworks.image_id"));
+
+        // IGDB refusing the time-to-beat query doesn't lose the rest.
+        let (base, _) = serve(Arc::new(|req: &Req| {
+            if req.target.starts_with("/oauth2/token") {
+                token_ok()
+            } else if req.target == "/v4/games" {
+                (200, r#"[{"id":7,"name":"G"}]"#.into())
+            } else {
+                (400, "[]".into())
+            }
+        }))
+        .await;
+        let state = IgdbState::default();
+        let g = api_for(&base, &state).game(7).await.unwrap().unwrap();
+        assert_eq!((g.name.as_str(), g.time_to_beat), ("G", None));
+    }
+
+    #[test]
+    fn cached_metadata_keeps_its_images_referenced() {
+        let db = library_with("g1");
+        let m = GameMetadata {
+            igdb_id: 3,
+            name: "G".into(),
+            screenshots: vec!["s1".into(), "BAD/../x".into()],
+            artworks: vec!["a1".into()],
+            shape: CACHE_SHAPE,
+            ..Default::default()
+        };
+        db::put_metadata(&db.lock(), "g1", &entry(Some(&m), "auto", 1).unwrap()).unwrap();
+        let urls = referenced_image_urls(&db.lock()).unwrap();
+        assert_eq!(urls.len(), 4);
+        assert!(urls.contains("https://images.igdb.com/igdb/image/upload/t_1080p/s1.jpg"));
+        assert!(urls.iter().all(|u| !u.contains("BAD")));
+    }
+
     // -- query building ------------------------------------------------------
 
     #[test]
@@ -2035,6 +2650,7 @@ mod tests {
             GameMetadata {
                 igdb_id: 5,
                 name: "Bare".into(),
+                shape: CACHE_SHAPE,
                 ..Default::default()
             }
         );
@@ -2539,6 +3155,7 @@ mod tests {
                 serde_json::to_string(&GameMetadata {
                     igdb_id: i as u64,
                     name: format!("Game {i}"),
+                    shape: CACHE_SHAPE,
                     ..Default::default()
                 })
                 .unwrap()
@@ -2660,7 +3277,12 @@ mod tests {
         assert!(bodies
             .iter()
             .all(|b| !b.starts_with("search") && !b.contains("uid")));
-        let v = view(db::cached_metadata(&db.lock(), "g1").unwrap(), true, false);
+        let v = view(
+            db::cached_metadata(&db.lock(), "g1").unwrap(),
+            true,
+            false,
+            &|u| u.to_string(),
+        );
         assert_eq!(v.source.as_deref(), Some("user"));
         let m = v.metadata.unwrap();
         assert_eq!(
@@ -2700,13 +3322,13 @@ mod tests {
             fetched_at: 5,
             source: "auto".into(),
         };
-        let v = view(Some(tampered), true, false);
+        let v = view(Some(tampered), true, false, &|u| u.to_string());
         let m = v.metadata.unwrap();
         assert_eq!(m.name, "AB");
         assert_eq!(m.url, None);
         assert_eq!(m.genres, vec!["X"]);
         assert!(v.checked);
-        let none = view(None, false, false);
+        let none = view(None, false, false, &|u| u.to_string());
         assert!(!none.checked && none.metadata.is_none());
     }
 }

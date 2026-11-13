@@ -422,8 +422,14 @@ export interface UpdatesAPI {
  *   stale and returns at once; progress arrives through onProgress (and progress()).
  */
 export interface IgdbRating { score: number; count?: number }
-export interface IgdbMetadata { igdbId: number; name: string; summary?: string; storyline?: string; genres: string[]; developers: string[]; publishers: string[]; criticRating?: IgdbRating; userRating?: IgdbRating; releaseDate?: number; url?: string }
-export interface IgdbMetadataView { configured: boolean; pending: boolean; checked: boolean; metadata?: IgdbMetadata; source?: 'auto' | 'user'; fetchedAt?: number }
+/** Seconds from IGDB's game_time_to_beats: hastily = main story, normally = main + extras, completely = completionist. */
+export interface IgdbTimeToBeatSeconds { hastily?: number; normally?: number; completely?: number; count?: number }
+export interface IgdbMetadata { igdbId: number; name: string; summary?: string; storyline?: string; genres: string[]; developers: string[]; publishers: string[]; criticRating?: IgdbRating; userRating?: IgdbRating; releaseDate?: number; url?: string; screenshots?: string[]; artworks?: string[]; timeToBeat?: IgdbTimeToBeatSeconds; shape?: number }
+/** A screenshot or artwork: `thumb`/`full` are a cached `lobby-cover://` value once downloaded, otherwise an https URL on images.igdb.com. */
+export interface IgdbImage { kind: 'screenshot' | 'artwork'; thumb: string; full: string }
+/** Time to beat formatted for display ("42½ h"); absent values are left out. */
+export interface IgdbTimeToBeat { mainStory?: string; mainExtras?: string; completionist?: string; count?: number }
+export interface IgdbMetadataView { configured: boolean; pending: boolean; checked: boolean; metadata?: IgdbMetadata; source?: 'auto' | 'user'; fetchedAt?: number; images?: IgdbImage[]; timeToBeat?: IgdbTimeToBeat }
 export interface IgdbSearchResult { igdbId: number; name: string; releaseDate?: number; platforms: string[]; mainGame: boolean }
 export interface IgdbCredentialStatus { clientIdSet: boolean; clientSecretSet: boolean }
 export interface IgdbTestResult { ok: boolean; message: string }

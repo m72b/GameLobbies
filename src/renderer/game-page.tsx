@@ -7,6 +7,7 @@ import { defaultGamePageCustom } from '../shared/defaults'
 import { coverLayerStyle, coverStyle } from './cover'
 import { CoverLayer, useCover } from './poster'
 import { GenreBlock, IgdbAbout, IgdbPicker, IgdbRatings, useIgdb } from './igdb-details'
+import { isEmulatorRoute } from '../shared/routes'
 import { elapsedSeconds, formatClock, formatDate, formatSession, formatTime, formatTotal, useNow } from './format'
 import type { EmulatorCatalog, EmulatorProfile, Game, GamePageArt, PlaySession, PlayStats, RunningGame, Settings } from '../shared/types'
 
@@ -54,7 +55,7 @@ export function GamePage({ game, index, settings, running, libraryVersion, actio
     const off = window.lobby.art.onChanged(event => { if (event.gameId === game.id) { setHeroIdx(0); setLogoIdx(0); void load() } })
     return () => { live = false; off() }
   }, [game.id])
-  const hasEmulatorRoute = game.routes.some(item => item.store === 'Emulator' || item.system)
+  const hasEmulatorRoute = game.routes.some(isEmulatorRoute)
   useEffect(() => {
     if (!hasEmulatorRoute) return
     let live = true
@@ -182,7 +183,7 @@ export function GamePage({ game, index, settings, running, libraryVersion, actio
           <div><span>Sessions</span><b>{stats?.sessionCount ?? 0}</b></div>
           <div><span>First played</span><b>{formatDate(stats?.firstPlayed)}</b></div>
         </div>
-        <IgdbAbout view={igdb} onSearch={() => setIgdbPicking(true)} />
+        <IgdbAbout view={igdb} title={game.title} onSearch={() => setIgdbPicking(true)} />
       </section>
 
       <aside className="gp-side">
@@ -194,7 +195,7 @@ export function GamePage({ game, index, settings, running, libraryVersion, actio
             <span className="route-name">{item.store}<small>{item.installed ? 'Installed' : item.owned ? 'Owned · not installed' : 'Launch route'}</small></span>
           </div>)}
           {game.routes.map((item, i) => {
-            if (item.sourceId !== 'rom' && !item.system) return null
+            if (!isEmulatorRoute(item)) return null
             const systemName = item.system ? catalog?.systems.find(system => system.id === item.system)?.name ?? item.system : 'Unknown system'
             const candidates = emulators.filter(profile => profile.enabled !== false && !!item.system && (profile.systems ?? []).includes(item.system))
             const assigned = item.emulatorId ? emulators.find(profile => profile.id === item.emulatorId) : undefined

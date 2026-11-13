@@ -1,8 +1,14 @@
-// IGDB details on the game page: description, companies, release date, ratings, genres and
-// the "Wrong game? Search IGDB" picker. Everything IGDB sends is rendered as plain React text.
+// IGDB details on the game page: description, companies, release date, time to beat, pictures,
+// ratings, genres and the "Wrong game? Search IGDB" picker. Everything IGDB sends is rendered as
+// plain React text; pictures come only from URLs the backend built from validated image ids.
 import { useCallback, useEffect, useState } from 'react'
-import { X } from 'lucide-react'
-import type { Game, IgdbMetadataView, IgdbRating, IgdbSearchResult } from '../shared/types'
+import { ChevronLeft, ChevronRight, X } from 'lucide-react'
+// Bundled (SIL Open Font License), never loaded from the network: regular and bold only.
+import '@fontsource/quantico/400.css'
+import '@fontsource/quantico/700.css'
+import type { Game, IgdbImage, IgdbMetadataView, IgdbRating, IgdbSearchResult, IgdbTimeToBeat } from '../shared/types'
+import { coverSrc, useCoverStatus } from './cover'
+import { CoverLayer } from './poster'
 
 const emptyView: IgdbMetadataView = { configured: false, pending: false, checked: false }
 
@@ -11,8 +17,70 @@ const formatRelease = (ms?: number) => ms === undefined ? '' : new Date(ms).toLo
 const releaseYear = (ms?: number) => ms === undefined ? '' : String(new Date(ms).getUTCFullYear())
 
 /** IGDB's required attribution, shown wherever IGDB data appears. */
-export function IgdbAttribution({ className }: { className?: string }) {
-  return <span className={'igdb-attribution' + (className ? ' ' + className : '')}>Game data from <a href="https://www.igdb.com/">IGDB.com</a></span>
+export function IgdbAttribution({ className, images }: { className?: string; images?: boolean }) {
+  return <span className={'igdb-attribution' + (className ? ' ' + className : '')}>Game data from <a href="https://www.igdb.com/">IGDB.com</a>{images && <> · Images from <a href="https://www.igdb.com/">IGDB.com</a></>}</span>
+}
+
+/** HowLongToBeat has no API: only a search link (https, opened in the browser). */
+const hltbSearch = (title: string) => 'https://howlongtobeat.com/?q=' + encodeURIComponent(title.slice(0, 200))
+
+function TimeToBeat({ time, title }: { time: IgdbTimeToBeat; title: string }) {
+  const tiles: Array<[string, string | undefined]> = [
+    ['Main story', time.mainStory],
+    ['Main + extras', time.mainExtras],
+    ['Completionist', time.completionist]
+  ]
+  return <div className="gp-ttb">
+    <div className="gp-ttb-head"><h3>Time to beat</h3>{time.count ? <small>{time.count.toLocaleString()} submission{time.count === 1 ? '' : 's'} on IGDB</small> : null}</div>
+    <div className="gp-ttb-tiles">
+      {tiles.map(([label, value]) => <div key={label} className={'gp-ttb-tile' + (value ? '' : ' empty')}><span>{label}</span><b>{value ?? '–'}</b></div>)}
+    </div>
+    <a className="external-link gp-ttb-link" href={hltbSearch(title)}>Search on HowLongToBeat</a>
+  </div>
+}
+
+/** One thumbnail: a shimmer while loading, hidden when it fails. */
+function Thumb({ image, index, onOpen }: { image: IgdbImage; index: number; onOpen(index: number): void }) {
+  const src = coverSrc(image.thumb)
+  const status = useCoverStatus(src)
+  if (!src || status === 'error') return null
+  return <button type="button" className="gp-shot" onClick={() => onOpen(index)} aria-label={'Open ' + image.kind + ' ' + (index + 1)}>
+    <CoverLayer src={src} status={status} />
+  </button>
+}
+
+/** Full-size picture with Esc to close and the arrow keys to move. */
+function Lightbox({ images, index, onIndex, onClose }: { images: IgdbImage[]; index: number; onIndex(index: number): void; onClose(): void }) {
+  const image = images[index]
+  const src = coverSrc(image?.full)
+  const status = useCoverStatus(src)
+  const step = useCallback((delta: number) => onIndex((index + delta + images.length) % images.length), [index, images.length, onIndex])
+  useEffect(() => {
+    // Capture phase so the page-level Escape (back to library) does not also fire.
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose()
+      else if (event.key === 'ArrowRight') step(1)
+      else if (event.key === 'ArrowLeft') step(-1)
+      else return
+      event.stopImmediatePropagation(); event.preventDefault()
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [onClose, step])
+  if (!image) return null
+  return <div className="modal-scrim gp-lightbox" role="dialog" aria-label="Picture viewer" onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}>
+    <div className="gp-lightbox-frame">
+      {status === 'loading' && <div className="cover-shimmer" aria-hidden="true" />}
+      {src && <img key={src} src={src} alt={image.kind === 'artwork' ? 'Artwork' : 'Screenshot'} className={status === 'loaded' ? 'loaded' : ''} />}
+      {status === 'error' && <div className="gp-lightbox-error">This picture could not be loaded.</div>}
+    </div>
+    {images.length > 1 && <>
+      <button type="button" className="gp-lightbox-nav prev" aria-label="Previous picture" onClick={() => step(-1)}><ChevronLeft size={22} /></button>
+      <button type="button" className="gp-lightbox-nav next" aria-label="Next picture" onClick={() => step(1)}><ChevronRight size={22} /></button>
+    </>}
+    <button type="button" className="gp-lightbox-close" aria-label="Close" onClick={onClose}><X size={18} /></button>
+    <div className="gp-lightbox-meta">{index + 1} / {images.length} · <IgdbAttribution images /></div>
+  </div>
 }
 
 /** Cached metadata for a game, updated live when a background fetch stores new data. */
@@ -37,10 +105,13 @@ function names(list: string[]) {
 }
 
 /** Left column, under Activity: description and facts. Renders nothing without data, except a quiet hint. */
-export function IgdbAbout({ view, onSearch }: { view: IgdbMetadataView; onSearch(): void }) {
+export function IgdbAbout({ view, title, onSearch }: { view: IgdbMetadataView; title: string; onSearch(): void }) {
   const [more, setMore] = useState(false)
+  const [open, setOpen] = useState<number | null>(null)
   const metadata = view.metadata
-  useEffect(() => { setMore(false) }, [metadata?.igdbId])
+  const images = view.images ?? []
+  useEffect(() => { setMore(false); setOpen(null) }, [metadata?.igdbId])
+  const closeLightbox = useCallback(() => setOpen(null), [])
   if (!metadata) {
     if (view.configured && view.checked && !view.pending) {
       return <div className="gp-igdb-hint muted-text">No IGDB match for this game.<button className="link-button" onClick={onSearch}>Search IGDB</button></div>
@@ -60,14 +131,19 @@ export function IgdbAbout({ view, onSearch }: { view: IgdbMetadataView; onSearch
     {metadata.storyline && (more
       ? <><div className="detail-label gp-about-label">STORYLINE</div><p className="gp-about-text">{metadata.storyline}</p><button className="link-button gp-about-more" onClick={() => setMore(false)}>Less</button></>
       : <button className="link-button gp-about-more" onClick={() => setMore(true)}>More: storyline</button>)}
-    {facts.some(([, value]) => value) && <div className="gp-summary gp-facts">
+    {facts.some(([, value]) => value) && <div className="gp-facts">
       {facts.map(([label, value]) => value ? <div key={label}><span>{label}</span><b>{value}</b></div> : null)}
+    </div>}
+    {view.timeToBeat && <TimeToBeat time={view.timeToBeat} title={metadata.name || title} />}
+    {images.length > 0 && <div className="gp-shots" role="list" aria-label="Screenshots and artwork">
+      {images.map((image, index) => <Thumb key={image.thumb} image={image} index={index} onOpen={setOpen} />)}
     </div>}
     <div className="gp-igdb-links">
       {metadata.url && <a className="external-link" href={metadata.url}>View on IGDB</a>}
       <button className="link-button" onClick={onSearch} title={view.source === 'user' ? 'You chose this IGDB entry' : 'Matched automatically'}>Wrong game? Search IGDB</button>
-      <IgdbAttribution />
+      <IgdbAttribution images={images.length > 0} />
     </div>
+    {open !== null && images.length > 0 && <Lightbox images={images} index={Math.min(open, images.length - 1)} onIndex={setOpen} onClose={closeLightbox} />}
   </section>
 }
 
@@ -75,15 +151,27 @@ function ratingText(rating: IgdbRating, noun: string) {
   return rating.count ? rating.count.toLocaleString() + ' ' + noun + (rating.count === 1 ? '' : 's') : undefined
 }
 
-/** Side column block: critic and user ratings (each omitted when IGDB has none). */
+/** Score band for the colour cue: 75 and up, 50 to 74, below 50. */
+const band = (score: number) => score >= 75 ? 'high' : score >= 50 ? 'mid' : 'low'
+
+function ScoreTile({ label, title, rating, noun }: { label: string; title: string; rating: IgdbRating; noun: string }) {
+  const count = ratingText(rating, noun)
+  return <div className={'gp-score band-' + band(rating.score)} title={title}>
+    <span>{label}</span>
+    <b>{rating.score}<small>/100</small></b>
+    {count && <small className="gp-score-count">{count}</small>}
+  </div>
+}
+
+/** Side column block: critic and user ratings as score tiles (each omitted when IGDB has none). */
 export function IgdbRatings({ view }: { view: IgdbMetadataView }) {
   const critic = view.metadata?.criticRating
   const user = view.metadata?.userRating
   if (!critic && !user) return null
-  return <div className="gp-side-block"><div className="detail-label">RATING · IGDB</div>
-    <div className="gp-totals">
-      {critic && <div title="IGDB aggregated critic rating"><span>Critics</span><b>{critic.score}<small className="gp-rating-max">/100</small></b>{ratingText(critic, 'review') && <small className="gp-rating-count">{ratingText(critic, 'review')}</small>}</div>}
-      {user && <div title="IGDB user rating"><span>Users</span><b>{user.score}<small className="gp-rating-max">/100</small></b>{ratingText(user, 'rating') && <small className="gp-rating-count">{ratingText(user, 'rating')}</small>}</div>}
+  return <div className="gp-side-block"><div className="detail-label">RATING</div>
+    <div className="gp-scores">
+      {critic && <ScoreTile label="Critics" title="IGDB aggregated critic rating" rating={critic} noun="review" />}
+      {user && <ScoreTile label="Users" title="IGDB user rating" rating={user} noun="rating" />}
     </div>
     <IgdbAttribution className="gp-side-attribution" />
   </div>

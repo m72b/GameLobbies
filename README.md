@@ -41,6 +41,7 @@ Game Lobby talks to these services directly from your PC, using your own credent
 
 - **SteamGridDB** (cover art, heroes, logos): community-made artwork; copyright belongs to its creators. Use is limited to personal, non-commercial use under the [SteamGridDB Terms of Use](https://www.steamgriddb.com/terms). Game Lobby fetches art on demand, spaces out bulk requests, and only caches images on your PC.
 - **IGDB** (game descriptions, genres, companies, ratings): game data from [IGDB.com](https://www.igdb.com/), requested with your own Twitch application under the [Twitch Developer Services Agreement](https://www.twitch.tv/p/legal/developer-agreement/) and IGDB's terms. Game Lobby shows the "Game data from IGDB.com" attribution wherever it displays this data, spaces requests to stay within IGDB's rate limit, and caches results only on your PC (refreshed after 30 days). The access token is kept in memory only.
+- **IGDB images and time to beat**: screenshots and artwork are loaded only from `images.igdb.com`, from image ids that Game Lobby checks before building the address, and are cached on your PC like covers. Time-to-beat figures come from IGDB's own data. Game Lobby does not contact HowLongToBeat; **Search on HowLongToBeat** only opens its search page in your browser.
 - **Steam** (store artwork CDN): artwork belongs to Valve and the games' publishers.
 - **Local launchers** (Steam, Epic, GOG Galaxy, Xbox, EA app, Battle.net, Ubisoft Connect, Amazon Games, itch.io): Game Lobby reads their local install data and opens their own launch links; it doesn't sign in to them.
 
@@ -155,4 +156,6 @@ Game Lobby is an early-stage independent project. Steam, Epic, GOG, and best-eff
 
 ## Acknowledgements
 
-The project takes inspiration from the unified-library experience of [Playnite](https://playnite.link/) and the library presentation patterns of game storefronts. Game Lobby is an independent project and does not include or redistribute proprietary code or assets from those products. Cover art comes from the [SteamGridDB](https://www.steamgriddb.com/) community.
+The project takes inspiration from the unified-library experience of [Playnite](https://playnite.link/) and the library presentation patterns of game storefronts. Game Lobby is an independent project and does not include or redistribute proprietary code or assets from those products. Cover art comes from the [SteamGridDB](https://www.steamgriddb.com/) community. Game details, screenshots, artwork and time-to-beat figures come from [IGDB.com](https://www.igdb.com/).
+
+The About section on the game page uses the [Quantico](https://fonts.google.com/specimen/Quantico) typeface by Matthew Desmond, bundled locally through the [`@fontsource/quantico`](https://fontsource.org/fonts/quantico) package under the [SIL Open Font License 1.1](https://openfontlicense.org/). The font is never downloaded at runtime.
