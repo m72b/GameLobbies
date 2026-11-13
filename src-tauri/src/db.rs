@@ -62,7 +62,9 @@ fn migrate(db: &Connection, file: Option<&Path>) -> Result<()> {
         CREATE TABLE IF NOT EXISTS scan_review(id TEXT PRIMARY KEY,kind TEXT NOT NULL,key TEXT NOT NULL UNIQUE,rootId TEXT,details TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'open',resolution TEXT,createdAt INTEGER NOT NULL,updatedAt INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS scan_ignore(kind TEXT NOT NULL,key TEXT NOT NULL,path TEXT NOT NULL,addedAt INTEGER NOT NULL,PRIMARY KEY(kind,key));
         CREATE TABLE IF NOT EXISTS local_exe_choice(folderKey TEXT PRIMARY KEY,executable TEXT NOT NULL,chosenAt INTEGER NOT NULL);
-        CREATE TABLE IF NOT EXISTS local_shortcut_ok(shortcutKey TEXT PRIMARY KEY,target TEXT NOT NULL,arguments TEXT NOT NULL,confirmedAt INTEGER NOT NULL);",
+        CREATE TABLE IF NOT EXISTS local_shortcut_ok(shortcutKey TEXT PRIMARY KEY,target TEXT NOT NULL,arguments TEXT NOT NULL,confirmedAt INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS cover_cache(url TEXT PRIMARY KEY,file TEXT NOT NULL,fetchedAt INTEGER NOT NULL);
+        CREATE INDEX IF NOT EXISTS cover_cache_file ON cover_cache(file);",
         GAMES_TABLE.replace("CREATE TABLE games", "CREATE TABLE IF NOT EXISTS games")
     ))?;
     let columns: HashSet<String> = db

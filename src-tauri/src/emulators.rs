@@ -29,7 +29,7 @@
 
 use crate::catalog::{self, KnownEmulator};
 use crate::db;
-use crate::localscan::{list_dir, path_key, ScanLimits, MAX_UNREADABLE};
+use crate::localscan::{list_dir, listed_key, path_key, ScanLimits, MAX_UNREADABLE};
 use crate::tracker::{is_within, normalize_path};
 use crate::types::{now_ms, EmulatorProfile};
 use anyhow::{bail, Result};
@@ -137,11 +137,14 @@ fn is_heavy_dir(name: &str) -> bool {
     catalog::HEAVY_EMULATOR_DIRS.contains(&name.to_lowercase().as_str())
 }
 
-/// Walks an emulator root (see the module docs). Errors only when the root itself can't be
-/// read.
+/// Walks an emulator root (see the module docs). `excluded`: long-form keys of other
+/// registered roots inside it (`roots::nested_roots`), never entered: a games folder nested in
+/// an emulator folder is never searched for emulators. Errors only when the root itself
+/// can't be read.
 pub fn discover(
     root: &Path,
     ignored: &HashSet<String>,
+    excluded: &HashSet<String>,
     limits: ScanLimits,
     progress: &mut dyn FnMut(usize, &Path),
 ) -> Result<Discovery> {
@@ -195,7 +198,7 @@ pub fn discover(
             continue;
         }
         for item in listing.items.iter().filter(|i| i.is_dir).rev() {
-            if is_heavy_dir(&item.name) {
+            if is_heavy_dir(&item.name) || excluded.contains(&listed_key(&item.path)) {
                 continue;
             }
             match list_dir(&item.path) {
@@ -385,6 +388,7 @@ mod tests {
         let found = discover(
             dir.path(),
             &none,
+            &HashSet::new(),
             ScanLimits::EMULATORS_QUICK,
             &mut |_, _| {},
         )
@@ -426,6 +430,7 @@ mod tests {
         let again = discover(
             dir.path(),
             &ignored,
+            &HashSet::new(),
             ScanLimits::EMULATORS_QUICK,
             &mut |_, _| {},
         )
@@ -450,6 +455,7 @@ mod tests {
         let after = discover(
             dir.path(),
             &ignored,
+            &HashSet::new(),
             ScanLimits::EMULATORS_QUICK,
             &mut |_, _| {},
         )
@@ -488,6 +494,7 @@ mod tests {
             &discover(
                 dir.path(),
                 &none,
+                &HashSet::new(),
                 ScanLimits::EMULATORS_QUICK,
                 &mut |_, _| {},
             )
@@ -503,6 +510,7 @@ mod tests {
             &discover(
                 dir.path(),
                 &none,
+                &HashSet::new(),
                 ScanLimits::EMULATORS_QUICK,
                 &mut |_, _| {},
             )
@@ -599,9 +607,9 @@ mod tests {
         assert!(!executable_path_ok(r"\\server\share\emu.exe"));
         assert!(executable_path_ok(r"D:\Emu\Dolphin.EXE"));
     }
-    /// The user's emulator root (`...\Playnite\Emulators`): (folder, direct entries). An entry
+    /// An emulator root inside a launcher folder (`...\Launcher\Emulators`): (folder, direct entries). An entry
     /// ending in `/` is a subfolder.
-    const PLAYNITE: &[(&str, &[&str])] = &[
+    const LAUNCHER: &[(&str, &[&str])] = &[
         ("Azahar", &["azahar.exe"]),
         ("BizHawk", &["EmuHawk.exe", "dll/"]),
         ("BlueMSX", &["blueMSX.exe"]),
@@ -662,16 +670,16 @@ mod tests {
         ("Shared/Tools", &["updater.exe"]),
     ];
 
-    fn playnite(dir: &TempDir) -> PathBuf {
-        let root = dir.dir("Playnite/Emulators");
-        for (folder, entries) in PLAYNITE {
+    fn launcher(dir: &TempDir) -> PathBuf {
+        let root = dir.dir("Launcher/Emulators");
+        for (folder, entries) in LAUNCHER {
             for entry in *entries {
                 match entry.strip_suffix('/') {
                     Some(sub) => {
-                        dir.dir(&format!("Playnite/Emulators/{folder}/{sub}"));
+                        dir.dir(&format!("Launcher/Emulators/{folder}/{sub}"));
                     }
                     None => {
-                        dir.file(&format!("Playnite/Emulators/{folder}/{entry}"));
+                        dir.file(&format!("Launcher/Emulators/{folder}/{entry}"));
                     }
                 }
             }
@@ -679,34 +687,41 @@ mod tests {
         // Heavy data trees that must never be walked.
         for i in 0..400 {
             dir.file(&format!(
-                "Playnite/Emulators/RPCS3/dev_hdd0/game/BLUS{i:05}/USRDIR/EBOOT.BIN"
+                "Launcher/Emulators/RPCS3/dev_hdd0/game/BLUS{i:05}/USRDIR/EBOOT.BIN"
             ));
         }
         for i in 0..400 {
             dir.file(&format!(
-                "Playnite/Emulators/RetroArch/cores/core{i:03}_libretro.dll"
+                "Launcher/Emulators/RetroArch/cores/core{i:03}_libretro.dll"
             ));
         }
         for i in 0..300 {
-            dir.file(&format!("Playnite/Emulators/Shared/shaders/s{i:03}/x.glsl"));
+            dir.file(&format!("Launcher/Emulators/Shared/shaders/s{i:03}/x.glsl"));
         }
-        dir.file("Playnite/Emulators/Mesen/Backups/Mesen.2.1.exe");
-        dir.file("Playnite/Emulators/RetroArch/cores/retroarch.exe");
+        dir.file("Launcher/Emulators/Mesen/Backups/Mesen.2.1.exe");
+        dir.file("Launcher/Emulators/RetroArch/cores/retroarch.exe");
         root
     }
 
     #[test]
-    fn a_playnite_style_emulator_root_is_scanned_quickly_and_completely() {
-        let dir = TempDir::new("emu-playnite");
-        let root = playnite(&dir);
+    fn a_launcher_style_emulator_root_is_scanned_quickly_and_completely() {
+        let dir = TempDir::new("emu-launcher");
+        let root = launcher(&dir);
         let none = HashSet::new();
-        let found = discover(&root, &none, ScanLimits::EMULATORS_QUICK, &mut |_, _| {}).unwrap();
+        let found = discover(
+            &root,
+            &none,
+            &HashSet::new(),
+            ScanLimits::EMULATORS_QUICK,
+            &mut |_, _| {},
+        )
+        .unwrap();
         assert!(!found.truncated);
         assert!(found.unreadable.is_empty());
         // Exactly the listed entries: every top folder, the direct entries of each listed folder,
         // nothing inside emulator folders, heavy folders or below them.
-        let top = PLAYNITE.iter().filter(|(f, _)| !f.contains('/')).count();
-        let listed: usize = PLAYNITE.iter().map(|(_, entries)| entries.len()).sum();
+        let top = LAUNCHER.iter().filter(|(f, _)| !f.contains('/')).count();
+        let listed: usize = LAUNCHER.iter().map(|(_, entries)| entries.len()).sum();
         assert_eq!(found.visited, top + listed);
         assert!(found.visited < 150);
         let mut ids: Vec<&str> = found.found.iter().map(|f| f.known.id).collect();
@@ -820,10 +835,17 @@ mod tests {
             max_depth: 5,
             max_entries: 60, // the root alone lists 49 entries
         };
-        let cut = discover(&root, &none, tiny, &mut |_, _| {}).unwrap();
+        let cut = discover(&root, &none, &HashSet::new(), tiny, &mut |_, _| {}).unwrap();
         assert!(cut.truncated);
         assert!(!cut.found.is_empty() && cut.found.len() < 41);
-        let all = discover(&root, &none, ScanLimits::EMULATORS_FULL, &mut |_, _| {}).unwrap();
+        let all = discover(
+            &root,
+            &none,
+            &HashSet::new(),
+            ScanLimits::EMULATORS_FULL,
+            &mut |_, _| {},
+        )
+        .unwrap();
         assert!(!all.truncated);
         assert_eq!(all.found.len(), 41);
     }

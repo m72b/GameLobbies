@@ -9,7 +9,9 @@
 //! path is canonicalized (links in parent folders resolved) and checked again, so a link
 //! can't smuggle in a protected folder. Paths are stored with `\` separators, an upper-case
 //! drive letter and no trailing separator, and compared case-insensitively. A root may not
-//! repeat, contain or sit inside any other root, of either kind.
+//! repeat another root of either kind, nor contain or sit inside another root of the same
+//! kind. A games root may contain or sit inside an emulator root (and the other way round);
+//! each scan skips the other registered roots nested in it ([`nested_roots`]).
 //!
 //! Protected folders ([`RootGuard`]):
 //! - refused when equal to, inside or containing the root: the Windows folder, Roaming
@@ -230,29 +232,56 @@ pub fn normalize_root_path(raw: &str, guard: &RootGuard) -> Result<(String, Stri
     Ok((display, key))
 }
 
-/// Rejects duplicates and nesting among roots of the same kind.
-/// Rejects duplicates and nesting among all roots, of either kind (an emulator folder inside
-/// a games folder would mix executables into a game scan, and the other way round).
+/// Overlap rules: a root may not equal another root of either kind, nor contain or sit
+/// inside another root of the SAME kind. A games root may contain or sit inside an emulator
+/// root (and the other way round): each scan skips the other kind's roots (see
+/// [`nested_roots`]). Compared by long-form path key.
 pub fn check_overlap(key: &str, kind: &str, existing: &[LibraryRoot]) -> Result<()> {
     if existing.iter().filter(|r| r.kind == kind).count() >= MAX_ROOTS_PER_KIND {
         bail!("At most {MAX_ROOTS_PER_KIND} {kind} folders can be added.");
     }
+    let key = crate::localscan::path_key(key).unwrap_or_else(|| key.to_string());
     for root in existing {
-        let other = root.key();
+        let other = root_key(root);
         if other == key {
-            bail!("That folder is already in the list.");
+            if root.kind == kind {
+                bail!("That folder is already in the list.");
+            }
+            bail!(
+                "That folder is already in the list as {} folder. A folder can't be both a game folder and an emulator folder.",
+                if root.kind == "emulators" { "an emulator" } else { "a game" }
+            );
         }
-        if is_within(&other, key) {
+        if root.kind != kind {
+            continue;
+        }
+        if is_within(&other, &key) {
             bail!(
                 "That folder is inside {}, which is already in the list.",
                 root.path
             );
         }
-        if is_within(key, &other) {
+        if is_within(&key, &other) {
             bail!("That folder contains {}, which is already in the list. Remove it first or add a different folder.", root.path);
         }
     }
     Ok(())
+}
+
+/// A root's long-form comparison key.
+pub fn root_key(root: &LibraryRoot) -> String {
+    crate::localscan::path_key(&root.path).unwrap_or_else(|| root.key())
+}
+
+/// Keys of the other registered roots (any kind, enabled or not) strictly inside `root`. A
+/// scan of `root` never enters them: their files belong to their own root.
+pub fn nested_roots(root: &LibraryRoot, all: &[LibraryRoot]) -> std::collections::HashSet<String> {
+    let key = root_key(root);
+    all.iter()
+        .filter(|other| other.id != root.id)
+        .map(root_key)
+        .filter(|other| *other != key && is_within(&key, other))
+        .collect()
 }
 
 pub fn valid_kind(kind: &str) -> Result<()> {
@@ -478,23 +507,29 @@ mod tests {
             add(&conn, "games", &dir.path().to_string_lossy(), &g).is_err(),
             "contains"
         );
-        // Roots of the other kind may not overlap either.
+        // The other kind: the same folder is refused, nesting is allowed both ways.
         assert!(
             add(&conn, "emulators", &roms.to_string_lossy(), &g).is_err(),
             "same folder"
         );
-        assert!(
-            add(&conn, "emulators", &ps2.to_string_lossy(), &g).is_err(),
-            "inside"
-        );
-        assert!(
-            add(&conn, "emulators", &dir.path().to_string_lossy(), &g).is_err(),
-            "contains"
-        );
+        let inside = add(&conn, "emulators", &ps2.to_string_lossy(), &g).unwrap();
+        assert_eq!(inside.kind, "emulators", "emulators inside a games root");
         assert!(add(&conn, "emulators", &emus.to_string_lossy(), &g).is_ok());
+        // Same kind still can't nest: Emulators/x inside the Emulators root.
+        let nested_emus = dir.dir("Emulators/Dolphin");
+        assert!(add(&conn, "emulators", &nested_emus.to_string_lossy(), &g).is_err());
         assert!(
             add(&conn, "games", &emus.to_string_lossy(), &g).is_err(),
-            "games on emulators"
+            "games on an emulator root (same folder)"
+        );
+        // A games folder inside an emulator folder.
+        let games_in_emus = dir.dir("Emulators/My Roms");
+        assert!(add(&conn, "games", &games_in_emus.to_string_lossy(), &g).is_ok());
+        // Containing a root of the other kind is fine; containing one of the same kind isn't
+        // (the test folder contains both kinds).
+        assert!(
+            add(&conn, "emulators", &dir.path().to_string_lossy(), &g).is_err(),
+            "contains an emulator root"
         );
         assert!(add(&conn, "games", &other.to_string_lossy(), &g).is_ok());
         assert!(
@@ -504,7 +539,26 @@ mod tests {
         let missing = dir.path().join("missing");
         assert!(add(&conn, "games", &missing.to_string_lossy(), &g).is_err());
         assert!(add(&conn, "other", &emus.to_string_lossy(), &g).is_err());
-        assert_eq!(list(&conn).unwrap().len(), 3);
+        assert_eq!(list(&conn).unwrap().len(), 5);
+        let all = list(&conn).unwrap();
+        let root = |kind: &str, path: &Path| {
+            all.iter()
+                .find(|r| r.kind == kind && root_key(r) == crate::localscan::key_of(path))
+                .unwrap()
+                .clone()
+        };
+        // Each root skips the other registered roots inside it.
+        let roms_root = root("games", &roms);
+        assert_eq!(
+            nested_roots(&roms_root, &all),
+            [crate::localscan::key_of(&ps2)].into()
+        );
+        let emus_root = root("emulators", &emus);
+        assert_eq!(
+            nested_roots(&emus_root, &all),
+            [crate::localscan::key_of(&games_in_emus)].into()
+        );
+        assert!(nested_roots(&root("emulators", &ps2), &all).is_empty());
         set_enabled(&conn, &added.id, false).unwrap();
         assert!(!get(&conn, &added.id).unwrap().unwrap().enabled);
         assert!(set_enabled(&conn, "nope", true).is_err());

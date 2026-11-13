@@ -16,6 +16,8 @@ pub struct AppState {
     pub scan_timer: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
     /// Held while library roots (emulator/ROM/PC folders) are scanned.
     pub local_scan_lock: tokio::sync::Mutex<()>,
+    /// Local cover cache (background downloads, retries).
+    pub covers: crate::covercache::CacheState,
 }
 
 impl AppState {

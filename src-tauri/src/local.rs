@@ -18,6 +18,11 @@
 //!   a folder that couldn't be listed completely are kept; and a scan that would mark more
 //!   than half of a root's routes (and more than `db::MASS_REMOVAL_MIN`) missing is held back
 //!   and reported (`removalsHeld`, `warning`).
+//! - Roots may nest across kinds (a games root holding the emulator root, or the reverse). A
+//!   scan never enters another registered root nested in it (`roots::nested_roots`), so it
+//!   never finds, claims or marks missing that root's games or emulators; each route keeps the
+//!   `root:<id>` state of the root that found it, and reconcile and root removal only touch
+//!   their own root's state.
 //! - Games are only ever matched by route identity; similar titles are reported as
 //!   `duplicate` review items, never merged.
 
@@ -200,6 +205,7 @@ fn scan_inputs(conn: &Connection) -> Result<ScanInputs> {
         exe_choices,
         shortcut_ok: db::shortcut_confirmations(conn)?,
         limits: localscan::ScanLimits::default(),
+        excluded: HashSet::new(),
     })
 }
 
@@ -458,6 +464,8 @@ pub fn scan_roots(
 ) -> Result<ScanSummary> {
     let started = Instant::now();
     let mut summary = ScanSummary::default();
+    // Every registered root (also ones not being scanned now), to keep nested roots apart.
+    let all_roots = crate::roots::list(&db.lock())?;
     let mut ordered: Vec<&LibraryRoot> = roots.iter().filter(|r| r.enabled).collect();
     ordered.sort_by_key(|r| r.kind != "emulators");
     for root in ordered {
@@ -496,7 +504,8 @@ pub fn scan_roots(
         if root.kind == "emulators" {
             let ignored = db::ignore_keys(&db.lock(), db::IGNORE_EMULATOR)?;
             let limits = localscan::ScanLimits::emulators(full);
-            match emulators::discover(&root_path, &ignored, limits, &mut report) {
+            let nested = crate::roots::nested_roots(root, &all_roots);
+            match emulators::discover(&root_path, &ignored, &nested, limits, &mut report) {
                 Ok(found) => {
                     let mut counts = emulators::apply_discovered(&db.lock(), &found)?;
                     // Availability needs the filesystem: check it without the database lock.
@@ -526,6 +535,7 @@ pub fn scan_roots(
         } else {
             let mut inputs = scan_inputs(&db.lock())?;
             inputs.limits = localscan::ScanLimits::games(full);
+            inputs.excluded = crate::roots::nested_roots(root, &all_roots);
             match localscan::scan_games(&root_path, &inputs, &mut report) {
                 Ok(scan) => {
                     // The walk may have taken a while: re-check the root, then lock.
@@ -1688,10 +1698,10 @@ mod tests {
     }
     #[cfg(windows)]
     #[test]
-    fn the_users_hidden_library_scans_as_a_parent_and_as_a_system_folder_root() {
-        let f = Fixture::new("local-retro");
-        crate::localscan::tests::retro_project(&f.dir);
-        f.add_root("games", "Retro Project");
+    fn a_hidden_system_library_scans_as_a_parent_and_as_a_system_folder_root() {
+        let f = Fixture::new("local-library");
+        crate::localscan::tests::sample_library(&f.dir);
+        f.add_root("games", "Game Library");
         let summary = f.scan();
         assert!(summary.roots[0].ok && !summary.roots[0].truncated);
         assert_eq!(summary.roots[0].notice, None);
@@ -1724,10 +1734,10 @@ mod tests {
         assert_eq!(f.game("Cairn (my copy)").id, cairn.id);
 
         // The system folder itself as the root.
-        let g = Fixture::new("local-retro-system");
-        crate::localscan::tests::retro_project(&g.dir);
-        g.add_root("games", "Retro Project/Sony Playstation");
-        g.add_root("games", "Retro Project/PC Game");
+        let g = Fixture::new("local-library-system");
+        crate::localscan::tests::sample_library(&g.dir);
+        g.add_root("games", "Game Library/Sony Playstation");
+        g.add_root("games", "Game Library/PC Game");
         let summary = g.scan();
         assert_eq!(summary.games.added, 5, "2 PlayStation games and 3 PC games");
         assert!(g.games().iter().any(|game| game.title == "ObraDinn"));
@@ -1812,5 +1822,130 @@ mod tests {
             path_key(&short_path(&sub).to_string_lossy()),
             path_key(&sub.to_string_lossy())
         );
+    }
+    fn scan_only(f: &Fixture, root: &LibraryRoot) -> ScanSummary {
+        let fresh = crate::roots::get(&f.db.lock(), &root.id).unwrap().unwrap();
+        scan_roots(&f.db, &[fresh], false, &mut |_| {}).unwrap()
+    }
+
+    fn installed_titles(f: &Fixture) -> Vec<String> {
+        let mut titles: Vec<String> = f
+            .games()
+            .into_iter()
+            .filter(|g| g.routes.iter().any(|r| r.installed == Some(true)))
+            .map(|g| g.title)
+            .collect();
+        titles.sort();
+        titles
+    }
+
+    /// A typical layout: the games root `Game Library` holds the emulator root
+    /// `Game Library\Launcher\Emulators`.
+    #[test]
+    fn a_games_root_may_contain_the_emulator_root_and_each_scan_skips_the_other() {
+        let f = Fixture::new("local-nested");
+        f.dir.file("Game Library/Nintendo 64/Mario 64.z64");
+        f.dir.file("Game Library/Sega Genesis/Sonic.md");
+        f.dir
+            .file("Game Library/Launcher/Emulators/Dolphin/Dolphin.exe");
+        // Inside the emulator root: things a game scan would pick up if it went in there.
+        f.dir
+            .file("Game Library/Launcher/Emulators/Dolphin/Sys/Wii/banner.iso");
+        f.dir
+            .file("Game Library/Launcher/Emulators/Nintendo 64/Hidden.z64");
+        f.dir.file("Game Library/Launcher/Launcher.DesktopApp.exe");
+        f.dir.file("Game Library/Comic Books/00390/Volume 01.cbz");
+        let emus = f.add_root("emulators", "Game Library/Launcher/Emulators");
+        let games = f.add_root("games", "Game Library");
+
+        let first = f.scan();
+        assert!(first
+            .roots
+            .iter()
+            .all(|r| r.ok && !r.truncated && r.unreadable == 0));
+        assert_eq!(first.emulators.added, 1);
+        assert_eq!(first.games.added, 2);
+        assert_eq!(installed_titles(&f), ["Mario 64", "Sonic"]);
+        let items = review::list(&f.db.lock(), false).unwrap();
+        assert!(
+            items
+                .iter()
+                .all(|i| !i.details.to_string().contains("Launcher")),
+            "no review item for the folder holding the emulator root: {items:?}"
+        );
+        // Every route belongs to the games root only.
+        for game in f.games() {
+            let states = game.routes[0].install_states.clone().unwrap();
+            assert_eq!(
+                states.keys().collect::<Vec<_>>(),
+                [&db::root_state_key(&games.id)]
+            );
+        }
+        let profiles = db::emulator_profiles(&f.db.lock()).unwrap();
+        assert_eq!(profiles.len(), 1);
+        assert_eq!(profiles[0].name, "Dolphin");
+
+        // Rescanning either root alone leaves the other's results alone.
+        let only_emus = scan_only(&f, &emus);
+        assert_eq!(only_emus.emulators.added, 0);
+        assert_eq!(installed_titles(&f), ["Mario 64", "Sonic"]);
+        let only_games = scan_only(&f, &games);
+        assert_eq!(
+            (
+                only_games.games.added,
+                only_games.games.removed_or_uninstalled
+            ),
+            (0, 0)
+        );
+        assert_eq!(db::emulator_profiles(&f.db.lock()).unwrap().len(), 1);
+
+        // A disabled emulator root is still skipped by the game scan.
+        crate::roots::set_enabled(&f.db.lock(), &emus.id, false).unwrap();
+        f.scan();
+        assert_eq!(installed_titles(&f), ["Mario 64", "Sonic"]);
+
+        // Removing the emulator root doesn't touch the games; its folder then becomes part
+        // of the games root (the next scan finds what is in it).
+        remove_root(&mut f.db.lock(), &emus.id).unwrap();
+        assert_eq!(installed_titles(&f), ["Mario 64", "Sonic"]);
+        assert_eq!(db::emulator_profiles(&f.db.lock()).unwrap().len(), 1);
+    }
+
+    /// The other way round: an emulator root holding a games root.
+    #[test]
+    fn an_emulator_root_may_contain_a_games_root_and_never_searches_it() {
+        let f = Fixture::new("local-nested-reverse");
+        f.dir.file("Box/Dolphin/Dolphin.exe");
+        f.dir.file("Box/Games/Nintendo 64/Mario 64.z64");
+        f.dir.file("Box/Games/Nintendo 64/rpcs3.exe");
+        f.dir.file("Box/Games/PC/Some Game/Game.exe");
+        let games = f.add_root("games", "Box/Games");
+        let emus = f.add_root("emulators", "Box");
+        let summary = f.scan();
+        assert!(summary
+            .roots
+            .iter()
+            .all(|r| r.ok && !r.truncated && r.unreadable == 0));
+        let profiles = db::emulator_profiles(&f.db.lock()).unwrap();
+        let ids: Vec<&str> = profiles
+            .iter()
+            .filter_map(|p| p.detected_as.as_deref())
+            .collect();
+        assert_eq!(
+            ids,
+            ["dolphin"],
+            "rpcs3.exe inside the games root is not an emulator"
+        );
+        assert_eq!(installed_titles(&f), ["Mario 64", "Some Game"]);
+        // Rescans and removal of the emulator root leave the games root's games alone.
+        scan_only(&f, &emus);
+        scan_only(&f, &games);
+        assert_eq!(installed_titles(&f), ["Mario 64", "Some Game"]);
+        remove_root(&mut f.db.lock(), &emus.id).unwrap();
+        assert_eq!(installed_titles(&f), ["Mario 64", "Some Game"]);
+        // Removing the games root affects only its own games.
+        remove_root(&mut f.db.lock(), &games.id).unwrap();
+        assert!(installed_titles(&f).is_empty());
+        assert_eq!(db::emulator_profiles(&f.db.lock()).unwrap().len(), 1);
     }
 }

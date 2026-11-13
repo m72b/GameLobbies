@@ -8,3 +8,15 @@ src-tauri/gen/
 npm-debug.log*
 Thumbs.db
 .DS_Store
+
+# Secrets and local data: never commit these
+.env
+.env.*
+*.key
+*.key.pub
+*.pem
+*.pfx
+*.p12
+*.sqlite
+*.sqlite-*
+*.bak

@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import Fuse from 'fuse.js'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { Boxes, Clock3, CloudDownload, EyeOff, Gamepad2, Heart, Library, ListFilter, MoreHorizontal, Pencil, Play, Plus, Search, Settings2, Star, X } from 'lucide-react'
@@ -7,6 +7,8 @@ import type { Game, RunningGame, Settings, Store as StoreName, SteamGridDbCover,
 import { defaultSettings } from '../shared/defaults'
 import { applyTheme } from './theme'
 import { coverStyle } from './cover'
+import { CoverLayer, useCover } from './poster'
+import { CoverTiles, pickerCovers } from './cover-picker'
 import { GamePage, type GamePageActions } from './game-page'
 import { elapsedSeconds, formatClock, useNow } from './format'
 
@@ -46,6 +48,8 @@ export default function App() {
   const [sgdbError, setSgdbError] = useState('')
   const [sgdbApplying, setSgdbApplying] = useState(false)
   const sgdbRun = useRef(0)
+  /** SteamGridDB results per game (and search settings) for this session: reopening is instant. */
+  const sgdbResults = useRef(new Map<string, SteamGridDbCover[]>())
   const [editMode, setEditMode] = useState(false)
   const [collapsed, setCollapsed] = useState(true)
   const [gridWidth, setGridWidth] = useState(1200)
@@ -112,12 +116,20 @@ export default function App() {
     setSgdbCovers([])
     setSgdbError('')
     setSgdbApplying(false)
+    const resultsKey = JSON.stringify([game.id, settings.steamGridDbStyles, settings.steamGridDbAnimated, settings.steamGridDbNsfw, settings.steamGridDbHumor])
+    const cached = sgdbResults.current.get(resultsKey)
+    if (cached) {
+      setSgdbCovers(cached)
+      setSgdbState('ready')
+      return
+    }
     setSgdbState('loading')
     try {
       const { keySet } = await window.lobby.steamGridDb.status()
       if (run !== sgdbRun.current) return
       if (!keySet) { setSgdbState('nokey'); return }
-      const covers = await window.lobby.steamGridDb.search(game.id)
+      const covers = pickerCovers(await window.lobby.steamGridDb.search(game.id), settings.steamGridDbAnimated)
+      sgdbResults.current.set(resultsKey, covers)
       if (run !== sgdbRun.current) return
       setSgdbCovers(covers)
       setSgdbState('ready')
@@ -436,14 +448,12 @@ export default function App() {
                 onClick={() => openGame(game)}
                 onContextMenu={event => { event.preventDefault(); setMenu({ x: event.clientX, y: event.clientY, game }) }}
               >
-                <div className="poster" style={{ ...coverStyle(game, row.index * cols + index), aspectRatio: '2 / 3' }}>
-                  <div className="poster-vignette" />
-                  <div className="poster-title-mark">{!game.cover && game.title.toUpperCase()}</div>
+                <CardPoster game={game} index={row.index * cols + index}>
                   {runningById.has(game.id) && <span className={'run-badge ' + runningById.get(game.id)!.state}><span className="gp-live-dot" />{runningById.get(game.id)!.state === 'launching' ? 'Launching' : 'Playing'}</span>}
                   {settings.showBadges && <span className="store-badge" title={game.store}><StoreIcon store={game.store} /></span>}
                   <button className="play-overlay" onClick={event => { event.stopPropagation(); void launch(game) }}><Play size={14} fill="currentColor" /> Play</button>
                   <button className="card-more" aria-label="Game actions" onClick={event => { event.stopPropagation(); setMenu({ x: event.clientX, y: event.clientY, game }) }}><MoreHorizontal size={17} /></button>
-                </div>
+                </CardPoster>
                 <div className="card-title">{game.title}</div>
                 <div className="card-subtitle">{game.store}{game.playtimeMinutes > 0 ? ' · ' + Math.floor(game.playtimeMinutes / 60) + 'h played' : ''}</div>
               </article>)}
@@ -488,9 +498,8 @@ export default function App() {
       {sgdbState === 'nokey' && <div className="empty-inline">Add a free SteamGridDB API key in settings to search for covers.<br /><button className="secondary-button" onClick={() => void window.lobby.settings.open()}>Open settings</button></div>}
       {sgdbState === 'error' && <div className="empty-inline">{sgdbError}</div>}
       {sgdbState === 'ready' && sgdbCovers.length === 0 && <div className="empty-inline">No covers found on SteamGridDB for this game</div>}
-      {sgdbState === 'ready' && sgdbCovers.length > 0 && <div className={'sgdb-grid' + (sgdbApplying ? ' busy' : '')}>
-        {sgdbCovers.map(cover => <button type="button" className="sgdb-tile" key={cover.id} disabled={sgdbApplying} onClick={() => void applySgdbCover(cover)} title={cover.author ? 'By ' + cover.author : undefined}><img src={cover.thumb} loading="lazy" alt={cover.author ? 'Cover option by ' + cover.author : 'Cover option ' + cover.id} /></button>)}
-      </div>}
+      {sgdbState === 'ready' && sgdbCovers.length > 0 && <CoverTiles covers={sgdbCovers} animated={settings.steamGridDbAnimated} applying={sgdbApplying} onApply={cover => void applySgdbCover(cover)} />}
+      {sgdbApplying && <div className="sgdb-applying" role="status">Saving cover…</div>}
       <div className="modal-actions"><button className="secondary-button" onClick={closeFindCover}>Cancel</button></div>
     </div></div>}
     {editMode && <div className="edit-banner">Edit mode is on · select a title to edit its metadata <button onClick={() => setEditMode(false)}>Done</button></div>}
@@ -501,6 +510,17 @@ export default function App() {
       <button type="button" className="primary-button" onClick={() => { setUpdateNotice(null); void window.lobby.settings.open('updates') }}>View update</button>
       <button type="button" className="update-notice-close" title="Dismiss" aria-label="Dismiss update notice" onClick={() => setUpdateNotice(null)}><X size={14} /></button>
     </div>}
+  </div>
+}
+
+/** A library card's poster: the title on a colored card until the cover has loaded (or when it fails). */
+function CardPoster({ game, index, children }: { game: Game; index: number; children: ReactNode }) {
+  const { src, status } = useCover(game)
+  return <div className={'poster cover-' + status} style={{ ...coverStyle(game, index), aspectRatio: '2 / 3' }}>
+    <CoverLayer src={src} status={status} />
+    <div className="poster-vignette" />
+    <div className="poster-title-mark">{status !== 'loaded' && game.title.toUpperCase()}</div>
+    {children}
   </div>
 }
 

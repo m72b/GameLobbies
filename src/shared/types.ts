@@ -127,7 +127,7 @@ export interface RootScanResult extends Omit<RootScanOutcome, 'full'> { full?: b
  *   or `shaders` are skipped.
  * - `games` folders hold system folders (`PS2`, `Sony 3`, `Sony Playstation 2`, `Nintendo Switch`,
  *   `PC`, `PC Game`, ... at any level; the nearest one wins). The root itself may be a system folder
- *   (e.g. `M:\Retro Project\Sony Playstation`): ROMs directly in it, per-game subfolders and folder
+ *   (e.g. `M:\Game Library\Sony Playstation`): ROMs directly in it, per-game subfolders and folder
  *   games all count. Folder games: PS3 (disc layout with `PS3_DISC.SFB`/`PS3_GAME`, titled from
  *   PARAM.SFO), PS4, Wii U, Xbox 360. Under a PC folder each subfolder is one game; a numeric folder
  *   name is replaced by the executable's product name or file name. Quick scan: 8 deep, 250,000
@@ -195,9 +195,13 @@ export interface AddedLocalGame { gameId: string; games: Game[] }
  *   is checked and stored). Refused: the Windows folder, Roaming AppData and Game Lobby's data
  *   folder (and anything in or above them); Program Files, ProgramData, the user profile, Public
  *   and Local AppData themselves (or a folder containing them; folders inside them are fine); for
- *   `emulators` roots also Downloads, Desktop and Temp (and anything in or above them). A root may
- *   not repeat, contain or sit inside ANY other root, of either kind. Compared case-insensitively.
- *   Returns the updated list; does not scan.
+ *   `emulators` roots also Downloads, Desktop and Temp (and anything in or above them). Overlap:
+ *   folders of the same kind can't repeat, contain or sit inside each other, and no folder can be
+ *   both a game folder and an emulator folder; but a game folder may contain the emulator folder,
+ *   or sit inside it (and the other way round). Each scan then skips the other registered folders
+ *   nested in it (enabled or not), and a first-level folder of a game folder that only leads to
+ *   such a folder (e.g. `Launcher` holding `Launcher\Emulators`) is skipped without a review item.
+ *   Compared case-insensitively in long (non-8.3) form. Returns the updated list; does not scan.
  * - browse(): native folder picker; the chosen path (not added yet), or null when cancelled.
  * - setEnabled(id, enabled): turned-off roots are skipped by scans; their games stay as they are.
  * - remove(id): games found only under it become not installed (removed when they have no user

@@ -1,23 +1,57 @@
 # Game Lobby
 
-**Game Lobby** is a local-first desktop app for bringing installed PC games and emulator libraries together in one browsable library. It pairs a cover-art grid with store-aware launch routes, local metadata, custom covers, collections, and a separate settings window.
+**Game Lobby** is a free, open-source Windows app that brings the games you already have into one library: Steam, Epic, GOG, Xbox and other store games, plus your own PC games and emulator ROM folders. It shows them as a cover-art grid with search and filters, launches them from the right store or emulator, and tracks your playtime locally.
 
-Game Lobby is an independent community project with its own name, codebase, and roadmap. It is not the official One Game Launcher app and is not affiliated with or endorsed by its developers.
+Game Lobby is local-first: your library, playtime, covers and settings stay on your PC. It is an independent community project with its own name, codebase and roadmap. It is not the official One Game Launcher app and is not affiliated with or endorsed by its developers.
+
+> **Bring your own games.** Game Lobby does not include, download or link to games, ROMs, BIOS or firmware files, or emulators. It only finds and launches games and emulators you have installed or own yourself.
 
 ## What it offers
 
-- A dark, responsive, virtualized poster library with search, store filters, game details, and launch actions.
-- Local SQLite storage for games, launch routes, settings, emulator profiles, and theme data.
-- Store library discovery with optional ownership imports for Steam, Epic, and GOG.
-- Unified duplicate entries with a per-store “Play from” choice.
-- Windows playtime tracking for launched games and sorting by last played or playtime.
-- Custom cover management and JSON library backup and restore.
-- A separate settings window for library sources, appearance, emulator profiles, and remote MyUI themes.
+- A dark, responsive, virtualized poster library with search, store filters, favorites, collections and a Steam-like game page.
+- Store library discovery for Steam, Epic, GOG, Xbox / Microsoft Store, EA app, Battle.net, Ubisoft Connect, Amazon Games and itch.io, with optional ownership imports for Steam, Epic and GOG.
+- Emulator and ROM folders: about 35 known emulators detected automatically, 24 systems, safe rescans and a review list for anything unclear.
+- Playtime tracking for games you launch, and for store games you start elsewhere.
+- Cover art from SteamGridDB and Steam, cached locally, plus custom covers, heroes and logos.
+- JSON library backup and restore, remote MyUI themes, and signed in-app updates.
 - A small native Rust backend (Tauri 2) behind a narrow, validated command API; the React UI runs in the system WebView2.
 
-## Building
+## Install
 
-Requirements: Node.js 24, Rust (stable, MSVC toolchain via `rustup`), and the Visual Studio C++ Build Tools. Windows 10/11 ship the WebView2 runtime.
+Download the latest installer (`GameLobby_<version>_x64-setup.exe`) from the [releases page](https://github.com/m72b/GameLobby-releases/releases) and run it. It installs for your Windows user only and needs no administrator rights. Windows 10 and 11 already include the WebView2 runtime it uses.
+
+The installer isn't signed with a Windows code-signing certificate, so Windows SmartScreen may warn about an unrecognized app the first time; choose **More info → Run anyway** if you trust the download. App updates are separately signed and verified (see [Updates](#updates)).
+
+## Optional accounts and API keys
+
+Game Lobby works without any account. These optional features use credentials that **you** create and enter yourself. Each is stored on your PC, encrypted with Windows DPAPI for your user account, and is never shared, sent anywhere other than the service it belongs to, or included in backups. Game Lobby never ships a shared key.
+
+| Feature | What you need | Where to enter it |
+| --- | --- | --- |
+| Cover art from SteamGridDB | A free SteamGridDB account and API key from [steamgriddb.com/profile/preferences/api](https://www.steamgriddb.com/profile/preferences/api) | **Settings → SteamGridDB** |
+| Steam owned-games import | Your SteamID64 and a Steam Web API key from [steamcommunity.com/dev/apikey](https://steamcommunity.com/dev/apikey); your profile's game details must be public | **Settings → Libraries** |
+| Epic owned-games import | The [Legendary](https://github.com/legendary-gl/legendary) CLI, installed and signed in by you | **Settings → Libraries** (select its executable) |
+| GOG owned games | GOG Galaxy installed; detected automatically, or select its database file | **Settings → Libraries** |
+
+Keep your keys private: don't paste them into issues, screenshots or logs.
+
+## Data sources and terms
+
+Game Lobby talks to these services directly from your PC, using your own credentials where needed. By using a feature, you use that service under its own terms.
+
+- **SteamGridDB** (cover art, heroes, logos): community-made artwork; copyright belongs to its creators. Use is limited to personal, non-commercial use under the [SteamGridDB Terms of Use](https://www.steamgriddb.com/terms). Game Lobby fetches art on demand, spaces out bulk requests, and only caches images on your PC.
+- **Steam** (store artwork CDN, optional Web API import): artwork belongs to Valve and the games' publishers. The Steam Web API is used under the [Steam Web API Terms of Use](https://steamcommunity.com/dev/apiterms) with your own key.
+- **Local launchers** (Steam, Epic, GOG Galaxy, Xbox, EA app, Battle.net, Ubisoft Connect, Amazon Games, itch.io): Game Lobby reads their local install data and opens their own launch links; it doesn't sign in to them.
+
+Downloaded artwork is cached only in your local data folder. It is never committed to this repository or bundled in the installer.
+
+## Updates
+
+Game Lobby can check for new versions in **Settings → About and Updates**, and optionally once a day on startup. An update is installed only when you click install, and only after its signature matches the public key built into the app and is bound to the announced version; older versions are refused. Your library is backed up before an update installs. Maintainers: see [docs/RELEASING.md](docs/RELEASING.md).
+
+## Building from source
+
+Requirements: Node.js 24, Rust via `rustup` (the toolchain is pinned in `rust-toolchain.toml`), and the Visual Studio C++ Build Tools.
 
 ```bash
 npm install
@@ -28,51 +62,9 @@ npm run build    # release build + NSIS installer in src-tauri/target/release/bu
 
 `npm run build` makes an unsigned installer and needs no signing key. Only the release workflow signs updates.
 
-## Releases and updates
+## Contributing
 
-Game Lobby updates itself from the public repository [m72b/GameLobby-releases](https://github.com/m72b/GameLobby-releases). That repository holds only the signed installers and the update manifest (`latest.json`). The app reads `releases/latest/download/latest.json` from it, shows when a new version is available, and installs only after a click. It accepts an installer only when its minisign signature matches the public key in `src-tauri/tauri.conf.json` and is bound to the announced version.
-
-To cut a release:
-
-1. Bump `version` in `package.json` (the app and the installer take their version from it) and commit.
-2. Tag the commit with the same version and push the tag. An annotated tag's message becomes the release notes.
-   ```bash
-   git tag -a v0.4.0 -m "Release notes shown in the app"
-   git push origin v0.4.0
-   ```
-3. `.github/workflows/release.yml` then runs three jobs:
-   - **build**: checks that the tag matches `package.json` and builds the unsigned installer. It has no secrets, and `npm ci --ignore-scripts` keeps dependency install scripts from running.
-   - **sign**: runs in the `release` environment, the only place the signing key is available. It installs the Tauri CLI version locked in `package-lock.json` into an empty folder, checks it against the lockfile, and signs the installer with the version bound to the signature. It writes `latest.json`, then checks the signature against the public key in `tauri.conf.json` with `.github/scripts/verify-minisign.mjs`, an independent check that uses Node's own crypto.
-   - **publish**: creates release `v0.4.0` in m72b/GameLobby-releases with the installer, its `.sig` and `latest.json`.
-
-   All actions are pinned to commit SHAs. The Rust version comes from `rust-toolchain.toml`. `src-tauri/tauri.release.conf.json` turns on `createUpdaterArtifacts` for a signed build in one step, for example a local test with a throwaway key; CI signs separately instead.
-
-Secrets:
-
-| Secret | Where | Contents |
-| --- | --- | --- |
-| `TAURI_SIGNING_PRIVATE_KEY` | Environment `release` | The updater private key (from `tauri signer generate`) |
-| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Environment `release` | Its password |
-| `RELEASES_TOKEN` | Repository | A fine-grained personal access token with **Contents: read and write** on m72b/GameLobby-releases only. Not needed when releases are published to this repository itself. |
-
-Set up the `release` environment once, in **Settings → Environments**:
-
-1. Create the environment `release` and add the two signing secrets to it. If they were added as repository secrets earlier, delete those afterwards, so only the sign job can read them.
-2. Add yourself as a **required reviewer**: each release waits for your approval before anything is signed.
-3. Under **Deployment branches and tags**, choose **Selected branches and tags** and add the tag rule `v*`.
-4. Under **Settings → Rules → Rulesets**, add a tag ruleset for `v*` that restricts who can create, update and delete those tags, for example to repository admins only.
-
-### Publishing to a different repository
-
-The release repository is set in two places, plus a test that checks them:
-
-1. `RELEASE_REPO` at the top of `.github/workflows/release.yml`. If it names the repository the workflow runs in (for example m72b/GameLobby once it is public), the workflow publishes with the built-in `GITHUB_TOKEN` and `RELEASES_TOKEN` isn't needed.
-2. `plugins.updater.endpoints` in `src-tauri/tauri.conf.json`.
-3. The config test `updater_config_points_at_the_public_releases_repo` in `src-tauri/src/updater.rs`.
-
-Installed copies keep checking the old endpoint until they install a build that points to the new one. When you switch, publish the first release that uses the new endpoint to both repositories: to the old one, so existing installs find it, and to the new one. For example, run the workflow once with each `RELEASE_REPO`.
-
-Never commit the private key or its password, and don't store them in this repository. If the key is lost, installed copies can no longer be updated automatically. If it leaks, anyone holding it can sign an update those copies will accept.
+Bug reports, fixes and new integrations are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, checks and ground rules (no games, ROMs or artwork in the repository, and no secrets). Report security problems privately as described in [SECURITY.md](SECURITY.md).
 
 ## Library and emulator support
 
@@ -116,7 +108,7 @@ Each ROM game uses the best matching enabled emulator, or the one you pick on it
 
 Rescans are safe. Titles, favorites, covers, playtime, and emulator choices are kept, and nothing is duplicated. Possible duplicates go to **Settings → Review**, where you can keep them separate, link them, or dismiss them. Offline or unreadable folders never remove games. If a scan would remove more than half of a folder's games (and more than 20), it holds off and reports it. Unreadable subfolders and unsupported files are listed in the scan summary and in Review.
 
-Folder rules: use full local paths only. System and program folders, network paths, and links (junctions) are refused. Folders cannot overlap each other, and emulator folders cannot be Downloads, Desktop, or Temp.
+Folder rules: use full local paths only. System and program folders, network paths, and links (junctions) are refused. Folders of the same kind cannot overlap, and one folder cannot be both a game folder and an emulator folder. A game folder may contain the emulator folder (and the other way round): each scan skips the other. Emulator folders cannot be Downloads, Desktop, or Temp.
 
 For development, debug builds honour `GAME_LOBBY_DATA_DIR` (an absolute folder) to use a separate data folder. Release builds ignore it.
 
@@ -144,11 +136,17 @@ Theme JSON example: [`themes/example.json`](themes/example.json). CSS themes sho
 
 ## Local data and privacy
 
-The SQLite database is managed by `src-tauri/src/db.rs` and is stored in `%APPDATA%\app.gamelobby.desktop`. On first launch, Game Lobby copies an existing library and custom covers from the earlier Electron build (`%APPDATA%\game-lobby`), leaving the original untouched; re-enter a Steam API key once, because keys encrypted by the Electron build can't be read. It uses write-ahead logging and foreign-key checks. JSON backups include game metadata, launch routes, settings, and emulator profiles. Only the optional Steam ownership import uses a credential entered in Game Lobby; the Steam API key is encrypted with Windows DPAPI. Epic ownership uses the separately installed Legendary client and its existing sign-in.
+The SQLite database is managed by `src-tauri/src/db.rs` and is stored in `%APPDATA%\app.gamelobby.desktop`, together with cached cover art. On first launch, Game Lobby copies an existing library and custom covers from the earlier Electron build (`%APPDATA%\game-lobby`), leaving the original untouched; re-enter API keys once, because keys encrypted by the Electron build can't be read. It uses write-ahead logging and foreign-key checks. JSON backups include game metadata, launch routes, settings and emulator profiles, but never API keys.
+
+Game Lobby has no telemetry and no account of its own. It contacts the internet only for the features you use: the services listed under [Data sources and terms](#data-sources-and-terms), remote themes you add, and update checks against GitHub.
 
 ## License
 
 Game Lobby is licensed under the GNU General Public License v3.0 only (GPL-3.0-only). You may use, modify, and redistribute the project under that license. When you distribute a modified version, GPL-3.0 requires you to preserve the same freedoms and provide the corresponding source code. See [`LICENSE`](LICENSE) for the complete terms. Third-party dependencies retain their own licenses.
+
+## Trademarks
+
+Game Lobby is not affiliated with or endorsed by Valve, Epic Games, GOG, Microsoft, Ubisoft, Electronic Arts, Blizzard, Amazon, itch.io, Twitch, IGDB, SteamGridDB, Playnite, or any emulator project. Steam, Epic Games, GOG, Xbox and the other names and logos mentioned are trademarks of their respective owners and are used only to identify the stores and programs Game Lobby works with. Store icons come from [Simple Icons](https://simpleicons.org/) (CC0); the icons themselves remain subject to their owners' trademark rights.
 
 ## Project status
 
@@ -156,4 +154,4 @@ Game Lobby is an early-stage independent project. Steam, Epic, GOG, and best-eff
 
 ## Acknowledgements
 
-The project takes inspiration from the unified-library experience of [Playnite](https://playnite.link/) and the library presentation patterns of game storefronts. Game Lobby is an independent project and does not include or redistribute proprietary code or assets from those products.
+The project takes inspiration from the unified-library experience of [Playnite](https://playnite.link/) and the library presentation patterns of game storefronts. Game Lobby is an independent project and does not include or redistribute proprietary code or assets from those products. Cover art comes from the [SteamGridDB](https://www.steamgriddb.com/) community.

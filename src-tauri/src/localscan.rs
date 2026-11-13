@@ -343,6 +343,10 @@ pub struct ScanInputs {
     pub shortcut_ok: HashMap<String, (String, String)>,
     /// Quick (default) or full scan limits.
     pub limits: ScanLimits,
+    /// Long-form keys of other registered roots inside this one (`roots::nested_roots`): never
+    /// entered, never reported. A first-level folder that contains one of them (like
+    /// `Launcher` holding the emulator root) is skipped silently too.
+    pub excluded: HashSet<String>,
 }
 
 /// The comparison key of a path that came from outside a walk (a stored path, an env var, a
@@ -362,7 +366,7 @@ pub fn key_of(path: &Path) -> String {
 /// The key of a path produced by a walk. Walks start from the long form of their root and
 /// append names exactly as listed, so the result is already long: plain string normalization
 /// suffices (and costs no disk access per entry).
-fn listed_key(path: &Path) -> String {
+pub fn listed_key(path: &Path) -> String {
     normalize_path(&path.to_string_lossy()).unwrap_or_default()
 }
 
@@ -394,6 +398,21 @@ impl GameWalker<'_> {
 
     fn ignored(&self, path: &Path) -> bool {
         self.inputs.ignored.contains(&listed_key(path))
+    }
+
+    /// Another registered root (or, at the first level, a folder holding one): not ours.
+    fn excluded(&self, path: &Path, depth: usize) -> bool {
+        if self.inputs.excluded.is_empty() {
+            return false;
+        }
+        let key = listed_key(path);
+        self.inputs.excluded.contains(&key)
+            || (depth == 0
+                && self
+                    .inputs
+                    .excluded
+                    .iter()
+                    .any(|nested| crate::tracker::is_within(&key, nested)))
     }
 
     fn count_entries(&mut self, n: usize) -> bool {
@@ -434,6 +453,7 @@ impl GameWalker<'_> {
             .items
             .into_iter()
             .filter(|i| i.path.as_os_str().len() <= MAX_PATH_CHARS && !self.ignored(&i.path))
+            .filter(|i| !self.excluded(&i.path, depth))
             .collect();
         if system.is_some_and(|s| s.id == PC) {
             return self.pc_folder(&items, top);
@@ -1385,7 +1405,7 @@ pub(crate) mod tests {
         assert!(cut.visited > 3);
     }
 
-    /// Sets Hidden + System, like the user's library (attrib +h +s).
+    /// Sets Hidden + System, like a library with hidden/system folders (attrib +h +s).
     #[cfg(windows)]
     pub(crate) fn hide(path: &Path) {
         use std::os::windows::ffi::OsStrExt;
@@ -1403,10 +1423,10 @@ pub(crate) mod tests {
         assert_ne!(ok, 0, "SetFileAttributesW failed for {}", path.display());
     }
 
-    /// The user's games layout (`M:\Retro Project`), Hidden+System almost everywhere.
+    /// A typical games layout (`M:\Game Library`), Hidden+System almost everywhere.
     #[cfg(windows)]
-    pub(crate) fn retro_project(dir: &TempDir) -> PathBuf {
-        let base = "Retro Project";
+    pub(crate) fn sample_library(dir: &TempDir) -> PathBuf {
+        let base = "Game Library";
         let f = |rel: &str| dir.file(&format!("{base}/{rel}"));
         let d = |rel: &str| dir.dir(&format!("{base}/{rel}"));
         f("Sony Playstation/Castlevania Symphony of the Night/Castlevania Symphony of the Night.chd");
@@ -1436,7 +1456,7 @@ pub(crate) mod tests {
         f("PC Game/00766/boot.xml");
         f("PC Game/00766/lime.ndll");
         f("PC Game/00766/Rogue Legacy.exe");
-        f("Retro Books/00390/Volume 01.cbz");
+        f("Comic Books/00390/Volume 01.cbz");
         let root = dir.path().join(base);
         for folder in [
             "Sony Playstation",
@@ -1446,7 +1466,7 @@ pub(crate) mod tests {
             "Sony Playstation Portable",
             "Nintendo Switch",
             "PC Game",
-            "Retro Books",
+            "Comic Books",
             "Sony Playstation/Castlevania Symphony of the Night",
             "Sony Playstation 3/Sly Cooper Thieves in Time",
             "Sony Playstation 3/Sly Cooper Thieves in Time/PS3_GAME",
@@ -1466,8 +1486,8 @@ pub(crate) mod tests {
     #[cfg(windows)]
     #[test]
     fn hidden_system_library_scans_from_the_parent_and_from_a_system_folder() {
-        let dir = TempDir::new("scan-retro");
-        let root = retro_project(&dir);
+        let dir = TempDir::new("scan-library");
+        let root = sample_library(&dir);
         let result = scan_games(&root, &ScanInputs::default(), &mut |_, _| {}).unwrap();
         assert_eq!(
             rom_names(&result),
@@ -1509,11 +1529,11 @@ pub(crate) mod tests {
         );
         assert!(result.ambiguous.is_empty(), "{:?}", result.ambiguous);
         assert!(result.unreadable.is_empty());
-        // Retro Books holds no games: reported, nothing added.
+        // Comic Books holds no games: reported, nothing added.
         assert!(result
             .unsupported
             .iter()
-            .any(|u| u.path.ends_with("Retro Books")));
+            .any(|u| u.path.ends_with("Comic Books")));
 
         // The same folders added directly as roots.
         let ps1 = scan_games(

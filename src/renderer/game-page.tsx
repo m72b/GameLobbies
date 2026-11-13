@@ -4,7 +4,8 @@ import { StoreIcon } from './store-icons'
 import { CustomizePanel, useLogoLayout } from './customize-page'
 import { coverUrl } from './lobby-api'
 import { defaultGamePageCustom } from '../shared/defaults'
-import { coverImage, coverStyle } from './cover'
+import { coverLayerStyle, coverStyle } from './cover'
+import { CoverLayer, useCover } from './poster'
 import { elapsedSeconds, formatClock, formatDate, formatSession, formatTime, formatTotal, useNow } from './format'
 import type { EmulatorCatalog, EmulatorProfile, Game, GamePageArt, PlaySession, PlayStats, RunningGame, Settings } from '../shared/types'
 
@@ -76,7 +77,7 @@ export function GamePage({ game, index, settings, running, libraryVersion, actio
 
   const heroSrc = art.hero[heroIdx] ? coverUrl(art.hero[heroIdx]) : undefined
   const logoSrc = art.logo[logoIdx] ? coverUrl(art.logo[logoIdx]) : undefined
-  const coverBg = coverImage(game.cover)
+  const cover = useCover(game)
   const route = game.routes[routeIdx]
   const launching = running?.state === 'launching'
   const isRunning = running?.state === 'running'
@@ -100,7 +101,7 @@ export function GamePage({ game, index, settings, running, libraryVersion, actio
     <div className="gp-hero">
       {heroSrc
         ? <img key={heroSrc} className="gp-hero-img" src={heroSrc} alt="" onError={() => setHeroIdx(value => value + 1)} />
-        : <div className="gp-hero-fallback" style={coverBg ? { backgroundImage: coverBg } : coverStyle(game, index)} />}
+        : <div className="gp-hero-fallback" style={cover.src && cover.status === 'loaded' ? coverLayerStyle(cover.src) : coverStyle(game, index)} />}
       <div className="gp-hero-fade" />
       <button className="gp-back" onClick={actions.back}><ArrowLeft size={15} /> Library</button>
       <button className="gp-customize" onClick={() => setCustomizing(true)} aria-haspopup="dialog" title="Customize hero, logo and layout"><Pencil size={13} /> Customize</button>
@@ -178,7 +179,7 @@ export function GamePage({ game, index, settings, running, libraryVersion, actio
       </section>
 
       <aside className="gp-side">
-        <div className="gp-poster" style={coverStyle(game, index)}>{!game.cover && <span>{game.title}</span>}</div>
+        <div className={'gp-poster cover-' + cover.status} style={coverStyle(game, index)}><CoverLayer src={cover.src} status={cover.status} />{cover.status !== 'loaded' && <span>{game.title}</span>}</div>
         <div className="gp-side-block"><div className="detail-label">STORES</div>
           {game.routes.length === 0 && <div className="muted-text">No launch routes</div>}
           {game.routes.map((item, i) => <div className="gp-route-row" key={item.sourceId + '-' + i}>

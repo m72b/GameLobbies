@@ -703,19 +703,31 @@ fn key_test_result(result: Result<(), ApiError>, key: &str) -> KeyTest {
     KeyTest { ok: false, message }
 }
 
-pub fn apply(state: &AppState, game_id: &str, url: &str) -> Result<Vec<Game>> {
+/// Sets a SteamGridDB image as the game's cover. The image is downloaded into the local cover
+/// cache first, so it shows straight from disk; if that fails the remote URL is stored and the
+/// background pass retries later.
+pub async fn apply(state: &AppState, game_id: &str, url: &str) -> Result<Vec<Game>> {
     let url = validate_cover_url(url)?;
+    if db::get_game(&state.db.lock(), game_id)?.is_none() {
+        bail!("Game not found.");
+    }
+    let file = crate::covercache::download_now(state, &url).await;
     let conn = state.db.lock();
     if db::get_game(&conn, game_id)?.is_none() {
         bail!("Game not found.");
     }
-    db::save_game(
+    let value = crate::covercache::adopt(&conn, &state.covers_dir(), &url, file.as_deref())?;
+    let games = db::save_game(
         &conn,
         &GamePatch {
-            cover: Some(url),
+            cover: Some(value),
             ..GamePatch::new(game_id)
         },
-    )
+    )?;
+    if let Err(e) = crate::covercache::sweep(&conn, &state.covers_dir()) {
+        eprintln!("Could not clean up the cover cache: {e:#}");
+    }
+    Ok(games)
 }
 
 fn missing_cover(game: &Game) -> bool {
@@ -784,6 +796,8 @@ pub async fn fetch_missing(app: &AppHandle) -> Result<FetchSummary> {
     .await;
     if changed {
         let _ = app.emit("library:changed", ());
+        // Download the new covers into the local cache (emits `library:changed` in batches).
+        crate::covercache::spawn_pass(app, Duration::ZERO);
     }
     result?;
     let _ = app.emit("steamgriddb:fetched", &summary);
