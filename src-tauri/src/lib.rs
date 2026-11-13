@@ -3,6 +3,7 @@
 mod art;
 mod catalog;
 mod commands;
+mod covercache;
 mod db;
 mod emulators;
 mod importers;
@@ -30,6 +31,15 @@ use std::sync::Mutex;
 use tauri::http::{header, Request, Response, StatusCode};
 use tauri::{Manager, Runtime, UriSchemeContext};
 
+/// The file a `lobby-cover` request refers to: only a bare file name inside the covers folder.
+/// The query (e.g. a `?v=` cache-buster) and fragment are ignored.
+fn cover_file(covers_dir: &std::path::Path, uri: &tauri::http::Uri) -> Option<std::path::PathBuf> {
+    let raw = uri.path().trim_start_matches('/');
+    let name = percent_encoding::percent_decode_str(raw).decode_utf8_lossy();
+    let file_name = std::path::Path::new(name.as_ref()).file_name()?;
+    Some(covers_dir.join(file_name))
+}
+
 /// Serves custom covers: `lobby-cover://<name>` (http://lobby-cover.localhost/<name> in WebView2).
 fn cover_protocol<R: Runtime>(
     ctx: UriSchemeContext<'_, R>,
@@ -44,13 +54,9 @@ fn cover_protocol<R: Runtime>(
     let Some(state) = ctx.app_handle().try_state::<AppState>() else {
         return not_found();
     };
-    let raw = request.uri().path().trim_start_matches('/');
-    let name = percent_encoding::percent_decode_str(raw).decode_utf8_lossy();
-    // Only a bare file name inside the covers folder is ever served.
-    let Some(file_name) = std::path::Path::new(name.as_ref()).file_name() else {
+    let Some(file) = cover_file(&state.covers_dir(), request.uri()) else {
         return not_found();
     };
-    let file = state.covers_dir().join(file_name);
     let Ok(bytes) = std::fs::read(&file) else {
         return not_found();
     };
@@ -128,10 +134,13 @@ pub fn run() {
                 scan_timer: Mutex::new(None),
                 cover_fetch_lock: tokio::sync::Mutex::new(()),
                 local_scan_lock: tokio::sync::Mutex::new(()),
+                covers: Default::default(),
             });
             scan::configure_schedule(app.handle(), hours);
             tracker::start(app.handle());
             windows::create(app.handle(), false)?;
+            // Off the UI path: a few seconds after launch, cache remote covers locally.
+            covercache::spawn_startup(app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -209,4 +218,48 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running Game Lobby");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cover_file;
+    use std::path::Path;
+
+    #[test]
+    fn cover_requests_resolve_to_a_bare_name_in_the_covers_folder() {
+        let dir = Path::new("covers");
+        let file = |uri: &str| cover_file(dir, &uri.parse().unwrap());
+        let name = "cache-0123456789abcdef-0123456789ab.png";
+        let expected = Some(dir.join(name));
+        assert_eq!(
+            file(&format!("http://lobby-cover.localhost/{name}")),
+            expected
+        );
+        // A cache-busting query or a fragment is ignored.
+        assert_eq!(
+            file(&format!("http://lobby-cover.localhost/{name}?v=abc123")),
+            expected
+        );
+        assert_eq!(
+            file(&format!(
+                "http://lobby-cover.localhost/{name}?v=1&x=../../a"
+            )),
+            expected
+        );
+        assert_eq!(
+            file(&format!("lobby-cover://localhost/{name}?v=2")),
+            Some(dir.join(name))
+        );
+        // Paths never leave the folder.
+        assert_eq!(
+            file("http://lobby-cover.localhost/..%2F..%2Flibrary.sqlite"),
+            Some(dir.join("library.sqlite"))
+        );
+        assert_eq!(
+            file("http://lobby-cover.localhost/a/b/c.png"),
+            Some(dir.join("c.png"))
+        );
+        assert_eq!(file("http://lobby-cover.localhost/.."), None);
+        assert_eq!(file("http://lobby-cover.localhost/"), None);
+    }
 }

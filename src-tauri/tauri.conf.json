@@ -13,7 +13,7 @@
     "windows": [],
     "withGlobalTauri": false,
     "security": {
-      "csp": "default-src 'self'; img-src 'self' https: data: http://lobby-cover.localhost lobby-cover:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src ipc: http://ipc.localhost",
+      "csp": "default-src 'self'; img-src 'self' https: data: http://lobby-cover.localhost lobby-cover:; style-src 'self' 'unsafe-inline'; script-src 'self'; media-src https://cdn2.steamgriddb.com; connect-src ipc: http://ipc.localhost",
       "freezePrototype": true
     }
   },

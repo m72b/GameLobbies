@@ -271,6 +271,8 @@ pub async fn scan_libraries(app: &AppHandle) -> Result<LibraryStats, String> {
             if result.is_ok() {
                 // Runs in the background; never delays or fails the scan.
                 crate::steamgriddb::spawn_auto_fetch(app);
+                // New store covers (e.g. Steam's) go into the local cover cache.
+                crate::covercache::spawn_pass(app, std::time::Duration::ZERO);
             }
             result
         }

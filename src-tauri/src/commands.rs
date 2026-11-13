@@ -8,7 +8,7 @@ use crate::state::AppState;
 use crate::steamgriddb::{self, Cover, FetchSummary, KeyStatus, KeyTest};
 use crate::tracker::RunningGame;
 use crate::types::*;
-use crate::{art, db, scan, secrets, theme, tracker, validation, windows};
+use crate::{art, covercache, db, scan, secrets, theme, tracker, validation, windows};
 use base64::Engine;
 use regex::Regex;
 use serde_json::{json, Map, Value};
@@ -168,9 +168,34 @@ pub async fn library_launch(
 }
 
 #[tauri::command]
-pub async fn library_save(state: State<'_, AppState>, game: Value) -> CmdResult<Vec<Game>> {
-    let patch = validation::game_patch(&game).map_err(err)?;
-    let games = db::save_game(&state.db.lock(), &patch).map_err(err)?;
+pub async fn library_save(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    game: Value,
+) -> CmdResult<Vec<Game>> {
+    let mut patch = validation::game_patch(&game).map_err(err)?;
+    let games = {
+        let conn = state.db.lock();
+        // A remote cover that is already downloaded is stored as its local file.
+        let covers = state.covers_dir();
+        for value in [&mut patch.cover, &mut patch.default_cover] {
+            if let Some(v) = value.as_mut() {
+                *v = covercache::cached_value(&conn, &covers, v);
+            }
+        }
+        let games = db::save_game(&conn, &patch).map_err(err)?;
+        if patch.cover.is_some() || patch.default_cover.is_some() {
+            if let Err(e) = covercache::sweep(&conn, &covers) {
+                eprintln!("Could not clean up the cover cache: {e:#}");
+            }
+        }
+        games
+    };
+    if covercache::needs_caching(patch.cover.as_deref())
+        || covercache::needs_caching(patch.default_cover.as_deref())
+    {
+        covercache::spawn_pass(&app, std::time::Duration::ZERO);
+    }
     state.tracker.library_changed();
     Ok(games)
 }
@@ -189,6 +214,7 @@ pub async fn library_merge(
         tracker::apply(&state.db.lock(), &mut sessions, tick.effects);
         games
     };
+    covercache::clean_up(&state);
     state.tracker.library_changed();
     Ok(games)
 }
@@ -201,6 +227,7 @@ pub async fn library_remove(state: State<'_, AppState>, id: String) -> CmdResult
         sessions.forget(&id);
         games
     };
+    covercache::clean_up(&state);
     state.tracker.library_changed();
     Ok(games)
 }
@@ -280,6 +307,7 @@ fn cover_url(name: &str) -> String {
 
 #[tauri::command]
 pub async fn library_set_cover(
+    app: AppHandle,
     state: State<'_, AppState>,
     id: String,
     data_url: Option<String>,
@@ -306,21 +334,36 @@ pub async fn library_set_cover(
             std::fs::write(state.covers_dir().join(&name), bytes).map_err(err)?;
             cover_url(&name)
         }
-        // Resetting with no store cover clears the custom one.
+        // Resetting with no store cover clears the custom one. The default cover may be a
+        // cached file already; otherwise the background pass caches it.
         None => game.default_cover.clone().unwrap_or_default(),
     };
-    db::save_game(
-        &state.db.lock(),
-        &GamePatch {
-            cover: Some(cover),
-            ..GamePatch::new(id)
-        },
-    )
-    .map_err(err)
+    let remote = covercache::needs_caching(Some(&cover));
+    let games = {
+        let conn = state.db.lock();
+        let games = db::save_game(
+            &conn,
+            &GamePatch {
+                cover: Some(cover),
+                ..GamePatch::new(id)
+            },
+        )
+        .map_err(err)?;
+        if let Err(e) = covercache::sweep(&conn, &state.covers_dir()) {
+            eprintln!("Could not clean up the cover cache: {e:#}");
+        }
+        games
+    };
+    if remote {
+        covercache::spawn_pass(&app, std::time::Duration::ZERO);
+    }
+    notify_library(&app);
+    Ok(games)
 }
 
 #[tauri::command]
 pub async fn library_choose_cover(
+    app: AppHandle,
     window: WebviewWindow,
     state: State<'_, AppState>,
     id: String,
@@ -344,6 +387,8 @@ pub async fn library_choose_cover(
                 },
             )
             .map_err(err)?;
+            covercache::clean_up(&state);
+            notify_library(&app);
         }
     }
     db::all_games(&state.db.lock()).map_err(err)
@@ -478,8 +523,17 @@ pub async fn backup_export(
     };
     let backup = {
         let conn = state.db.lock();
+        // Cached covers are exported as their original URLs, which work on any machine.
+        let mut games = db::all_games(&conn).map_err(err)?;
+        for game in &mut games {
+            for value in [&mut game.cover, &mut game.default_cover] {
+                if let Some(v) = value.as_mut() {
+                    *v = covercache::source_of(&conn, v).map_err(err)?;
+                }
+            }
+        }
         Backup {
-            games: db::all_games(&conn).map_err(err)?,
+            games,
             settings: Some(db::get_settings(&conn).map_err(err)?),
             emulators: Some(db::emulator_profiles(&conn).map_err(err)?),
             game_page_custom: Some(db::all_page_custom(&conn).map_err(err)?)
@@ -504,6 +558,7 @@ pub async fn backup_import(
     let count = db::restore_backup(&mut state.db.lock(), &backup).map_err(err)?;
     state.tracker.library_changed();
     notify_library(&app);
+    covercache::spawn_pass(&app, std::time::Duration::ZERO);
     if backup.settings.is_some() {
         if let Ok(settings) = db::get_settings(&state.db.lock()) {
             notify_settings(&app, settings);
@@ -551,11 +606,24 @@ pub async fn steamgriddb_search(
 
 #[tauri::command]
 pub async fn steamgriddb_apply(
+    app: AppHandle,
     state: State<'_, AppState>,
     game_id: String,
     url: String,
 ) -> CmdResult<Vec<Game>> {
-    steamgriddb::apply(&state, &game_id, &url).map_err(err)
+    let games = steamgriddb::apply(&state, &game_id, &url)
+        .await
+        .map_err(err)?;
+    // Not downloaded (offline, CDN error): shown from the CDN for now; retried in the background.
+    let remote = games
+        .iter()
+        .find(|g| g.id == game_id)
+        .is_some_and(|g| covercache::needs_caching(g.cover.as_deref()));
+    if remote {
+        covercache::spawn_pass(&app, std::time::Duration::ZERO);
+    }
+    notify_library(&app);
+    Ok(games)
 }
 
 #[tauri::command]
