@@ -47,6 +47,8 @@ impl Db {
 fn migrate(db: &Connection, file: Option<&Path>) -> Result<()> {
     db.pragma_update(None, "journal_mode", "WAL")?;
     db.pragma_update(None, "foreign_keys", "ON")?;
+    // Deleted rows (such as removed secrets) are overwritten, not left in free pages.
+    db.pragma_update(None, "secure_delete", "ON")?;
     db.execute_batch(&format!(
         "{};
         CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
@@ -137,40 +139,111 @@ fn migrate(db: &Connection, file: Option<&Path>) -> Result<()> {
         params!["app", serde_json::to_string(&Settings::default())?],
     )?;
     let version: i64 = db.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-    if version < 1 {
-        remove_store_accounts(db)?;
-        db.pragma_update(None, "user_version", 1)?;
+    if version > SCHEMA_VERSION {
+        // Written by a newer Game Lobby: open it as usual, but don't run cleanups that may
+        // not suit its format.
+        eprintln!(
+            "The library was last used by a newer Game Lobby (schema {version}, this version knows {SCHEMA_VERSION}); skipping upgrade steps."
+        );
+        return Ok(());
     }
+    remove_store_accounts(db, file, version)?;
     Ok(())
 }
 
-/// One-time cleanup (schema version 1) after the Steam Web API and Legendary imports were
-/// removed: deletes the stored Steam API key, the SteamID and the Legendary path, and turns
-/// Legendary launch routes back into Epic Games Launcher links.
-fn remove_store_accounts(db: &Connection) -> Result<()> {
-    let tx = db.unchecked_transaction()?;
-    for name in crate::secrets::RETIRED_SECRETS {
-        tx.execute("DELETE FROM secrets WHERE key=?", [name])?;
+/// The `PRAGMA user_version` this build writes.
+pub const SCHEMA_VERSION: i64 = 1;
+
+/// What [`remove_store_accounts`] would change.
+struct StoreAccountCleanup {
+    secrets: Vec<&'static str>,
+    connections: Option<ConnectionValues>,
+    routes: Vec<(String, Vec<GameRoute>)>,
+}
+
+impl StoreAccountCleanup {
+    fn is_empty(&self) -> bool {
+        self.secrets.is_empty() && self.connections.is_none() && self.routes.is_empty()
     }
-    // Rewrites `main` without the retired fields (they are not part of ConnectionValues).
-    let stored: Option<String> = tx
+}
+
+fn plan_store_account_cleanup(db: &Connection) -> Result<StoreAccountCleanup> {
+    let mut secrets = Vec::new();
+    for name in crate::secrets::RETIRED_SECRETS {
+        if read_secret(db, name)?.is_some() {
+            secrets.push(*name);
+        }
+    }
+    let stored: Option<String> = db
         .query_row(
             "SELECT value FROM library_connections WHERE key='main'",
             [],
             |row| row.get(0),
         )
         .optional()?;
-    if stored.is_some() {
-        put_connection_values(&tx, &get_connection_values(&tx)?)?;
-    }
-    for row in all_rows(&tx)? {
-        let routes: Vec<GameRoute> = row.routes.iter().map(without_legendary).collect();
-        if routes != row.routes {
-            tx.execute(
-                "UPDATE games SET routes=? WHERE id=?",
-                params![serde_json::to_string(&routes)?, row.id],
-            )?;
+    let retired_keys = stored
+        .as_deref()
+        .and_then(|s| serde_json::from_str::<Map<String, Value>>(s).ok())
+        .is_some_and(|map| map.contains_key("steamId") || map.contains_key("legendaryPath"));
+    let connections = if retired_keys {
+        Some(get_connection_values(db)?)
+    } else {
+        None
+    };
+    let mut routes = Vec::new();
+    for row in all_rows(db)? {
+        let next: Vec<GameRoute> = row.routes.iter().map(without_legendary).collect();
+        if next != row.routes {
+            routes.push((row.id, next));
         }
+    }
+    Ok(StoreAccountCleanup {
+        secrets,
+        connections,
+        routes,
+    })
+}
+
+/// Cleanup after the Steam Web API and Legendary imports were removed: deletes the stored
+/// Steam API key, the SteamID and the Legendary path, and turns Legendary launch routes into
+/// Epic Games Launcher links. It runs on every start and only writes when something is left
+/// (for example after an older version was run again), so it heals itself. Before the first
+/// change to a library file, a copy is kept next to it. The schema version is set in the same
+/// transaction as the changes.
+fn remove_store_accounts(db: &Connection, file: Option<&Path>, version: i64) -> Result<()> {
+    let plan = plan_store_account_cleanup(db)?;
+    if plan.is_empty() {
+        if version < SCHEMA_VERSION {
+            db.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        }
+        return Ok(());
+    }
+    if let Some(file) = file {
+        let busy: i64 = db.query_row("PRAGMA wal_checkpoint(FULL)", [], |row| row.get(0))?;
+        if busy != 0 {
+            bail!("Could not safely checkpoint the library before its database migration.");
+        }
+        let backup = file.with_file_name(format!(
+            "library.sqlite.pre-store-accounts-migration-{}.bak",
+            now_ms()
+        ));
+        std::fs::copy(file, backup)?;
+    }
+    let tx = db.unchecked_transaction()?;
+    for name in &plan.secrets {
+        tx.execute("DELETE FROM secrets WHERE key=?", [name])?;
+    }
+    if let Some(values) = &plan.connections {
+        put_connection_values(&tx, values)?;
+    }
+    for (id, routes) in &plan.routes {
+        tx.execute(
+            "UPDATE games SET routes=? WHERE id=?",
+            params![serde_json::to_string(routes)?, id],
+        )?;
+    }
+    if version < SCHEMA_VERSION {
+        tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     }
     tx.commit()?;
     Ok(())
@@ -195,14 +268,20 @@ pub fn without_legendary(route: &GameRoute) -> GameRoute {
     }
     if non_empty(&route.launch_args).is_some() {
         next.launch_args = None;
-        let app = non_empty(&route.app_id).map(str::to_owned);
-        next.launch_target = match app {
-            Some(app) => crate::importers::epic::launch_uri(&app, "launch"),
-            None => "com.epicgames.launcher://store".into(),
-        };
         if !legendary_state && next.install_states.as_ref().is_none_or(|s| s.is_empty()) {
             next.installed = Some(false);
         }
+        // Not installed: an install link, like owned-only Epic games, so later Epic scans keep
+        // the route as owned instead of treating it as a stale launcher entry.
+        let action = if next.installed == Some(true) {
+            "launch"
+        } else {
+            "install"
+        };
+        next.launch_target = match non_empty(&route.app_id) {
+            Some(app) => crate::importers::epic::launch_uri(app, action),
+            None => "com.epicgames.launcher://store".into(),
+        };
     }
     if next.installed == Some(false) {
         next.install_path = None;
@@ -1898,17 +1977,177 @@ mod tests {
         );
         assert!(b.routes[0]
             .launch_target
-            .ends_with("action=launch&silent=true"));
+            .ends_with("action=install&silent=true"));
         let c = get_game(&conn, "epic:C").unwrap().unwrap();
         assert!(c.routes[0]
             .launch_target
             .ends_with("action=install&silent=true"));
         assert_eq!(c.routes[0].owned, Some(true));
 
-        // Runs once: values written afterwards are left alone.
+        // Self-healing: an older version run again re-adds the key and a Legendary route;
+        // the next start removes them again without changing anything else.
         write_secret(&conn, "steam-api-key-dpapi", b"x").unwrap();
+        save_game(
+            &conn,
+            &GamePatch::from(&game(
+                "epic:D",
+                "Again",
+                vec![legendary_route("D", true, None)],
+            )),
+        )
+        .unwrap();
         migrate(&conn, None).unwrap();
+        assert_eq!(read_secret(&conn, "steam-api-key-dpapi").unwrap(), None);
+        let d = get_game(&conn, "epic:D").unwrap().unwrap();
+        assert_eq!(d.routes[0].launch_args, None);
+        assert_eq!(get_game(&conn, "epic:A").unwrap().unwrap(), a);
+    }
+
+    #[test]
+    fn migrated_legendary_only_games_survive_the_next_epic_scan() {
+        let db = Db::memory().unwrap();
+        let mut conn = db.lock();
+        conn.pragma_update(None, "user_version", 0).unwrap();
+        save_game(
+            &conn,
+            &GamePatch::from(&game(
+                "epic:B",
+                "Legendary only",
+                vec![legendary_route("B", true, None)],
+            )),
+        )
+        .unwrap();
+        migrate(&conn, None).unwrap();
+        // An Epic scan that finds no installed games for it (one other game is installed, so
+        // the scan isn't ignored as empty).
+        let other = GameRoute {
+            source_id: "epic".into(),
+            store: "Epic Games".into(),
+            app_id: Some("Other".into()),
+            launch_target: crate::importers::epic::launch_uri("Other", "launch"),
+            installed: Some(true),
+            install_states: Some([("epic-installed".to_string(), true)].into()),
+            ..Default::default()
+        };
+        let scanned = vec![game("epic:Other", "Other", vec![other])];
+        upsert_imported_games(&mut conn, &scanned).unwrap();
+        reconcile_installed_source(&mut conn, "epic-installed", &scanned).unwrap();
+        let b = get_game(&conn, "epic:B").unwrap().expect("kept as owned");
+        assert_eq!(
+            (b.routes[0].owned, b.routes[0].installed),
+            (Some(true), Some(false))
+        );
+        assert!(b.routes[0]
+            .launch_target
+            .ends_with("action=install&silent=true"));
+    }
+
+    #[test]
+    fn the_schema_version_is_set_with_the_cleanup_and_a_backup_is_kept() {
+        let dir = std::env::temp_dir().join(format!("gl-db-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("library.sqlite");
+        {
+            let db = Db::open(&file).unwrap();
+            let conn = db.lock();
+            conn.pragma_update(None, "user_version", 0).unwrap();
+            write_secret(&conn, "steam-api-key-dpapi", b"sealed").unwrap();
+        }
+        {
+            let db = Db::open(&file).unwrap();
+            let conn = db.lock();
+            let version: i64 = conn
+                .query_row("PRAGMA user_version", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(version, SCHEMA_VERSION);
+            assert_eq!(read_secret(&conn, "steam-api-key-dpapi").unwrap(), None);
+        }
+        let backups: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| {
+                n.starts_with("library.sqlite.pre-store-accounts-migration-") && n.ends_with(".bak")
+            })
+            .collect();
+        assert_eq!(backups.len(), 1, "one backup before the change");
+        // The backup still holds the old data.
+        let old = Connection::open(dir.join(&backups[0])).unwrap();
+        assert!(read_secret(&old, "steam-api-key-dpapi").unwrap().is_some());
+        drop(old);
+        // Nothing left to clean: no further backups.
+        drop(Db::open(&file).unwrap());
+        let count = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".bak"))
+            .count();
+        assert_eq!(count, 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_failed_cleanup_leaves_the_version_unchanged() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn, None).unwrap();
+        conn.pragma_update(None, "user_version", 0).unwrap();
+        write_secret(&conn, "steam-api-key-dpapi", b"sealed").unwrap();
+        // Make the route update fail inside the transaction.
+        save_game(
+            &conn,
+            &GamePatch::from(&game("epic:X", "X", vec![legendary_route("X", true, None)])),
+        )
+        .unwrap();
+        conn.execute_batch(
+            "CREATE TRIGGER no_route_updates BEFORE UPDATE OF routes ON games BEGIN SELECT RAISE(ABORT,'blocked'); END;",
+        )
+        .unwrap();
+        assert!(migrate(&conn, None).is_err());
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 0, "rolled back together with the changes");
         assert!(read_secret(&conn, "steam-api-key-dpapi").unwrap().is_some());
+    }
+
+    #[test]
+    fn newer_schemas_open_without_upgrade_steps_and_downgrades_heal() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn, None).unwrap();
+        // A newer Game Lobby wrote version 2: opens fine, nothing is cleaned or rewritten.
+        conn.pragma_update(None, "user_version", SCHEMA_VERSION + 1)
+            .unwrap();
+        write_secret(&conn, "steam-api-key-dpapi", b"sealed").unwrap();
+        migrate(&conn, None).unwrap();
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION + 1);
+        assert!(read_secret(&conn, "steam-api-key-dpapi").unwrap().is_some());
+        // Downgrade then upgrade: an older build (no user_version handling) leaves version 1
+        // and re-adds a Legendary route; this build repairs it on the next start.
+        conn.pragma_update(None, "user_version", SCHEMA_VERSION)
+            .unwrap();
+        save_game(
+            &conn,
+            &GamePatch::from(&game(
+                "epic:Y",
+                "Y",
+                vec![legendary_route("Y", true, Some(true))],
+            )),
+        )
+        .unwrap();
+        migrate(&conn, None).unwrap();
+        assert_eq!(read_secret(&conn, "steam-api-key-dpapi").unwrap(), None);
+        let y = get_game(&conn, "epic:Y").unwrap().unwrap();
+        assert_eq!(y.routes[0].launch_args, None);
+        assert!(y.routes[0]
+            .launch_target
+            .ends_with("action=launch&silent=true"));
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
     }
 
     #[test]

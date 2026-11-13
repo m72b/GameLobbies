@@ -55,6 +55,11 @@ pub const MISS_TTL_MS: i64 = 7 * 24 * 3_600_000;
 const FUTURE_SKEW_MS: i64 = 24 * 3_600_000;
 /// After a failed background fetch, the same game is not retried automatically for this long.
 const FAILURE_COOLDOWN: Duration = Duration::from_secs(10 * 60);
+/// After Twitch or IGDB rejects the credentials, no request is made for this long (or until
+/// the credentials are saved or cleared, see [`IgdbState::reset`]).
+const REJECTED_COOLDOWN: Duration = Duration::from_secs(10 * 60);
+/// A bulk fetch stops after this many network or server (5xx) failures in a row.
+pub const MAX_CONSECUTIVE_FAILURES: usize = 5;
 pub const MAX_TEXT_BYTES: usize = 4096;
 pub const MAX_NAME_CHARS: usize = 200;
 const MAX_LIST: usize = 12;
@@ -815,6 +820,11 @@ impl TokenCache {
     pub fn clear(&self) {
         *self.lock() = None;
     }
+
+    /// The cached token whatever its client or expiry (for redacting messages only).
+    fn raw(&self) -> Option<String> {
+        self.lock().as_ref().map(|t| t.token.clone())
+    }
 }
 
 /// Spaces requests at least `spacing` apart; a 429 pushes the next slot further out.
@@ -858,6 +868,8 @@ pub struct IgdbState {
     bulk_running: AtomicBool,
     bulk_cancel: AtomicBool,
     progress: StdMutex<BulkProgress>,
+    /// When the credentials were last rejected, and how (see [`REJECTED_COOLDOWN`]).
+    rejected: StdMutex<Option<(Instant, IgdbError)>>,
 }
 
 impl IgdbState {
@@ -900,9 +912,25 @@ impl IgdbState {
         }
     }
 
-    /// Forgets the token and failure cooldowns (credentials changed).
+    /// The rejection that still blocks requests, if any.
+    fn rejection(&self, now: Instant) -> Option<IgdbError> {
+        self.rejected
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_ref()
+            .filter(|(at, _)| now.duration_since(*at) < REJECTED_COOLDOWN)
+            .map(|(_, e)| e.clone())
+    }
+
+    fn set_rejected(&self, error: IgdbError, now: Instant) {
+        self.token.clear();
+        *self.rejected.lock().unwrap_or_else(|p| p.into_inner()) = Some((now, error));
+    }
+
+    /// Forgets the token, the credential rejection and failure cooldowns (credentials changed).
     pub fn reset(&self) {
         self.token.clear();
+        *self.rejected.lock().unwrap_or_else(|p| p.into_inner()) = None;
         self.failed
             .lock()
             .unwrap_or_else(|p| p.into_inner())
@@ -1019,7 +1047,7 @@ impl<'a> Api<'a> {
     /// Removes the secret, Client ID and any token from a message, should one ever echo them.
     fn redact(&self, message: String) -> String {
         let mut message = message;
-        let token = self.state.token.get(&self.client_id, Instant::now());
+        let token = self.state.token.raw();
         for value in [Some(self.secret.as_str()), token.as_deref()]
             .into_iter()
             .flatten()
@@ -1062,14 +1090,28 @@ impl<'a> Api<'a> {
 
     /// A valid access token: the cached one, or a new one.
     async fn token(&self) -> Result<String, IgdbError> {
+        if let Some(rejected) = self.state.rejection(Instant::now()) {
+            return Err(rejected);
+        }
         if let Some(token) = self.state.token.get(&self.client_id, Instant::now()) {
             return Ok(token);
         }
         let _guard = self.state.token_fetch.lock().await;
+        if let Some(rejected) = self.state.rejection(Instant::now()) {
+            return Err(rejected);
+        }
         if let Some(token) = self.state.token.get(&self.client_id, Instant::now()) {
             return Ok(token);
         }
-        let (token, lifetime) = self.fetch_token().await?;
+        let (token, lifetime) = match self.fetch_token().await {
+            Ok(fetched) => fetched,
+            Err(IgdbError::BadCredentials) => {
+                self.state
+                    .set_rejected(IgdbError::BadCredentials, Instant::now());
+                return Err(IgdbError::BadCredentials);
+            }
+            Err(e) => return Err(e),
+        };
         self.state
             .token
             .set(&self.client_id, token.clone(), lifetime, Instant::now());
@@ -1102,7 +1144,11 @@ impl<'a> Api<'a> {
                     renewed = true;
                     self.state.token.clear();
                 }
-                401 => return Err(IgdbError::Unauthorized),
+                401 => {
+                    self.state
+                        .set_rejected(IgdbError::Unauthorized, Instant::now());
+                    return Err(IgdbError::Unauthorized);
+                }
                 429 => match delays.next() {
                     Some(delay) => self.state.limiter.delay(*delay).await,
                     None => return Err(IgdbError::RateLimited),
@@ -1476,6 +1522,81 @@ pub fn cancel_all(state: &AppState) {
 
 /// Starts fetching metadata for every game whose cache is missing or stale, in the
 /// background (rate-limited like every request). Progress arrives as `igdb:progress`.
+/// Whether a failure counts toward [`MAX_CONSECUTIVE_FAILURES`]: the network or IGDB itself
+/// is failing (as opposed to one bad entry).
+fn is_outage(error: &anyhow::Error) -> bool {
+    matches!(
+        error.downcast_ref::<IgdbError>(),
+        Some(IgdbError::Network(_)) | Some(IgdbError::Http(500..=599))
+    )
+}
+
+/// Fetches `games` one after another. `report(progress, changed_game)` is called after each
+/// game (with the progress) and when a game's stored metadata changed. Stops when cancelled,
+/// when the credentials are rejected or IGDB keeps limiting requests, or after
+/// [`MAX_CONSECUTIVE_FAILURES`] network or server failures in a row; `message` says why.
+pub async fn bulk_fetch(
+    api: &Api<'_>,
+    db: &db::Db,
+    games: &[Game],
+    start: BulkProgress,
+    mut report: impl FnMut(Option<&BulkProgress>, Option<&str>),
+) -> BulkProgress {
+    let state = api.state;
+    let mut progress = start;
+    let mut outages = 0;
+    for game in games {
+        if state.bulk_cancel.load(Ordering::SeqCst) {
+            progress.message = Some("Cancelled.".into());
+            break;
+        }
+        if state.begin(&game.id) {
+            let result = refresh_game(api, db, game).await;
+            state.end(&game.id);
+            match result {
+                Ok(outcome) => {
+                    outages = 0;
+                    if outcome.found {
+                        progress.updated += 1;
+                    } else {
+                        progress.not_found += 1;
+                    }
+                    if outcome.changed {
+                        report(None, Some(&game.id));
+                    }
+                }
+                Err(e) => {
+                    progress.failed += 1;
+                    let fatal = matches!(
+                        e.downcast_ref::<IgdbError>(),
+                        Some(
+                            IgdbError::BadCredentials
+                                | IgdbError::Unauthorized
+                                | IgdbError::RateLimited
+                        )
+                    );
+                    outages = if is_outage(&e) { outages + 1 } else { 0 };
+                    if fatal || outages >= MAX_CONSECUTIVE_FAILURES {
+                        let reason = api.redact(e.to_string());
+                        progress.message = Some(if fatal {
+                            reason
+                        } else {
+                            format!(
+                                "Stopped after {MAX_CONSECUTIVE_FAILURES} failed requests in a row. {reason}"
+                            )
+                        });
+                        progress.done += 1;
+                        break;
+                    }
+                }
+            }
+        }
+        progress.done += 1;
+        report(Some(&progress), None);
+    }
+    progress
+}
+
 pub fn fetch_all(app: &AppHandle) -> Result<BulkProgress> {
     let state = app.state::<AppState>();
     if !configured(&state) {
@@ -1514,52 +1635,23 @@ pub fn fetch_all(app: &AppHandle) -> Result<BulkProgress> {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let state = app.state::<AppState>();
-        let mut progress = start;
-        match api(&state) {
+        let mut progress = match api(&state) {
             Ok(api) => {
-                for game in &games {
-                    if state.igdb.bulk_cancel.load(Ordering::SeqCst) {
-                        progress.message = Some("Cancelled.".into());
-                        break;
+                bulk_fetch(&api, &state.db, &games, start, |progress, changed| {
+                    if let Some(game_id) = changed {
+                        emit_metadata(&app, game_id, true);
                     }
-                    if state.igdb.begin(&game.id) {
-                        let result = refresh_game(&api, &state.db, game).await;
-                        state.igdb.end(&game.id);
-                        match result {
-                            Ok(outcome) => {
-                                if outcome.found {
-                                    progress.updated += 1;
-                                } else {
-                                    progress.not_found += 1;
-                                }
-                                if outcome.changed {
-                                    emit_metadata(&app, &game.id, true);
-                                }
-                            }
-                            Err(e) => {
-                                progress.failed += 1;
-                                let stop = matches!(
-                                    e.downcast_ref::<IgdbError>(),
-                                    Some(
-                                        IgdbError::BadCredentials
-                                            | IgdbError::Unauthorized
-                                            | IgdbError::RateLimited
-                                    )
-                                );
-                                if stop {
-                                    progress.message = Some(api.redact(e.to_string()));
-                                    progress.done += 1;
-                                    break;
-                                }
-                            }
-                        }
+                    if let Some(progress) = progress {
+                        set_progress(&app, &state, progress);
                     }
-                    progress.done += 1;
-                    set_progress(&app, &state, &progress);
-                }
+                })
+                .await
             }
-            Err(e) => progress.message = Some(e.to_string()),
-        }
+            Err(e) => BulkProgress {
+                message: Some(e.to_string()),
+                ..start
+            },
+        };
         progress.running = false;
         state.igdb.bulk_running.store(false, Ordering::SeqCst);
         state.igdb.bulk_cancel.store(false, Ordering::SeqCst);
@@ -1724,6 +1816,135 @@ mod tests {
             "first_release_date": 1303171200,
             "url": "https://www.igdb.com/games/portal-2"
         })
+    }
+
+    #[tokio::test]
+    async fn rejected_credentials_pause_all_requests_until_reset() {
+        let (base, log) = serve(Arc::new(|_: &Req| (400, "{}".into()))).await;
+        let state = IgdbState::default();
+        let api = api_for(&base, &state);
+        assert_eq!(api.game(1).await.unwrap_err(), IgdbError::BadCredentials);
+        assert_eq!(api.game(2).await.unwrap_err(), IgdbError::BadCredentials);
+        assert_eq!(
+            api.search("x").await.unwrap_err(),
+            IgdbError::BadCredentials
+        );
+        assert_eq!(log.lock().unwrap().len(), 1, "Twitch is asked only once");
+        // Saving or clearing credentials lifts the pause.
+        state.reset();
+        assert_eq!(api.game(3).await.unwrap_err(), IgdbError::BadCredentials);
+        assert_eq!(log.lock().unwrap().len(), 2);
+        // The pause ends after the cooldown.
+        let past = Instant::now() - REJECTED_COOLDOWN - Duration::from_secs(1);
+        state.set_rejected(IgdbError::BadCredentials, past);
+        assert_eq!(state.rejection(Instant::now()), None);
+
+        // IGDB rejecting a fresh token twice pauses requests too.
+        let (base, log) = serve(Arc::new(|req: &Req| {
+            if req.target.starts_with("/oauth2/token") {
+                token_ok()
+            } else {
+                (401, "{}".into())
+            }
+        }))
+        .await;
+        let state = IgdbState::default();
+        let api = api_for(&base, &state);
+        assert_eq!(api.game(1).await.unwrap_err(), IgdbError::Unauthorized);
+        let before = log.lock().unwrap().len();
+        assert_eq!(api.game(1).await.unwrap_err(), IgdbError::Unauthorized);
+        assert_eq!(log.lock().unwrap().len(), before, "no further requests");
+    }
+
+    #[tokio::test]
+    async fn bulk_fetch_stops_after_repeated_server_failures() {
+        let (base, log) = serve(Arc::new(|req: &Req| {
+            if req.target.starts_with("/oauth2/token") {
+                token_ok()
+            } else {
+                (503, "{}".into())
+            }
+        }))
+        .await;
+        let state = IgdbState::default();
+        let api = api_for(&base, &state);
+        let db = db::Db::memory().unwrap();
+        let games: Vec<Game> = (0..12)
+            .map(|i| {
+                let mut g = game(&format!("Game {i}"), vec![]);
+                g.id = format!("g{i}");
+                g
+            })
+            .collect();
+        for g in &games {
+            db::save_game(&db.lock(), &crate::types::GamePatch::from(g)).unwrap();
+        }
+        let mut reports = 0;
+        let start = BulkProgress {
+            running: true,
+            total: games.len(),
+            ..Default::default()
+        };
+        let done = bulk_fetch(&api, &db, &games, start, |p, _| {
+            if p.is_some() {
+                reports += 1
+            }
+        })
+        .await;
+        assert_eq!(done.failed, MAX_CONSECUTIVE_FAILURES);
+        assert_eq!(done.done, MAX_CONSECUTIVE_FAILURES);
+        assert_eq!(reports, MAX_CONSECUTIVE_FAILURES - 1);
+        let message = done.message.unwrap();
+        assert!(
+            message.starts_with("Stopped after 5 failed requests in a row."),
+            "{message}"
+        );
+        assert!(message.contains("HTTP 503"));
+        let api_calls = log
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| r.target.starts_with("/v4/"))
+            .count();
+        assert_eq!(
+            api_calls, MAX_CONSECUTIVE_FAILURES,
+            "no requests after stopping"
+        );
+
+        // A success in between resets the count.
+        let calls = Arc::new(StdMutex::new(0));
+        let c = calls.clone();
+        let (base, _) = serve(Arc::new(move |req: &Req| {
+            if req.target.starts_with("/oauth2/token") {
+                return token_ok();
+            }
+            let mut n = c.lock().unwrap();
+            *n += 1;
+            if *n % 4 == 0 {
+                (200, "[]".into())
+            } else {
+                (500, "{}".into())
+            }
+        }))
+        .await;
+        let state = IgdbState::default();
+        let api = api_for(&base, &state);
+        let done = bulk_fetch(&api, &db, &games[..8], BulkProgress::default(), |_, _| {}).await;
+        assert_eq!(done.done, 8);
+        assert_eq!(done.message, None);
+    }
+
+    #[test]
+    fn redaction_covers_an_expired_token() {
+        let state = IgdbState::default();
+        state.token.set(
+            ID,
+            TOKEN.into(),
+            Duration::from_secs(60),
+            Instant::now() - Duration::from_secs(3600),
+        );
+        let api = api_for("http://127.0.0.1:9", &state);
+        assert_eq!(api.redact(format!("bad {TOKEN}")), "bad [redacted]");
     }
 
     // -- query building ------------------------------------------------------
