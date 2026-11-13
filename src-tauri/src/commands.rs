@@ -913,7 +913,7 @@ mod tests {
         for bad in [
             r"C:\Windows\System32\calc.exe",
             r"C:\Games\game.lnk",
-            r"\server\share\game.exe",
+            r"\\server\share\game.exe",
             "file:///C:/Windows/System32/calc.exe",
             "https://evil.example/x.exe",
             r"shell:AppsFolder\Evil!App",
