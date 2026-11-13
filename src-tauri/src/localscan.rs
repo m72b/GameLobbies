@@ -343,6 +343,10 @@ pub struct ScanInputs {
     pub shortcut_ok: HashMap<String, (String, String)>,
     /// Quick (default) or full scan limits.
     pub limits: ScanLimits,
+    /// Long-form keys of other registered roots inside this one (`roots::nested_roots`): never
+    /// entered, never reported. A first-level folder that contains one of them (like
+    /// `Playnite` holding the emulator root) is skipped silently too.
+    pub excluded: HashSet<String>,
 }
 
 /// The comparison key of a path that came from outside a walk (a stored path, an env var, a
@@ -362,7 +366,7 @@ pub fn key_of(path: &Path) -> String {
 /// The key of a path produced by a walk. Walks start from the long form of their root and
 /// append names exactly as listed, so the result is already long: plain string normalization
 /// suffices (and costs no disk access per entry).
-fn listed_key(path: &Path) -> String {
+pub fn listed_key(path: &Path) -> String {
     normalize_path(&path.to_string_lossy()).unwrap_or_default()
 }
 
@@ -394,6 +398,21 @@ impl GameWalker<'_> {
 
     fn ignored(&self, path: &Path) -> bool {
         self.inputs.ignored.contains(&listed_key(path))
+    }
+
+    /// Another registered root (or, at the first level, a folder holding one): not ours.
+    fn excluded(&self, path: &Path, depth: usize) -> bool {
+        if self.inputs.excluded.is_empty() {
+            return false;
+        }
+        let key = listed_key(path);
+        self.inputs.excluded.contains(&key)
+            || (depth == 0
+                && self
+                    .inputs
+                    .excluded
+                    .iter()
+                    .any(|nested| crate::tracker::is_within(&key, nested)))
     }
 
     fn count_entries(&mut self, n: usize) -> bool {
@@ -434,6 +453,7 @@ impl GameWalker<'_> {
             .items
             .into_iter()
             .filter(|i| i.path.as_os_str().len() <= MAX_PATH_CHARS && !self.ignored(&i.path))
+            .filter(|i| !self.excluded(&i.path, depth))
             .collect();
         if system.is_some_and(|s| s.id == PC) {
             return self.pc_folder(&items, top);
