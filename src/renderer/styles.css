@@ -219,7 +219,7 @@
 .gp-rating-max{font-size:10px;font-weight:600;color:var(--muted);margin-left:2px}
 .gp-rating-count{display:block;font-size:10px;color:var(--muted);margin-top:-1px}
 .gp-side-block .chip-group.compact{margin-top:8px}
-.igdb-steps{margin:0;padding-left:18px;font-size:11px;line-height:1.6;color:var(--muted)}
+.igdb-steps{margin:0;padding-left:18px;font-size:11px;line-height:1.6;color:var(--muted);list-style:decimal}
 .igdb-steps code{background:#ffffff10;padding:0 4px;border-radius:4px}
 .igdb-form{display:flex;flex-direction:column;gap:4px}
 .igdb-progress{margin-top:10px}
