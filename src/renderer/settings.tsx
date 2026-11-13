@@ -1,7 +1,7 @@
 import './lobby-api'
 import { useEffect, useState } from 'react'
-import { ArrowLeft, Blocks, ChevronRight, CircleHelp, Cloud, FolderSearch, Gamepad2, Image, ImagePlus, Keyboard, Library, ListChecks, Palette, Puzzle, RotateCcw, Settings2, SlidersHorizontal, Sparkles, Star } from 'lucide-react'
-import type { LibraryConnections, Settings, SettingsSection, SteamGridDbStyle } from '../shared/types'
+import { ArrowLeft, Blocks, BookOpen, ChevronRight, CircleHelp, Cloud, FolderSearch, Gamepad2, Image, ImagePlus, Keyboard, Library, ListChecks, Palette, Puzzle, RotateCcw, Settings2, SlidersHorizontal, Sparkles, Star } from 'lucide-react'
+import type { IgdbBulkProgress, IgdbCredentialStatus, LibraryConnections, Settings, SettingsSection, SteamGridDbStyle } from '../shared/types'
 import { steamGridDbStyles } from '../shared/types'
 import { defaultSettings } from '../shared/defaults'
 import { applyTheme } from './theme'
@@ -19,6 +19,7 @@ const sections = [
   ['Review', 'Decide on duplicates and games a scan could not place.', ListChecks],
   ['Covers and Metadata', 'Choose metadata sources and configure artwork.', Image],
   ['SteamGridDB', 'Cover art from SteamGridDB: API key and preferences.', ImagePlus],
+  ['IGDB', 'Descriptions, genres, companies and ratings from IGDB.', BookOpen],
   ['Themes (MyUI)', 'Load themes from a remote JSON or CSS link.', Palette],
   ['Appearance', 'Tune poster size, badges and motion.', SlidersHorizontal],
   ['Startup and Behavior', 'Choose how the app opens and closes.', Settings2],
@@ -56,17 +57,27 @@ export function SettingsApp() {
   const [sgdbFetching, setSgdbFetching] = useState(false)
   const [sgdbTest, setSgdbTest] = useState<{ ok: boolean; message: string } | null>(null)
   const [sgdbTesting, setSgdbTesting] = useState(false)
+  const [igdbStatus, setIgdbStatus] = useState<IgdbCredentialStatus>({ clientIdSet: false, clientSecretSet: false })
+  const [igdbClientId, setIgdbClientId] = useState('')
+  const [igdbSecret, setIgdbSecret] = useState('')
+  const [igdbBusy, setIgdbBusy] = useState(false)
+  const [igdbTest, setIgdbTest] = useState<{ ok: boolean; message: string } | null>(null)
+  const [igdbTesting, setIgdbTesting] = useState(false)
+  const [igdbProgress, setIgdbProgress] = useState<IgdbBulkProgress | null>(null)
 
   useEffect(() => {
     const offSettings = window.lobby.settings.onChanged(setSettings)
     const offSection = window.lobby.settings.onSection(id => { const next = sectionFor(id); if (next) setSection(next) })
+    const offIgdb = window.lobby.igdb.onProgress(setIgdbProgress)
     void Promise.all([
       window.lobby.settings.get().then(setSettings),
       window.lobby.plugins.list().then(setPlugins),
       window.lobby.library.connections().then(setConnections),
-      window.lobby.steamGridDb.status().then(result => setSgdbKeySet(result.keySet)).catch(() => undefined)
+      window.lobby.steamGridDb.status().then(result => setSgdbKeySet(result.keySet)).catch(() => undefined),
+      window.lobby.igdb.status().then(setIgdbStatus).catch(() => undefined),
+      window.lobby.igdb.progress().then(next => { if (next.total > 0 || next.running) setIgdbProgress(next) }).catch(() => undefined)
     ])
-    return () => { offSettings(); offSection() }
+    return () => { offSettings(); offSection(); offIgdb() }
   }, [])
   useEffect(() => { applyTheme(settings.theme, settings) }, [settings])
 
@@ -96,6 +107,42 @@ export function SettingsApp() {
       setSgdbTest({ ok: false, message: text })
       say(text)
     } finally { setSgdbTesting(false) }
+  }
+  const igdbConfigured = igdbStatus.clientIdSet && igdbStatus.clientSecretSet
+  const saveIgdb = async () => {
+    setIgdbBusy(true)
+    try {
+      const result = await window.lobby.igdb.saveCredentials(igdbClientId.trim(), igdbSecret.trim())
+      setIgdbStatus(result)
+      setIgdbClientId(''); setIgdbSecret(''); setIgdbTest(null)
+      say(result.clientIdSet && result.clientSecretSet ? 'IGDB credentials saved' : 'Saved. Enter both the Client ID and the Client Secret.')
+    } catch (error) { say(error instanceof Error ? error.message : 'Could not save the IGDB credentials') }
+    finally { setIgdbBusy(false) }
+  }
+  const clearIgdb = async () => {
+    setIgdbBusy(true)
+    try {
+      setIgdbStatus(await window.lobby.igdb.clearCredentials())
+      setIgdbTest(null)
+      say('IGDB credentials removed')
+    } catch (error) { say(error instanceof Error ? error.message : 'Could not remove the IGDB credentials') }
+    finally { setIgdbBusy(false) }
+  }
+  const testIgdb = async () => {
+    setIgdbTesting(true)
+    try {
+      const result = await window.lobby.igdb.test()
+      setIgdbTest(result)
+      say(result.message)
+    } catch (error) {
+      const text = error instanceof Error ? error.message : 'Could not test the IGDB connection'
+      setIgdbTest({ ok: false, message: text })
+      say(text)
+    } finally { setIgdbTesting(false) }
+  }
+  const fetchAllIgdb = async () => {
+    try { setIgdbProgress(await window.lobby.igdb.fetchAll()) }
+    catch (error) { say(error instanceof Error ? error.message : 'Could not start the IGDB fetch') }
   }
   const toggleSgdbStyle = (style: SteamGridDbStyle) => {
     const current = settings.steamGridDbStyles
@@ -207,6 +254,7 @@ export function SettingsApp() {
         {section === 'Covers and Metadata' && <div className="settings-card">
           <h3>Metadata providers</h3><p>Steam cover art is used automatically when an app ID is available.</p>
           <div className="feature-row"><span className="feature-name">SteamGridDB<small>API key and cover preferences</small></span><button className="secondary-button" onClick={() => setSection('SteamGridDB')}>Configure</button></div>
+          <div className="feature-row"><span className="feature-name">IGDB<small>Descriptions, genres, companies and ratings</small></span><button className="secondary-button" onClick={() => setSection('IGDB')}>Configure</button></div>
           <div className="feature-row"><span>Default artwork style</span><span>Poster (2:3)</span></div>
           <div className="feature-row"><span>Cover cache</span><span className="status-pill">Stored locally</span></div>
           <div className="feature-row"><span>Custom cover images</span><span className="status-pill">User data folder</span></div>
@@ -235,6 +283,42 @@ export function SettingsApp() {
             <div className="toggle-row"><div><b>Include animated covers</b></div><input type="checkbox" checked={settings.steamGridDbAnimated} onChange={event => void save({ steamGridDbAnimated: event.target.checked })} /></div>
             <div className="toggle-row"><div><b>Include adult (NSFW) covers</b></div><input type="checkbox" checked={settings.steamGridDbNsfw} onChange={event => void save({ steamGridDbNsfw: event.target.checked })} /></div>
             <div className="toggle-row"><div><b>Include humor covers</b></div><input type="checkbox" checked={settings.steamGridDbHumor} onChange={event => void save({ steamGridDbHumor: event.target.checked })} /></div>
+          </div>
+        </>}
+
+        {section === 'IGDB' && <>
+          <div className="settings-card">
+          <div className="sgdb-card plain">
+            <h3>IGDB</h3>
+            <p>IGDB supplies game descriptions, genres, developers, publishers and ratings for the game page. It uses a free Twitch developer application. <a className="external-link" href="https://dev.twitch.tv/console">Open the Twitch developer console</a></p>
+            <ol className="igdb-steps">
+              <li>Sign in at dev.twitch.tv/console (Twitch may ask you to turn on two-factor authentication).</li>
+              <li>Choose Register Your Application. Use any name, OAuth Redirect URL <code>http://localhost</code>, category Application Integration and client type Confidential.</li>
+              <li>Open the application and copy the Client ID. Choose New Secret and copy the Client Secret.</li>
+              <li>Paste both below and save. They are encrypted by Windows and are not shown again.</li>
+            </ol>
+            <form className="igdb-form" onSubmit={event => { event.preventDefault(); if (igdbClientId.trim() || igdbSecret.trim()) void saveIgdb() }}>
+              <label className="field-label">Client ID<input type="password" value={igdbClientId} onChange={event => setIgdbClientId(event.target.value)} placeholder={igdbStatus.clientIdSet ? 'Saved · enter a new Client ID to replace it' : 'Paste the Client ID'} autoComplete="off" spellCheck={false} maxLength={256} /></label>
+              <label className="field-label">Client Secret<input type="password" value={igdbSecret} onChange={event => setIgdbSecret(event.target.value)} placeholder={igdbStatus.clientSecretSet ? 'Saved · enter a new secret to replace it' : 'Paste the Client Secret'} autoComplete="new-password" spellCheck={false} maxLength={256} /></label>
+              <div className="settings-actions">
+                <button className="secondary-button" disabled={igdbBusy || (!igdbClientId.trim() && !igdbSecret.trim())}>Save</button>
+                {(igdbStatus.clientIdSet || igdbStatus.clientSecretSet) && <button type="button" className="secondary-button" disabled={igdbBusy} onClick={() => void clearIgdb()}>Clear credentials</button>}
+              </div>
+            </form>
+            <div className="sgdb-status-row"><span className="sgdb-status">{igdbConfigured ? 'Credentials saved' : igdbStatus.clientIdSet ? 'Client Secret missing' : igdbStatus.clientSecretSet ? 'Client ID missing' : 'Not configured'}</span><button className="secondary-button" disabled={!igdbConfigured || igdbTesting} onClick={() => void testIgdb()}>{igdbTesting ? 'Testing…' : 'Test connection'}</button>{igdbTest && <span className={'sgdb-test ' + (igdbTest.ok ? 'ok' : 'fail')}>{igdbTest.ok ? '✓' : '✗'} {igdbTest.message}</span>}</div>
+            <a className="external-link" href="https://api-docs.igdb.com/#account-creation">IGDB account setup guide</a>
+          </div>
+          </div>
+          <div className="settings-card">
+            <h3>Metadata for the whole library</h3>
+            <p className="muted-text">Game pages load details from IGDB when you open them and refresh them after 30 days. You can also fetch details for every game now. It runs in the background at about four requests per second.</p>
+            <div className="settings-actions">
+              <button className="secondary-button" disabled={!igdbConfigured || !!igdbProgress?.running} onClick={() => void fetchAllIgdb()}>{igdbProgress?.running ? 'Fetching…' : 'Fetch metadata for all games'}</button>
+              {igdbProgress?.running && <button className="secondary-button" onClick={() => void window.lobby.igdb.cancelFetchAll()}>Cancel</button>}
+            </div>
+            {igdbProgress && <div className="sgdb-status igdb-progress" role="status">
+              {igdbProgress.running ? 'Fetching ' : 'Done: '}{igdbProgress.done} of {igdbProgress.total} · {igdbProgress.updated} found · {igdbProgress.notFound} not found{igdbProgress.failed ? ' · ' + igdbProgress.failed + ' failed' : ''}{igdbProgress.message ? ' · ' + igdbProgress.message : ''}
+            </div>}
           </div>
         </>}
 

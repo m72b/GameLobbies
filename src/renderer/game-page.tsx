@@ -6,6 +6,7 @@ import { coverUrl } from './lobby-api'
 import { defaultGamePageCustom } from '../shared/defaults'
 import { coverLayerStyle, coverStyle } from './cover'
 import { CoverLayer, useCover } from './poster'
+import { GenreBlock, IgdbAbout, IgdbPicker, IgdbRatings, useIgdb } from './igdb-details'
 import { elapsedSeconds, formatClock, formatDate, formatSession, formatTime, formatTotal, useNow } from './format'
 import type { EmulatorCatalog, EmulatorProfile, Game, GamePageArt, PlaySession, PlayStats, RunningGame, Settings } from '../shared/types'
 
@@ -37,11 +38,13 @@ export function GamePage({ game, index, settings, running, libraryVersion, actio
   const [catalog, setCatalog] = useState<EmulatorCatalog | null>(null)
   const [emuError, setEmuError] = useState('')
   const [customizing, setCustomizing] = useState(false)
+  const [igdbPicking, setIgdbPicking] = useState(false)
+  const { view: igdb, setView: setIgdb } = useIgdb(game.id)
   const { layout, change: changeLayout, flush: flushLayout } = useLogoLayout(game.id, art.custom)
   const now = useNow(!!running || sessions.some(session => !session.endedAt))
 
   const defaultRoute = useMemo(() => Math.max(0, game.routes.findIndex(route => route.installed)), [game.id]) // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { setRouteIdx(defaultRoute); setMenuOpen(false); setCustomizing(false) }, [game.id, defaultRoute])
+  useEffect(() => { setRouteIdx(defaultRoute); setMenuOpen(false); setCustomizing(false); setIgdbPicking(false) }, [game.id, defaultRoute])
 
   useEffect(() => {
     let live = true
@@ -65,6 +68,7 @@ export function GamePage({ game, index, settings, running, libraryVersion, actio
     actions.setEmulator(game, index, value === '' ? null : value).catch(error => setEmuError(error instanceof Error ? error.message : 'Could not change the emulator'))
   }
   const closeCustomize = useCallback(() => { flushLayout(); setCustomizing(false) }, [flushLayout])
+  const closeIgdb = useCallback(() => setIgdbPicking(false), [])
 
   const runKey = running ? running.state + ':' + running.startedAt : 'idle'
   useEffect(() => {
@@ -91,6 +95,7 @@ export function GamePage({ game, index, settings, running, libraryVersion, actio
     ['Customize page', () => setCustomizing(true)],
     ['Set custom cover', () => actions.setCover(game)],
     ['Find cover on SteamGridDB', () => actions.findCover(game)],
+    ['Find details on IGDB', () => setIgdbPicking(true)],
     ['Link another game', () => actions.link(game)],
     [game.hidden ? 'Unhide' : 'Hide', () => actions.toggleHidden(game)],
     ['Open install folder', () => actions.openFolder(game)],
@@ -112,6 +117,7 @@ export function GamePage({ game, index, settings, running, libraryVersion, actio
       </div>
     </div>
 
+    {igdbPicking && <IgdbPicker game={game} view={igdb} onClose={closeIgdb} onChosen={next => { setIgdb(next); setIgdbPicking(false) }} />}
     {customizing && <CustomizePanel game={game} custom={art.custom} heroSrc={heroSrc} logoSrc={logoSrc} layout={layout} onLayout={changeLayout} onClose={closeCustomize} />}
 
     <div className="gp-bar">
@@ -176,6 +182,7 @@ export function GamePage({ game, index, settings, running, libraryVersion, actio
           <div><span>Sessions</span><b>{stats?.sessionCount ?? 0}</b></div>
           <div><span>First played</span><b>{formatDate(stats?.firstPlayed)}</b></div>
         </div>
+        <IgdbAbout view={igdb} onSearch={() => setIgdbPicking(true)} />
       </section>
 
       <aside className="gp-side">
@@ -206,7 +213,8 @@ export function GamePage({ game, index, settings, running, libraryVersion, actio
           })}
           {emuError && <div className="form-error" role="alert">{emuError}</div>}
         </div>
-        <div className="gp-side-block"><div className="detail-label">GENRE</div><div className="muted-text">{game.genre || 'Not set'}</div></div>
+        <GenreBlock game={game} view={igdb} />
+        <IgdbRatings view={igdb} />
         <div className="gp-side-block"><div className="detail-label">INSTALL FOLDER</div>
           <div className="muted-text gp-path">{installFolder || 'Unknown'}</div>
           <button className="secondary-button gp-folder" onClick={() => actions.openFolder(game)}><FolderOpen size={14} /> Open folder</button>

@@ -397,6 +397,46 @@ export interface UpdatesAPI {
   onProgress(callback: (progress: UpdateProgress) => void): () => void
   onReady(callback: () => void): () => void
 }
+/**
+ * IGDB metadata (`window.lobby.igdb`). Credentials are a Twitch application's Client ID and
+ * Client Secret; they are stored encrypted in the backend and never returned (status() only
+ * reports whether each is set). All text is plain text (sanitized and length-capped in Rust):
+ * render it as React text, never as HTML.
+ * - `criticRating` is IGDB's aggregated_rating(_count), `userRating` its rating(_count); scores
+ *   are rounded 0–100 and each is omitted when IGDB has none.
+ * - get(gameId) answers from the local cache at once. When the cache is missing or older than 30
+ *   days and credentials are saved, a background fetch starts (`pending: true`) and
+ *   `onMetadata` fires `{ gameId, changed }` when it ends; call get() again when `changed`.
+ * - search(gameId, query?) searches IGDB for the game's cleaned title, or for `query` (plain
+ *   text). choose(gameId, igdbId) stores the user's pick, which always wins over automatic
+ *   matches; resetMatch(gameId) forgets it and matches automatically again.
+ * - fetchAll() starts a rate-limited background fetch for every game whose cache is missing or
+ *   stale and returns at once; progress arrives through onProgress (and progress()).
+ */
+export interface IgdbRating { score: number; count?: number }
+export interface IgdbMetadata { igdbId: number; name: string; summary?: string; storyline?: string; genres: string[]; developers: string[]; publishers: string[]; criticRating?: IgdbRating; userRating?: IgdbRating; releaseDate?: number; url?: string }
+export interface IgdbMetadataView { configured: boolean; pending: boolean; checked: boolean; metadata?: IgdbMetadata; source?: 'auto' | 'user'; fetchedAt?: number }
+export interface IgdbSearchResult { igdbId: number; name: string; releaseDate?: number; platforms: string[]; mainGame: boolean }
+export interface IgdbCredentialStatus { clientIdSet: boolean; clientSecretSet: boolean }
+export interface IgdbTestResult { ok: boolean; message: string }
+export interface IgdbBulkProgress { running: boolean; done: number; total: number; updated: number; notFound: number; failed: number; message?: string }
+export interface IgdbMetadataEvent { gameId: string; changed: boolean }
+export interface IgdbAPI {
+  status(): Promise<IgdbCredentialStatus>
+  /** Saves the non-empty fields; an empty field keeps the stored value. */
+  saveCredentials(clientId: string, clientSecret: string): Promise<IgdbCredentialStatus>
+  clearCredentials(): Promise<IgdbCredentialStatus>
+  test(): Promise<IgdbTestResult>
+  get(gameId: string): Promise<IgdbMetadataView>
+  search(gameId: string, query?: string): Promise<IgdbSearchResult[]>
+  choose(gameId: string, igdbId: number): Promise<IgdbMetadataView>
+  resetMatch(gameId: string): Promise<IgdbMetadataView>
+  fetchAll(): Promise<IgdbBulkProgress>
+  cancelFetchAll(): Promise<void>
+  progress(): Promise<IgdbBulkProgress>
+  onMetadata(callback: (event: IgdbMetadataEvent) => void): () => void
+  onProgress(callback: (progress: IgdbBulkProgress) => void): () => void
+}
 export interface LobbyAPI {
   window: { minimize(): Promise<void>; toggleMaximize(): Promise<void>; close(): Promise<void>; isMaximized(): Promise<boolean> }
   library: { list(): Promise<Game[]>; scan(): Promise<LibraryStats>; launch(id: string, route?: number): Promise<void>; save(game: Partial<Game> & { id: string }): Promise<Game[]>; remove(id: string): Promise<Game[]>; merge(targetId: string, sourceId: string): Promise<Game[]>; resetPlaytime(): Promise<Game[]>; setCover(id: string, dataUrl: string | null): Promise<Game[]>; chooseCover(id: string): Promise<Game[]>; chooseInstallFolder(id: string): Promise<void>; add(title: string, target: string): Promise<Game[]>; connections(): Promise<LibraryConnections>; saveConnections(input: LibraryConnectionInput): Promise<LibraryConnections>; chooseLegendary(): Promise<string | null>; chooseGogDatabase(): Promise<string | null>; onChanged(callback: () => void): () => void
@@ -427,6 +467,7 @@ export interface LobbyAPI {
   steamGridDb: SteamGridDbAPI
   tracking: TrackingAPI
   art: ArtAPI
+  igdb: IgdbAPI
   updates: UpdatesAPI
   app: { quit(): Promise<void> }
 }

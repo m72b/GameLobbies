@@ -8,7 +8,7 @@ use crate::state::AppState;
 use crate::steamgriddb::{self, Cover, FetchSummary, KeyStatus, KeyTest};
 use crate::tracker::RunningGame;
 use crate::types::*;
-use crate::{art, covercache, db, scan, secrets, theme, tracker, validation, windows};
+use crate::{art, covercache, db, igdb, scan, secrets, theme, tracker, validation, windows};
 use base64::Engine;
 use regex::Regex;
 use serde_json::{json, Map, Value};
@@ -832,4 +832,86 @@ pub async fn steamgriddb_search_logos(
     steamgriddb::search_art(&state, &game_id, steamgriddb::ArtKind::Logo)
         .await
         .map_err(err)
+}
+
+// ---------------------------------------------------------------------------
+// IGDB metadata. The Client Secret (and the access token) never reach the renderer; the
+// renderer can only look up its own games by id, or search plain text.
+
+#[tauri::command]
+pub async fn igdb_status(state: State<'_, AppState>) -> CmdResult<igdb::CredentialStatus> {
+    igdb::status(&state).map_err(err)
+}
+
+/// Saves the non-empty fields (empty keeps the stored value).
+#[tauri::command]
+pub async fn igdb_save_credentials(
+    state: State<'_, AppState>,
+    client_id: String,
+    client_secret: String,
+) -> CmdResult<igdb::CredentialStatus> {
+    igdb::save_credentials(&state, &client_id, &client_secret).map_err(err)
+}
+
+#[tauri::command]
+pub async fn igdb_clear_credentials(
+    state: State<'_, AppState>,
+) -> CmdResult<igdb::CredentialStatus> {
+    igdb::clear_credentials(&state).map_err(err)
+}
+
+#[tauri::command]
+pub async fn igdb_test(state: State<'_, AppState>) -> CmdResult<igdb::TestResult> {
+    Ok(igdb::test(&state).await)
+}
+
+/// Cached metadata at once; a background fetch follows when needed (`igdb:metadata`).
+#[tauri::command]
+pub async fn igdb_get(app: AppHandle, game_id: String) -> CmdResult<igdb::MetadataView> {
+    igdb::get(&app, &game_id).map_err(err)
+}
+
+#[tauri::command]
+pub async fn igdb_search(
+    state: State<'_, AppState>,
+    game_id: String,
+    query: Option<String>,
+) -> CmdResult<Vec<igdb::SearchResult>> {
+    if query.as_deref().is_some_and(|q| q.len() > 1024) {
+        return Err("The search text is too long.".into());
+    }
+    igdb::search(&state, &game_id, query.as_deref())
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn igdb_choose(
+    app: AppHandle,
+    game_id: String,
+    igdb_id: u64,
+) -> CmdResult<igdb::MetadataView> {
+    igdb::choose(&app, &game_id, igdb_id).await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn igdb_reset_match(app: AppHandle, game_id: String) -> CmdResult<igdb::MetadataView> {
+    igdb::reset_match(&app, &game_id).map_err(err)
+}
+
+/// Starts the background fetch for every game; returns at once (`igdb:progress`).
+#[tauri::command]
+pub async fn igdb_fetch_all(app: AppHandle) -> CmdResult<igdb::BulkProgress> {
+    igdb::fetch_all(&app).map_err(err)
+}
+
+#[tauri::command]
+pub async fn igdb_cancel_fetch_all(state: State<'_, AppState>) -> CmdResult<()> {
+    igdb::cancel_all(&state);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn igdb_progress(state: State<'_, AppState>) -> CmdResult<igdb::BulkProgress> {
+    Ok(igdb::progress(&state))
 }

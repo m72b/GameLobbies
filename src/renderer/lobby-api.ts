@@ -2,7 +2,7 @@
 // Replaces the Electron preload script; the API shape is unchanged.
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
-import type { ArtChangedEvent, LobbyAPI, LocalScanProgress, LocalScanSummary, RunningGame, Settings, SettingsSection, SteamGridDbFetchSummary, UpdateProgress } from '../shared/types'
+import type { ArtChangedEvent, IgdbBulkProgress, IgdbMetadataEvent, LobbyAPI, LocalScanProgress, LocalScanSummary, RunningGame, Settings, SettingsSection, SteamGridDbFetchSummary, UpdateProgress } from '../shared/types'
 
 async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   try {
@@ -125,6 +125,21 @@ const api: LobbyAPI = {
     chooseLogoFile: gameId => call('art_choose_logo_file', { gameId }),
     setLogoLayout: (gameId, position, scale) => call('art_set_logo_layout', { gameId, position, scale }),
     onChanged: callback => subscribe<ArtChangedEvent>('art:changed', callback)
+  },
+  igdb: {
+    status: () => call('igdb_status'),
+    saveCredentials: (clientId, clientSecret) => call('igdb_save_credentials', { clientId, clientSecret }),
+    clearCredentials: () => call('igdb_clear_credentials'),
+    test: () => call('igdb_test'),
+    get: gameId => call('igdb_get', { gameId }),
+    search: (gameId, query) => call('igdb_search', { gameId, query: query ?? null }),
+    choose: (gameId, igdbId) => call('igdb_choose', { gameId, igdbId }),
+    resetMatch: gameId => call('igdb_reset_match', { gameId }),
+    fetchAll: () => call('igdb_fetch_all'),
+    cancelFetchAll: () => call('igdb_cancel_fetch_all'),
+    progress: () => call('igdb_progress'),
+    onMetadata: callback => subscribe<IgdbMetadataEvent>('igdb:metadata', callback),
+    onProgress: callback => subscribe<IgdbBulkProgress>('igdb:progress', callback)
   },
   updates: {
     check: () => call('updates_check'),
