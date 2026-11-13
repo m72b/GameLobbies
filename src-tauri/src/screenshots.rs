@@ -65,6 +65,9 @@ pub struct Screenshot {
     pub added_at: i64,
     /// `"user"` or `"steam"`.
     pub source: String,
+    /// The stored file is gone (e.g. the data folder came from a database-only backup). Adding
+    /// the same picture again restores it.
+    pub missing: bool,
 }
 
 /// Result of adding or importing screenshots.
@@ -74,6 +77,8 @@ pub struct AddResult {
     pub screenshots: Vec<Screenshot>,
     pub added: usize,
     pub duplicates: usize,
+    /// Pictures already listed whose missing file was written back.
+    pub restored: usize,
     /// One line per refused file (file name only).
     pub errors: Vec<String>,
 }
@@ -288,11 +293,19 @@ fn read_row(row: &rusqlite::Row) -> rusqlite::Result<Screenshot> {
         height: row.get::<_, i64>("height")?.clamp(0, MAX_DIMENSION as i64) as u32,
         added_at: row.get("addedAt")?,
         source: row.get("source")?,
+        missing: false,
     })
 }
 
-/// A game's screenshots, newest first.
-pub fn list(conn: &Connection, game_id: &str) -> Result<Vec<Screenshot>> {
+/// Whether the file behind `relative` (`<dir>/<file>`) is a regular file under `root`.
+fn file_present(root: &Path, relative: &str) -> bool {
+    valid_relative(relative).is_some_and(|(dir, file)| {
+        std::fs::symlink_metadata(root.join(dir).join(file)).is_ok_and(|m| m.is_file())
+    })
+}
+
+/// A game's screenshots, newest first. Rows whose file is gone are kept and flagged `missing`.
+pub fn list(conn: &Connection, root: &Path, game_id: &str) -> Result<Vec<Screenshot>> {
     let mut stmt = conn.prepare(
         "SELECT * FROM game_screenshots WHERE gameId=? ORDER BY addedAt DESC, rowid DESC",
     )?;
@@ -303,10 +316,25 @@ pub fn list(conn: &Connection, game_id: &str) -> Result<Vec<Screenshot>> {
     Ok(rows
         .into_iter()
         .filter(|s| valid_relative(&s.src[SHOT_PREFIX.len()..]).is_some())
+        .map(|s| Screenshot {
+            missing: !file_present(root, &s.src[SHOT_PREFIX.len()..]),
+            ..s
+        })
         .collect())
 }
 
-/// Stores a prepared picture for a game. `Ok(false)` when the game already has it.
+/// What [`store`] did with a picture.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stored {
+    Added,
+    /// The game already has it and its file is there.
+    Duplicate,
+    /// The game already had it but the file was missing: written back.
+    Restored,
+}
+
+/// Stores a prepared picture for a game. A picture the game already has is not stored twice,
+/// but its file is written back when it has gone missing.
 pub fn store(
     conn: &Connection,
     root: &Path,
@@ -315,19 +343,29 @@ pub fn store(
     source: &str,
     original: Option<&Path>,
     added_at: i64,
-) -> Result<bool> {
+) -> Result<Stored> {
     if db::get_game(conn, game_id)?.is_none() {
         bail!("Game not found.");
     }
-    let exists: Option<i64> = conn
+    let existing: Option<String> = conn
         .query_row(
-            "SELECT 1 FROM game_screenshots WHERE gameId=? AND hash=?",
+            "SELECT file FROM game_screenshots WHERE gameId=? AND hash=?",
             params![game_id, picture.hash],
             |r| r.get(0),
         )
         .optional()?;
-    if exists.is_some() {
-        return Ok(false);
+    if let Some(relative) = existing {
+        if file_present(root, &relative) {
+            return Ok(Stored::Duplicate);
+        }
+        let (dir, file) =
+            valid_relative(&relative).ok_or_else(|| anyhow!("the stored screenshot is invalid"))?;
+        // Same hash, same original: the stored name's extension matches what was prepared.
+        if !file.ends_with(&format!(".{}", picture.ext)) {
+            bail!("the stored screenshot has a different format");
+        }
+        write_atomic(root, dir, file, &picture.bytes)?;
+        return Ok(Stored::Restored);
     }
     let dir = dir_for(game_id);
     let file = format!("{}.{}", picture.hash, picture.ext);
@@ -347,7 +385,7 @@ pub fn store(
             original.map(|p| p.to_string_lossy().chars().take(4096).collect::<String>()),
         ],
     )?;
-    Ok(true)
+    Ok(Stored::Added)
 }
 
 /// Reads, checks and stores `paths` for a game (the picker's choice, or Steam's files). Also
@@ -387,12 +425,13 @@ pub fn add_files(
             Some(path),
             base + index as i64,
         ) {
-            Ok(true) => result.added += 1,
-            Ok(false) => result.duplicates += 1,
+            Ok(Stored::Added) => result.added += 1,
+            Ok(Stored::Duplicate) => result.duplicates += 1,
+            Ok(Stored::Restored) => result.restored += 1,
             Err(e) => result.errors.push(format!("{name}: {e}")),
         }
     }
-    result.screenshots = list(&db.lock(), game_id)?;
+    result.screenshots = list(&db.lock(), root, game_id)?;
     Ok(result)
 }
 
@@ -572,7 +611,7 @@ pub async fn screenshots_list(
     state: State<'_, AppState>,
     game_id: String,
 ) -> CmdResult<Vec<Screenshot>> {
-    list(&state.db.lock(), &game_id).map_err(err)
+    list(&state.db.lock(), &state.screenshots_dir(), &game_id).map_err(err)
 }
 
 /// Opens the native multi-file picker and adds the chosen pictures. Cancelling adds nothing.
@@ -609,7 +648,7 @@ pub async fn screenshots_add(
         .collect();
     if paths.is_empty() {
         return Ok(AddResult {
-            screenshots: list(&state.db.lock(), &game_id).map_err(err)?,
+            screenshots: list(&state.db.lock(), &state.screenshots_dir(), &game_id).map_err(err)?,
             ..Default::default()
         });
     }
@@ -623,7 +662,7 @@ pub async fn screenshots_add(
     .await
     .map_err(err)?
     .map_err(err)?;
-    if result.added > 0 {
+    if result.added > 0 || result.restored > 0 {
         notify(&app, &game_id);
     }
     Ok(result)
@@ -657,7 +696,7 @@ pub async fn screenshots_import_steam(
     .await
     .map_err(err)?
     .map_err(err)?;
-    if result.added > 0 {
+    if result.added > 0 || result.restored > 0 {
         notify(&app, &game_id);
     }
     Ok(result)
@@ -675,7 +714,7 @@ pub async fn screenshots_remove(
         .ok_or("That screenshot no longer exists.")?;
     clean_up(&state);
     notify(&app, &game_id);
-    list(&state.db.lock(), &game_id).map_err(err)
+    list(&state.db.lock(), &state.screenshots_dir(), &game_id).map_err(err)
 }
 
 /// Uses a screenshot as the game page hero: a copy goes into the covers folder (like a chosen
@@ -841,16 +880,59 @@ mod tests {
         assert_eq!(files_in(&root.0).len(), 3);
 
         // Removing deletes the row; the sweep then deletes only that file.
-        let first = list(&db.lock(), "g1").unwrap()[0].clone();
+        let first = list(&db.lock(), &root.0, "g1").unwrap()[0].clone();
         assert_eq!(
             remove(&db.lock(), &first.id).unwrap().as_deref(),
             Some("g1")
         );
         assert_eq!(remove(&db.lock(), &first.id).unwrap(), None);
         assert_eq!(sweep_files(&db.lock(), &root.0).unwrap(), 1);
-        assert_eq!(list(&db.lock(), "g1").unwrap().len(), 1);
+        assert_eq!(list(&db.lock(), &root.0, "g1").unwrap().len(), 1);
         assert_eq!(files_in(&root.0).len(), 2);
         assert!(a.exists() && b.exists(), "originals are never removed");
+    }
+
+    #[test]
+    fn missing_files_are_flagged_and_restored_by_adding_again() {
+        let src = TempDir::new();
+        let root = TempDir::new();
+        let db = library(&["g1"]);
+        let a = write(&src.0, "a.png", &encode(8, 4, 1, image::ImageFormat::Png));
+        let b = write(&src.0, "b.png", &encode(8, 4, 2, image::ImageFormat::Png));
+        add_files(&db, &root.0, "g1", &[a.clone(), b.clone()], "steam").unwrap();
+        let listed = list(&db.lock(), &root.0, "g1").unwrap();
+        assert!(listed.iter().all(|s| !s.missing));
+        // The data folder lost one file (e.g. a database-only restore).
+        let gone = listed
+            .iter()
+            .find(|s| {
+                s.src
+                    .contains(&prepare(std::fs::read(&a).unwrap()).unwrap().hash)
+            })
+            .unwrap()
+            .clone();
+        let (dir, file) = valid_relative(&gone.src[SHOT_PREFIX.len()..]).unwrap();
+        std::fs::remove_file(root.0.join(dir).join(file)).unwrap();
+        let listed = list(&db.lock(), &root.0, "g1").unwrap();
+        assert_eq!(listed.len(), 2, "the row is kept, not deleted");
+        assert_eq!(
+            listed
+                .iter()
+                .filter(|s| s.missing)
+                .map(|s| s.id.clone())
+                .collect::<Vec<_>>(),
+            vec![gone.id.clone()]
+        );
+        // Adding (or importing) the same picture writes the file back.
+        let r = add_files(&db, &root.0, "g1", &[a.clone(), b.clone()], "steam").unwrap();
+        assert_eq!((r.added, r.duplicates, r.restored), (0, 1, 1));
+        assert!(r.screenshots.iter().all(|s| !s.missing));
+        assert_eq!(
+            std::fs::read(root.0.join(dir).join(file)).unwrap(),
+            std::fs::read(&a).unwrap()
+        );
+        // The id and order are unchanged.
+        assert!(r.screenshots.iter().any(|s| s.id == gone.id));
     }
 
     #[test]
@@ -1052,9 +1134,9 @@ mod tests {
         assert_eq!(files_in(&root.0).len(), 4);
 
         db::merge_games(&mut db.lock(), "keep", "dupe").unwrap();
-        let kept = list(&db.lock(), "keep").unwrap();
+        let kept = list(&db.lock(), &root.0, "keep").unwrap();
         assert_eq!(kept.len(), 2, "the duplicate picture is kept once");
-        assert!(list(&db.lock(), "dupe").unwrap().is_empty());
+        assert!(list(&db.lock(), &root.0, "dupe").unwrap().is_empty());
         sweep_files(&db.lock(), &root.0).unwrap();
         // The moved picture still points at an existing file.
         for shot in &kept {
@@ -1064,7 +1146,7 @@ mod tests {
         assert_eq!(files_in(&root.0).len(), 3);
 
         db::remove_game(&db.lock(), "gone").unwrap();
-        assert!(list(&db.lock(), "gone").unwrap().is_empty());
+        assert!(list(&db.lock(), &root.0, "gone").unwrap().is_empty());
         assert_eq!(sweep_files(&db.lock(), &root.0).unwrap(), 1);
         assert_eq!(files_in(&root.0).len(), 2);
     }

@@ -260,23 +260,27 @@ export interface SteamGridDbKeyTest { ok: boolean; message: string }
  * - testKey(): one authenticated request to check the saved key. `{ ok: true, message:
  *   "SteamGridDB key works." }`, or `ok: false` with a friendly reason ("No SteamGridDB key is
  *   saved.", key rejected, network/rate-limit errors). Never rejects; never includes the key.
- * - search(gameId): up to 30 poster candidates in 2:3 sizes, filtered by the saved settings
+ * - search(gameId, page?): one page of poster candidates in 2:3 sizes (`page` 0-based, 0 to 50;
+ *   SteamGridDB returns up to 50 per page), filtered by the saved settings
  *   (steamGridDbStyles/Animated/Nsfw/Humor; epilepsy-flagged grids are always dropped). Uses the
- *   game's Steam app ID when it has a Steam route, otherwise a title search. Empty array = no match.
+ *   game's Steam app ID when it has a Steam route, otherwise a title search. `hasMore` says
+ *   whether the next page exists; a page can be empty after filtering while `hasMore` is true.
  * - apply(gameId, url): sets a candidate's `url` as the game's custom cover; only SteamGridDB
  *   https URLs are accepted. Returns the updated library.
  * - fetchMissing(): fills `cover` and `defaultCover` for games that have neither, using the same
  *   settings-based filters as search(). Rejects if a
  *   run is already in progress or the key is rejected. Emits `library:changed` when covers change.
  * - onFetched(cb): fires after any successful bulk run, including the automatic one after a scan.
- * - searchHeroes(gameId) / searchLogos(gameId): up to 30 game page hero / logo candidates for the
- *   pickers, same shape and game matching as search(). Filtered by steamGridDbAnimated/Nsfw/Humor
+ * - searchHeroes(gameId, page?) / searchLogos(gameId, page?): one page of game page hero / logo
+ *   candidates for the pickers, same paging and game matching as search(). Filtered by steamGridDbAnimated/Nsfw/Humor
  *   (grid styles don't apply; epilepsy-flagged entries and videos are always dropped). Not cached:
  *   every call asks SteamGridDB. Empty array = no match. Rejects with a friendly message when no
  *   key is saved, the key is rejected, SteamGridDB rate-limits or can't be reached, or the game
  *   doesn't exist. Pass a candidate's `url` to `art.setHero` / `art.setLogo`.
  */
-export interface SteamGridDbAPI { status(): Promise<{ keySet: boolean }>; saveKey(key: string): Promise<{ keySet: boolean }>; testKey(): Promise<SteamGridDbKeyTest>; search(gameId: string): Promise<SteamGridDbCover[]>; searchHeroes(gameId: string): Promise<SteamGridDbCover[]>; searchLogos(gameId: string): Promise<SteamGridDbCover[]>; apply(gameId: string, url: string): Promise<Game[]>; fetchMissing(): Promise<SteamGridDbFetchSummary>; onFetched(callback: (summary: SteamGridDbFetchSummary) => void): () => void }
+/** One page of SteamGridDB picker results. */
+export interface SteamGridDbCoverPage { covers: SteamGridDbCover[]; page: number; hasMore: boolean }
+export interface SteamGridDbAPI { status(): Promise<{ keySet: boolean }>; saveKey(key: string): Promise<{ keySet: boolean }>; testKey(): Promise<SteamGridDbKeyTest>; search(gameId: string, page?: number): Promise<SteamGridDbCoverPage>; searchHeroes(gameId: string, page?: number): Promise<SteamGridDbCoverPage>; searchLogos(gameId: string, page?: number): Promise<SteamGridDbCoverPage>; apply(gameId: string, url: string): Promise<Game[]>; fetchMissing(): Promise<SteamGridDbFetchSummary>; onFetched(callback: (summary: SteamGridDbFetchSummary) => void): () => void }
 /** How a play session started: from Game Lobby (`launch`) or found running (`detected`). */
 export type PlaySource = 'launch' | 'detected'
 /**
@@ -462,8 +466,10 @@ export interface IgdbAPI {
  * - remove(id): deletes Game Lobby's copy only. setAsHero(id): uses a copy as the page hero.
  * - onChanged fires `{ gameId }` after adds and removals.
  */
-export interface Screenshot { id: string; gameId: string; src: string; width: number; height: number; addedAt: number; source: 'user' | 'steam' }
-export interface AddScreenshotsResult { screenshots: Screenshot[]; added: number; duplicates: number; errors: string[] }
+/** `missing`: the stored file is gone (the row is kept); adding the same picture again restores it. */
+export interface Screenshot { id: string; gameId: string; src: string; width: number; height: number; addedAt: number; source: 'user' | 'steam'; missing: boolean }
+/** `restored`: pictures already listed whose missing file was written back. */
+export interface AddScreenshotsResult { screenshots: Screenshot[]; added: number; duplicates: number; restored: number; errors: string[] }
 export interface ScreenshotsAPI {
   list(gameId: string): Promise<Screenshot[]>
   add(gameId: string): Promise<AddScreenshotsResult>

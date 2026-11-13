@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ImagePlus, RotateCcw, Search, X } from 'lucide-react'
 import { coverUrl } from './lobby-api'
+import { LoadMore, useSgdbPages } from './cover-picker'
 import { defaultGamePageCustom } from '../shared/defaults'
 import { logoPositions, logoScaleRange } from '../shared/types'
 import type { GamePageCustom, LogoPosition, SteamGridDbCover } from '../shared/types'
@@ -51,41 +52,29 @@ export function useLogoLayout(gameId: string, custom: GamePageCustom) {
   return { layout, change, flush }
 }
 
-type PickerState = 'idle' | 'loading' | 'ready' | 'nokey' | 'error'
-
-function ArtSection({ kind, gameId, title, currentSrc, hasCustom }: { kind: 'hero' | 'logo'; gameId: string; title: string; currentSrc?: string; hasCustom: boolean }) {
-  const [state, setState] = useState<PickerState>('idle')
-  const [items, setItems] = useState<SteamGridDbCover[]>([])
-  const [error, setError] = useState('')
+function ArtSection({ kind, gameId, title, currentSrc, hasCustom, settingsKey }: { kind: 'hero' | 'logo'; gameId: string; title: string; currentSrc?: string; hasCustom: boolean; settingsKey: string }) {
+  const pages = useSgdbPages(kind, gameId, settingsKey)
+  const { state, covers: items, reset: resetPages } = pages
+  const [actionError, setActionError] = useState('')
+  const error = actionError || pages.error
+  const setError = setActionError
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState('')
-  const run = useRef(0)
   const noun = kind === 'hero' ? 'hero' : 'logo'
 
-  useEffect(() => { run.current++; setState('idle'); setItems([]); setError(''); setNotice('') }, [gameId, kind])
-  useEffect(() => () => { run.current++ }, [])
+  useEffect(() => { resetPages(); setActionError(''); setNotice('') }, [gameId, kind, resetPages])
+  useEffect(() => () => resetPages(), [resetPages])
 
   const openPicker = async () => {
-    const id = ++run.current
-    setState('loading'); setError(''); setNotice('')
-    try {
-      const { keySet } = await window.lobby.steamGridDb.status()
-      if (id !== run.current) return
-      if (!keySet) { setState('nokey'); return }
-      const list = await (kind === 'hero' ? window.lobby.steamGridDb.searchHeroes(gameId) : window.lobby.steamGridDb.searchLogos(gameId))
-      if (id !== run.current) return
-      setItems(list); setState('ready')
-    } catch (e) {
-      if (id !== run.current) return
-      setError(e instanceof Error ? e.message : 'Could not search SteamGridDB'); setState('error')
-    }
+    setActionError(''); setNotice('')
+    await pages.start()
   }
 
   const act = async (job: () => Promise<unknown>, done?: string) => {
     if (busy) return
     setBusy(true); setError(''); setNotice('')
     try { await job(); if (done) setNotice(done) }
-    catch (e) { setError(e instanceof Error ? e.message : 'Something went wrong'); setState(value => value === 'error' ? 'idle' : value) }
+    catch (e) { setError(e instanceof Error ? e.message : 'Something went wrong') }
     finally { setBusy(false) }
   }
   const art = window.lobby.art
@@ -106,19 +95,22 @@ function ArtSection({ kind, gameId, title, currentSrc, hasCustom }: { kind: 'her
     {state === 'loading' && <div className="cz-empty">Searching SteamGridDB…</div>}
     {state === 'nokey' && <div className="cz-empty">Add a free SteamGridDB API key in settings to browse {noun}s. Choosing a file and resetting still work.<button type="button" className="secondary-button" onClick={() => void window.lobby.settings.open('cover-art')}>Open settings</button></div>}
     {state === 'error' && <div className="cz-empty">{error || 'Could not search SteamGridDB'}<button type="button" className="secondary-button" onClick={() => void openPicker()}>Try again</button></div>}
-    {state === 'ready' && items.length === 0 && <div className="cz-empty">No {noun}s found on SteamGridDB for this game</div>}
+    {state === 'ready' && items.length === 0 && !pages.hasMore && <div className="cz-empty">No {noun}s found on SteamGridDB for this game</div>}
     {state === 'ready' && items.length > 0 && <div className={'cz-grid ' + kind + (busy ? ' busy' : '')} aria-label={title + ' options'}>
       {items.map(item => <button type="button" key={item.id} className="cz-tile" disabled={busy} onClick={() => void apply(item)} title={item.author ? 'By ' + item.author : undefined}>
         <img src={coverUrl(item.thumb || item.url)} loading="lazy" alt={item.author ? title + ' option by ' + item.author : title + ' option ' + item.id} />
       </button>)}
     </div>}
+    {state === 'ready' && (items.length > 0 || pages.hasMore) && <LoadMore shown={items.length} hasMore={pages.hasMore} loading={pages.loadingMore} onMore={() => void pages.loadMore()} noun={noun} />}
   </div>
 }
 
 type Tab = 'hero' | 'logo' | 'layout'
 
-export function CustomizePanel({ game, custom, heroSrc, logoSrc, layout, onLayout, onClose }: {
+export function CustomizePanel({ game, custom, heroSrc, logoSrc, layout, onLayout, onClose, sgdbSettingsKey = '' }: {
   game: { id: string; title: string }
+  /** The SteamGridDB filters in effect (keys the session cache of picker pages). */
+  sgdbSettingsKey?: string
   custom: GamePageCustom
   heroSrc?: string
   logoSrc?: string
@@ -159,8 +151,8 @@ export function CustomizePanel({ game, custom, heroSrc, logoSrc, layout, onLayou
       {tabs.map(([id, label]) => <button key={id} type="button" role="tab" id={'cz-tab-' + id} aria-selected={tab === id} aria-controls="cz-body" tabIndex={tab === id ? 0 : -1} className={tab === id ? 'active' : ''} onClick={() => setTab(id)}>{label}</button>)}
     </div>
     <div className="cz-body" id="cz-body" role="tabpanel" aria-labelledby={'cz-tab-' + tab}>
-      {tab === 'hero' && <ArtSection kind="hero" gameId={game.id} title="Hero" currentSrc={heroSrc} hasCustom={!!custom.hero} />}
-      {tab === 'logo' && <ArtSection kind="logo" gameId={game.id} title="Logo" currentSrc={logoSrc} hasCustom={!!custom.logo} />}
+      {tab === 'hero' && <ArtSection kind="hero" gameId={game.id} title="Hero" currentSrc={heroSrc} hasCustom={!!custom.hero} settingsKey={sgdbSettingsKey} />}
+      {tab === 'logo' && <ArtSection kind="logo" gameId={game.id} title="Logo" currentSrc={logoSrc} hasCustom={!!custom.logo} settingsKey={sgdbSettingsKey} />}
       {tab === 'layout' && <div className="cz-section">
         <p className="cz-hint">Changes preview live on the page and save automatically.{!logoSrc && ' This game has no logo, so the title text is positioned instead.'}</p>
         <div className="cz-label">Position</div>

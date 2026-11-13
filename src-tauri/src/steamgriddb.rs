@@ -7,14 +7,19 @@
 //!
 //! Renderer-facing commands (see `commands.rs` and `LobbyAPI.steamGridDb`):
 //! - `steamgriddb_status` / `steamgriddb_save_key` — `{ keySet }`, never the key itself.
-//! - `steamgriddb_search(gameId)` — up to [`MAX_CANDIDATES`] poster candidates.
+//! - `steamgriddb_search(gameId, page?)` — one page ([`PAGE_SIZE`] from the API) of poster
+//!   candidates, see [`CoverPage`]. Pages are 0-based, at most [`MAX_PAGE`].
 //! - `steamgriddb_apply(gameId, url)` — sets a SteamGridDB image as the custom `cover`.
 //! - `steamgriddb_fetch_missing()` — bulk-fills games with no cover at all; also runs in the
 //!   background after a library scan when `steamGridDbAutoFetch` is on. Emits
 //!   `library:changed` and `steamgriddb:fetched` (payload: [`FetchSummary`]).
 //! - `steamgriddb_test_key()` — one authenticated request; [`KeyTest`] `{ ok, message }`.
-//! - `steamgriddb_search_heroes(gameId)` / `steamgriddb_search_logos(gameId)` — up to
-//!   [`MAX_CANDIDATES`] game page art candidates for the pickers (not cached).
+//! - `steamgriddb_search_heroes(gameId, page?)` / `steamgriddb_search_logos(gameId, page?)` —
+//!   one page of game page art candidates for the pickers (not cached).
+//!
+//! Paging (API v2): `limit` (default and maximum 50; larger values are ignored) and a 0-based
+//! `page`; responses carry `page`, `total` and `limit`. One page is one request; the
+//! SteamGridDB game id is remembered for the session so later pages don't look it up again.
 //!
 //! Grid requests follow the user's settings (read at request time, see [`GridPrefs`]):
 //! `steamGridDbStyles`, `steamGridDbAnimated`, `steamGridDbNsfw`, `steamGridDbHumor`.
@@ -36,6 +41,10 @@ const API: &str = "https://www.steamgriddb.com/api/v2";
 /// Poster sizes close to the UI's 2:3 card.
 const DIMENSIONS: &str = "600x900,342x482,660x930";
 pub const MAX_CANDIDATES: usize = 30;
+/// Results asked for per picker page (the API's maximum).
+pub const PAGE_SIZE: u32 = 50;
+/// Highest picker page that can be requested (0-based).
+pub const MAX_PAGE: u32 = 50;
 /// Hero or logo candidates kept per game for the game page.
 pub const MAX_ART_CANDIDATES: usize = 10;
 const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
@@ -75,6 +84,31 @@ pub struct FetchSummary {
     pub updated: usize,
     pub not_found: usize,
     pub errors: Vec<String>,
+}
+
+/// One picker page: the candidates that pass the filters, and whether a next page exists.
+#[derive(Serialize, Clone, Debug, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CoverPage {
+    pub covers: Vec<Cover>,
+    pub page: u32,
+    pub has_more: bool,
+}
+
+/// A picker page number: 0 to [`MAX_PAGE`] (absent = 0).
+pub fn validate_page(page: Option<u32>) -> Result<u32> {
+    let page = page.unwrap_or(0);
+    if page > MAX_PAGE {
+        bail!("The page must be between 0 and {MAX_PAGE}.");
+    }
+    Ok(page)
+}
+
+/// Adds `limit` and `page` to a query.
+pub fn paged(mut pairs: Vec<(&'static str, String)>, page: u32) -> Vec<(&'static str, String)> {
+    pairs.push(("limit", PAGE_SIZE.to_string()));
+    pairs.push(("page", page.to_string()));
+    pairs
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -226,6 +260,10 @@ pub struct SgdbGame {
 #[derive(Deserialize)]
 struct Envelope {
     #[serde(default)]
+    total: Option<u64>,
+    #[serde(default)]
+    limit: Option<u64>,
+    #[serde(default)]
     success: Option<bool>,
     #[serde(default)]
     data: Option<Value>,
@@ -234,8 +272,14 @@ struct Envelope {
 }
 
 fn envelope_data(body: &str) -> Result<Value, ApiError> {
+    envelope(body).map(|(data, _, _)| data)
+}
+
+/// The data plus the paging fields `total` and `limit` (when the API sends them).
+fn envelope(body: &str) -> Result<(Value, Option<u64>, Option<u64>), ApiError> {
     let env: Envelope = serde_json::from_str(body)
         .map_err(|_| ApiError::Invalid("the response is not valid JSON.".into()))?;
+    let (total, limit) = (env.total, env.limit);
     if env.success == Some(false) {
         let detail = env
             .errors
@@ -246,6 +290,7 @@ fn envelope_data(body: &str) -> Result<Value, ApiError> {
         return Err(ApiError::Invalid(detail));
     }
     env.data
+        .map(|data| (data, total, limit))
         .ok_or_else(|| ApiError::Invalid("the response has no data.".into()))
 }
 
@@ -313,7 +358,34 @@ pub fn parse_grids(body: &str, prefs: &GridPrefs) -> Result<Vec<Cover>, ApiError
     let Value::Array(items) = envelope_data(body)? else {
         return Err(ApiError::Invalid("grid results are malformed.".into()));
     };
-    Ok(items
+    Ok(to_covers(items, prefs).take(MAX_CANDIDATES).collect())
+}
+
+/// One picker page of grids, heroes or logos (`prefs` filtered; for heroes and logos pass
+/// prefs without styles). More pages exist when `total` says so, or (without `total`) when
+/// the page was full. An empty page is the end.
+pub fn parse_page(body: &str, prefs: &GridPrefs, page: u32) -> Result<CoverPage, ApiError> {
+    let (data, total, limit) = envelope(body)?;
+    let Value::Array(items) = data else {
+        return Err(ApiError::Invalid("grid results are malformed.".into()));
+    };
+    let raw = items.len() as u64;
+    let limit = limit.filter(|l| *l > 0).unwrap_or(PAGE_SIZE as u64);
+    let has_more = raw > 0
+        && page < MAX_PAGE
+        && match total {
+            Some(total) => (page as u64 + 1) * limit < total,
+            None => raw >= limit,
+        };
+    Ok(CoverPage {
+        covers: to_covers(items, prefs).take(PAGE_SIZE as usize).collect(),
+        page,
+        has_more,
+    })
+}
+
+fn to_covers(items: Vec<Value>, prefs: &GridPrefs) -> impl Iterator<Item = Cover> + '_ {
+    items
         .into_iter()
         .filter_map(|v| serde_json::from_value::<RawGrid>(v).ok())
         .filter(|g| prefs.allows(g) && is_image(g))
@@ -334,8 +406,6 @@ pub fn parse_grids(body: &str, prefs: &GridPrefs) -> Result<Vec<Cover>, ApiError
                     .map(|n| n.chars().take(80).collect()),
             })
         })
-        .take(MAX_CANDIDATES)
-        .collect())
 }
 
 /// `GET /heroes/game/{id}` or `GET /logos/game/{id}` → picker candidates in API order, with
@@ -577,17 +647,55 @@ impl Client {
         }
     }
 
-    async fn art_covers(
+    fn page_url(kind: Option<ArtKind>, sgdb_id: u64, prefs: &GridPrefs, page: u32) -> url::Url {
+        let segment = kind.map_or("grids", ArtKind::segment);
+        let mut url = Self::endpoint(&[segment, "game", &sgdb_id.to_string()]);
+        let query = match kind {
+            None => prefs.query(),
+            Some(_) => prefs.art_query(),
+        };
+        url.query_pairs_mut().extend_pairs(paged(query, page));
+        url
+    }
+
+    /// One picker page; a 404 is an empty last page.
+    async fn page(
         &self,
-        kind: ArtKind,
+        kind: Option<ArtKind>,
         sgdb_id: u64,
         prefs: &GridPrefs,
-    ) -> Result<Vec<Cover>, ApiError> {
-        match self.get(Self::art_url(kind, sgdb_id, prefs)).await {
-            Ok(body) => parse_art_covers(&body, prefs),
-            Err(ApiError::NotFound) => Ok(Vec::new()),
+        page: u32,
+    ) -> Result<CoverPage, ApiError> {
+        let prefs = match kind {
+            None => prefs.clone(),
+            Some(_) => GridPrefs {
+                styles: Vec::new(),
+                ..prefs.clone()
+            },
+        };
+        match self.get(Self::page_url(kind, sgdb_id, &prefs, page)).await {
+            Ok(body) => parse_page(&body, &prefs, page),
+            Err(ApiError::NotFound) => Ok(CoverPage {
+                page,
+                ..Default::default()
+            }),
             Err(e) => Err(e),
         }
+    }
+
+    /// [`Self::game_id`], remembered for the session (one lookup for all pages of a game).
+    async fn cached_game_id(&self, game: &Game) -> Result<Option<u64>, ApiError> {
+        let key = format!("{}\n{:?}", game.id, lookup_for(game));
+        if let Some(id) = game_ids().get(&key) {
+            return Ok(*id);
+        }
+        let id = self.game_id(game).await?;
+        let mut ids = game_ids();
+        if ids.len() > 2000 {
+            ids.clear();
+        }
+        ids.insert(key, id);
+        Ok(id)
     }
 
     async fn grids(&self, sgdb_id: u64, prefs: &GridPrefs) -> Result<Vec<Cover>, ApiError> {
@@ -597,6 +705,14 @@ impl Client {
             Err(e) => Err(e),
         }
     }
+}
+
+/// SteamGridDB game ids already resolved this session, by library game and its lookup.
+fn game_ids() -> std::sync::MutexGuard<'static, std::collections::HashMap<String, Option<u64>>> {
+    static IDS: std::sync::LazyLock<
+        std::sync::Mutex<std::collections::HashMap<String, Option<u64>>>,
+    > = std::sync::LazyLock::new(Default::default);
+    IDS.lock().unwrap_or_else(|p| p.into_inner())
 }
 
 fn client(state: &AppState) -> Result<Client> {
@@ -619,29 +735,41 @@ pub fn status(state: &AppState) -> Result<KeyStatus> {
     })
 }
 
-pub async fn search(state: &AppState, game_id: &str) -> Result<Vec<Cover>> {
+/// One page of poster candidates for the cover picker (`steamgriddb_search`).
+pub async fn search(state: &AppState, game_id: &str, page: Option<u32>) -> Result<CoverPage> {
+    search_page(state, game_id, None, page).await
+}
+
+async fn search_page(
+    state: &AppState,
+    game_id: &str,
+    kind: Option<ArtKind>,
+    page: Option<u32>,
+) -> Result<CoverPage> {
+    let page = validate_page(page)?;
     let game =
         db::get_game(&state.db.lock(), game_id)?.ok_or_else(|| anyhow!("Game not found."))?;
     let client = client(state)?;
-    let Some(sgdb_id) = client.game_id(&game).await? else {
-        return Ok(Vec::new());
+    let Some(sgdb_id) = client.cached_game_id(&game).await? else {
+        return Ok(CoverPage {
+            page,
+            ..Default::default()
+        });
     };
     let prefs = grid_prefs(state)?;
-    Ok(client.grids(sgdb_id, &prefs).await?)
+    Ok(client.page(kind, sgdb_id, &prefs, page).await?)
 }
 
 /// Hero or logo picker candidates (`steamgriddb_search_heroes` / `_logos`): up to
 /// [`MAX_CANDIDATES`], filtered like the game page art (animated/NSFW/humor settings, no
 /// grid styles, images only). Never cached. Empty when SteamGridDB has no match.
-pub async fn search_art(state: &AppState, game_id: &str, kind: ArtKind) -> Result<Vec<Cover>> {
-    let game =
-        db::get_game(&state.db.lock(), game_id)?.ok_or_else(|| anyhow!("Game not found."))?;
-    let client = client(state)?;
-    let Some(sgdb_id) = client.game_id(&game).await? else {
-        return Ok(Vec::new());
-    };
-    let prefs = grid_prefs(state)?;
-    Ok(client.art_covers(kind, sgdb_id, &prefs).await?)
+pub async fn search_art(
+    state: &AppState,
+    game_id: &str,
+    kind: ArtKind,
+    page: Option<u32>,
+) -> Result<CoverPage> {
+    search_page(state, game_id, Some(kind), page).await
 }
 
 /// Hero and logo URLs for the game page. `Ok(None)` when no key is saved; `Ok(Some(empty))`
@@ -858,6 +986,115 @@ mod tests {
             launch_target: "x".into(),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn picker_pages_are_small_bounded_numbers() {
+        assert_eq!(validate_page(None).unwrap(), 0);
+        assert_eq!(validate_page(Some(0)).unwrap(), 0);
+        assert_eq!(validate_page(Some(MAX_PAGE)).unwrap(), MAX_PAGE);
+        assert!(validate_page(Some(MAX_PAGE + 1)).is_err());
+        assert!(validate_page(Some(u32::MAX)).is_err());
+    }
+
+    #[test]
+    fn page_queries_carry_limit_and_page_with_the_filters() {
+        let p = prefs(&["alternate"], false, false, false);
+        assert_eq!(
+            Client::page_url(None, 7, &p, 2).as_str(),
+            "https://www.steamgriddb.com/api/v2/grids/game/7?dimensions=600x900%2C342x482%2C660x930&styles=alternate&types=static&nsfw=false&humor=false&limit=50&page=2"
+        );
+        assert_eq!(
+            Client::page_url(Some(ArtKind::Hero), 7, &p, 0).as_str(),
+            "https://www.steamgriddb.com/api/v2/heroes/game/7?types=static&nsfw=false&humor=false&limit=50&page=0"
+        );
+        assert_eq!(
+            Client::page_url(Some(ArtKind::Logo), 7, &prefs(&[], true, true, true), 1).as_str(),
+            "https://www.steamgriddb.com/api/v2/logos/game/7?types=static%2Canimated&nsfw=any&humor=any&limit=50&page=1"
+        );
+    }
+
+    fn grid_json(i: u32) -> String {
+        format!(
+            r#"{{"id":{i},"width":600,"height":900,"url":"https://cdn2.steamgriddb.com/g/{i}.png","thumb":"https://cdn2.steamgriddb.com/t/{i}.png"}}"#
+        )
+    }
+
+    #[test]
+    fn pages_report_whether_more_results_exist() {
+        let full: Vec<String> = (0..50).map(grid_json).collect();
+        // With `total` from the API.
+        let body = format!(
+            r#"{{"success":true,"page":0,"total":120,"limit":50,"data":[{}]}}"#,
+            full.join(",")
+        );
+        let page = parse_page(&body, &GridPrefs::default(), 0).unwrap();
+        assert_eq!((page.covers.len(), page.page, page.has_more), (50, 0, true));
+        let body = format!(
+            r#"{{"success":true,"page":2,"total":120,"limit":50,"data":[{}]}}"#,
+            full[..20].join(",")
+        );
+        assert!(
+            !parse_page(&body, &GridPrefs::default(), 2)
+                .unwrap()
+                .has_more
+        );
+        // Exactly at the end.
+        let body = format!(
+            r#"{{"success":true,"page":1,"total":100,"limit":50,"data":[{}]}}"#,
+            full.join(",")
+        );
+        assert!(
+            !parse_page(&body, &GridPrefs::default(), 1)
+                .unwrap()
+                .has_more
+        );
+        // Without `total`: a full page may have more, a short one doesn't.
+        let body = format!(r#"{{"success":true,"data":[{}]}}"#, full.join(","));
+        assert!(
+            parse_page(&body, &GridPrefs::default(), 0)
+                .unwrap()
+                .has_more
+        );
+        let body = format!(r#"{{"success":true,"data":[{}]}}"#, full[..3].join(","));
+        assert!(
+            !parse_page(&body, &GridPrefs::default(), 0)
+                .unwrap()
+                .has_more
+        );
+        // An empty last page.
+        let empty = parse_page(
+            r#"{"success":true,"page":3,"total":150,"limit":50,"data":[]}"#,
+            &GridPrefs::default(),
+            3,
+        )
+        .unwrap();
+        assert_eq!(
+            (empty.covers.len(), empty.page, empty.has_more),
+            (0, 3, false)
+        );
+        // Filters apply to every page; filtered-out items still count for paging.
+        let nsfw: Vec<String> = (0..50)
+            .map(|i| format!(r#"{{"id":{i},"nsfw":true,"width":600,"height":900,"url":"https://cdn2.steamgriddb.com/g/{i}.png","thumb":"https://cdn2.steamgriddb.com/t/{i}.png"}}"#))
+            .collect();
+        let body = format!(
+            r#"{{"success":true,"page":0,"total":80,"limit":50,"data":[{}]}}"#,
+            nsfw.join(",")
+        );
+        let page = parse_page(&body, &GridPrefs::default(), 0).unwrap();
+        assert_eq!((page.covers.len(), page.has_more), (0, true));
+        // The last allowed page never offers another.
+        let body = format!(
+            r#"{{"success":true,"page":{MAX_PAGE},"total":100000,"limit":50,"data":[{}]}}"#,
+            full.join(",")
+        );
+        assert!(
+            !parse_page(&body, &GridPrefs::default(), MAX_PAGE)
+                .unwrap()
+                .has_more
+        );
+        assert!(parse_page("<html>", &GridPrefs::default(), 0).is_err());
+        assert!(parse_page(r#"{"success":true,"data":{}}"#, &GridPrefs::default(), 0).is_err());
     }
 
     #[test]

@@ -8,7 +8,7 @@ import { defaultSettings } from '../shared/defaults'
 import { applyTheme } from './theme'
 import { coverStyle } from './cover'
 import { CoverLayer, useCover } from './poster'
-import { CoverTiles, pickerCovers } from './cover-picker'
+import { CoverTiles, LoadMore, pickerCovers, useSgdbPages } from './cover-picker'
 import { GamePage, type GamePageActions } from './game-page'
 import { elapsedSeconds, formatClock, useNow } from './format'
 
@@ -56,13 +56,7 @@ export default function App() {
   const [editGenre, setEditGenre] = useState('')
   const [editFavorite, setEditFavorite] = useState(false)
   const [sgdbGame, setSgdbGame] = useState<Game | null>(null)
-  const [sgdbCovers, setSgdbCovers] = useState<SteamGridDbCover[]>([])
-  const [sgdbState, setSgdbState] = useState<'loading' | 'ready' | 'nokey' | 'error'>('loading')
-  const [sgdbError, setSgdbError] = useState('')
   const [sgdbApplying, setSgdbApplying] = useState(false)
-  const sgdbRun = useRef(0)
-  /** SteamGridDB results per game (and search settings) for this session: reopening is instant. */
-  const sgdbResults = useRef(new Map<string, SteamGridDbCover[]>())
   const [editMode, setEditMode] = useState(false)
   const [collapsed, setCollapsed] = useState(true)
   const [gridWidth, setGridWidth] = useState(1200)
@@ -122,37 +116,18 @@ export default function App() {
     await window.lobby.library.chooseCover(game.id)
     await refresh()
   }
+  const sgdbSettingsKey = JSON.stringify([settings.steamGridDbStyles, settings.steamGridDbAnimated, settings.steamGridDbNsfw, settings.steamGridDbHumor])
+  const sgdbPages = useSgdbPages('grid', sgdbGame?.id ?? '', sgdbSettingsKey)
+  const sgdbCovers = useMemo(() => pickerCovers(sgdbPages.covers, settings.steamGridDbAnimated), [sgdbPages.covers, settings.steamGridDbAnimated])
+  const startSgdb = sgdbPages.start
+  const resetSgdb = sgdbPages.reset
+  useEffect(() => { if (sgdbGame) void startSgdb(); else resetSgdb() }, [sgdbGame, startSgdb, resetSgdb])
   const findCover = async (game: Game) => {
-    const run = ++sgdbRun.current
     setMenu(null)
-    setSgdbGame(game)
-    setSgdbCovers([])
-    setSgdbError('')
     setSgdbApplying(false)
-    const resultsKey = JSON.stringify([game.id, settings.steamGridDbStyles, settings.steamGridDbAnimated, settings.steamGridDbNsfw, settings.steamGridDbHumor])
-    const cached = sgdbResults.current.get(resultsKey)
-    if (cached) {
-      setSgdbCovers(cached)
-      setSgdbState('ready')
-      return
-    }
-    setSgdbState('loading')
-    try {
-      const { keySet } = await window.lobby.steamGridDb.status()
-      if (run !== sgdbRun.current) return
-      if (!keySet) { setSgdbState('nokey'); return }
-      const covers = pickerCovers(await window.lobby.steamGridDb.search(game.id), settings.steamGridDbAnimated)
-      sgdbResults.current.set(resultsKey, covers)
-      if (run !== sgdbRun.current) return
-      setSgdbCovers(covers)
-      setSgdbState('ready')
-    } catch (error) {
-      if (run !== sgdbRun.current) return
-      setSgdbError(error instanceof Error ? error.message : 'Could not search SteamGridDB')
-      setSgdbState('error')
-    }
+    setSgdbGame(game)
   }
-  const closeFindCover = () => { sgdbRun.current++; setSgdbGame(null); setSgdbApplying(false) }
+  const closeFindCover = () => { setSgdbGame(null); setSgdbApplying(false) }
   const applySgdbCover = async (cover: SteamGridDbCover) => {
     if (!sgdbGame || sgdbApplying) return
     const game = sgdbGame
@@ -262,7 +237,6 @@ export default function App() {
         setMenu(null)
         setAdding(false)
         setEditingGame(null)
-        sgdbRun.current++
         setSgdbGame(null)
         return
       }
@@ -508,11 +482,13 @@ export default function App() {
     </div></div>}
     {sgdbGame && <div className="modal-scrim"><div className="modal sgdb-modal" role="dialog" aria-label={'Find cover for ' + sgdbGame.title}>
       <div className="modal-head"><h2>{sgdbGame.title}</h2><button type="button" aria-label="Close" onClick={closeFindCover}><X size={17} /></button></div>
-      {sgdbState === 'loading' && <div className="empty-inline">Searching SteamGridDB…</div>}
-      {sgdbState === 'nokey' && <div className="empty-inline">Add a free SteamGridDB API key in settings to search for covers.<br /><button className="secondary-button" onClick={() => void window.lobby.settings.open('cover-art')}>Open settings</button></div>}
-      {sgdbState === 'error' && <div className="empty-inline">{sgdbError}</div>}
-      {sgdbState === 'ready' && sgdbCovers.length === 0 && <div className="empty-inline">No covers found on SteamGridDB for this game</div>}
-      {sgdbState === 'ready' && sgdbCovers.length > 0 && <CoverTiles covers={sgdbCovers} animated={settings.steamGridDbAnimated} applying={sgdbApplying} onApply={cover => void applySgdbCover(cover)} />}
+      {sgdbPages.state === 'loading' && <div className="empty-inline">Searching SteamGridDB…</div>}
+      {sgdbPages.state === 'nokey' && <div className="empty-inline">Add a free SteamGridDB API key in settings to search for covers.<br /><button className="secondary-button" onClick={() => void window.lobby.settings.open('cover-art')}>Open settings</button></div>}
+      {sgdbPages.state === 'error' && <div className="empty-inline">{sgdbPages.error}</div>}
+      {sgdbPages.state === 'ready' && sgdbCovers.length === 0 && !sgdbPages.hasMore && <div className="empty-inline">No covers found on SteamGridDB for this game</div>}
+      {sgdbPages.state === 'ready' && sgdbCovers.length > 0 && <CoverTiles covers={sgdbCovers} animated={settings.steamGridDbAnimated} applying={sgdbApplying} onApply={cover => void applySgdbCover(cover)} />}
+      {sgdbPages.state === 'ready' && (sgdbCovers.length > 0 || sgdbPages.hasMore) && <LoadMore shown={sgdbCovers.length} hasMore={sgdbPages.hasMore} loading={sgdbPages.loadingMore} onMore={() => void sgdbPages.loadMore()} noun="cover" />}
+      {sgdbPages.state === 'ready' && sgdbPages.error && <div className="empty-inline">{sgdbPages.error}</div>}
       {sgdbApplying && <div className="sgdb-applying" role="status">Saving cover…</div>}
       <div className="modal-actions"><button className="secondary-button" onClick={closeFindCover}>Cancel</button></div>
     </div></div>}

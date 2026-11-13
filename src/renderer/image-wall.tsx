@@ -1,10 +1,10 @@
 // The game page's picture wall: the user's screenshots first, then IGDB's screenshots and
 // artworks, as a mosaic with one large feature tile. Clicking opens the shared lightbox.
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ImagePlus, MoreHorizontal, X } from 'lucide-react'
 import type { Game, IgdbMetadataView, Screenshot } from '../shared/types'
 import { isSteamGame } from '../shared/routes'
-import { wallColumns, wallSpans } from '../shared/wall'
+import { layoutWall, visualOrder, wallColumns, type Placement } from '../shared/wall'
 import { coverSrc, useCoverStatus } from './cover'
 import { IgdbAttribution, Lightbox, type LightboxImage } from './igdb-details'
 
@@ -28,11 +28,15 @@ export function useScreenshots(gameId: string) {
   return { shots, setShots }
 }
 
-function Tile({ image, span, onOpen, onAspect, onMenu }: { image: WallImage; span: { cols: number; rows: number }; onOpen(): void; onAspect(key: string, aspect: number): void; onMenu?(x: number, y: number): void }) {
+function Tile({ image, place, onOpen, onAspect, onFailed, onMenu }: { image: WallImage; place: Placement; onOpen(): void; onAspect(key: string, aspect: number): void; onFailed(key: string): void; onMenu?(x: number, y: number): void }) {
   const src = coverSrc(image.thumb)
   const status = useCoverStatus(src)
-  if (!src || status === 'error') return null
-  const style = { gridColumn: 'span ' + span.cols, gridRow: 'span ' + span.rows }
+  const failed = !src || status === 'error'
+  // A picture that can't be shown is taken out of the layout (the wall re-packs without it).
+  useEffect(() => { if (failed) onFailed(image.key) }, [failed, image.key, onFailed])
+  if (failed) return null
+  // Placed explicitly (computed like `grid-auto-flow: dense`), so the order is known.
+  const style = { gridColumn: place.col + ' / span ' + place.cols, gridRow: place.row + ' / span ' + place.rows }
   return <div className="wall-tile" style={style} onContextMenu={onMenu ? event => { event.preventDefault(); onMenu(event.clientX, event.clientY) } : undefined}>
     <button type="button" className="wall-open" onClick={onOpen} aria-label={'Open ' + image.alt}>
       {status !== 'loaded' && <div className="cover-shimmer" aria-hidden="true" />}
@@ -60,7 +64,23 @@ export function ImageWall({ game, igdb, shots, onShots }: { game: Game; igdb: Ig
   const [menu, setMenu] = useState<{ x: number; y: number; shot: Screenshot } | null>(null)
   const [confirm, setConfirm] = useState<Screenshot | null>(null)
   const [grid, setGrid] = useState<HTMLDivElement | null>(null)
+  const [failed, setFailed] = useState<ReadonlySet<string>>(new Set())
+  const pendingFailures = useRef(new Set<string>())
+  const failureTimer = useRef<number | undefined>(undefined)
   useEffect(() => { setFilter('all'); setShowAll(false); setOpen(null); setMenu(null); setConfirm(null); setNote('') }, [game.id])
+  // New pictures (or restored files): give everything another chance.
+  useEffect(() => { pendingFailures.current.clear(); setFailed(new Set()) }, [game.id, shots, igdb.images])
+  useEffect(() => () => window.clearTimeout(failureTimer.current), [])
+  /** Failures are collected and applied together, so the wall re-packs once per batch. */
+  const onFailed = useCallback((key: string) => {
+    pendingFailures.current.add(key)
+    window.clearTimeout(failureTimer.current)
+    failureTimer.current = window.setTimeout(() => {
+      const batch = [...pendingFailures.current]
+      pendingFailures.current.clear()
+      setFailed(current => batch.every(item => current.has(item)) ? current : new Set([...current, ...batch]))
+    }, 200)
+  }, [])
 
   useEffect(() => {
     if (!grid) return
@@ -81,23 +101,28 @@ export function ImageWall({ game, igdb, shots, onShots }: { game: Game; igdb: Ig
     return () => window.removeEventListener('keydown', onKey, true)
   }, [menu, confirm])
 
-  const yours: WallImage[] = useMemo(() => shots.map(shot => ({
+  const yours: WallImage[] = useMemo(() => shots.filter(shot => !shot.missing).map(shot => ({
     key: 'shot:' + shot.id, thumb: shot.src, full: shot.src, igdb: false, shot,
     aspect: shot.width && shot.height ? shot.width / shot.height : undefined,
     alt: shot.source === 'steam' ? 'Steam screenshot' : 'Your screenshot'
   })), [shots])
   const fromIgdb: WallImage[] = useMemo(() => (igdb.images ?? []).map((image, index) => ({
-    key: 'igdb:' + index + ':' + image.full, thumb: image.full, full: image.full, igdb: true,
+    // Stable while the picture switches from the remote URL to its cached copy.
+    key: 'igdb:' + image.kind + ':' + index, thumb: image.full, full: image.full, igdb: true,
     alt: image.kind === 'artwork' ? 'Artwork from IGDB' : 'Screenshot from IGDB'
   })), [igdb.images])
   const both = yours.length > 0 && fromIgdb.length > 0
-  const all = filter === 'yours' && both ? yours : filter === 'igdb' && both ? fromIgdb : [...yours, ...fromIgdb]
+  const chosen = filter === 'yours' && both ? yours : filter === 'igdb' && both ? fromIgdb : [...yours, ...fromIgdb]
+  const all = chosen.filter(image => !failed.has(image.key))
   const visible = showAll ? all : all.slice(0, FIRST_TILES)
   const columns = wallColumns(width)
-  const spans = wallSpans(visible.map(image => aspects[image.key] ?? image.aspect), columns)
+  const placed = layoutWall(visible.map(image => ({ key: image.key, aspect: aspects[image.key] ?? image.aspect })), columns)
+  // Reading order of the tiles: the lightbox and keyboard focus follow what the user sees.
+  const order = visualOrder(placed)
+  const ordered = [...order.map(index => visible[index]), ...all.slice(visible.length)]
   const cell = width > 0 ? Math.round(((width - (columns - 1) * 7) / columns) * 9 / 16) : 96
   const onAspect = useCallback((key: string, aspect: number) => setAspects(current => current[key] && Math.abs(current[key] - aspect) < 0.01 ? current : { ...current, [key]: aspect }), [])
-  const lightboxImages: LightboxImage[] = useMemo(() => all.map(image => ({ full: image.full, alt: image.alt, igdb: image.igdb })), [all])
+  const lightboxImages: LightboxImage[] = ordered.map(image => ({ full: image.full, alt: image.alt, igdb: image.igdb }))
   const closeLightbox = useCallback(() => setOpen(null), [])
   const steam = isSteamGame(game)
 
@@ -106,7 +131,7 @@ export function ImageWall({ game, igdb, shots, onShots }: { game: Game; igdb: Ig
     try {
       const result = fromSteam ? await window.lobby.screenshots.importSteam(game.id) : await window.lobby.screenshots.add(game.id)
       onShots(result.screenshots)
-      const parts = [result.added ? 'Added ' + result.added + ' screenshot' + (result.added === 1 ? '' : 's') : '', result.duplicates ? result.duplicates + ' already added' : '', result.errors[0] ?? '']
+      const parts = [result.added ? 'Added ' + result.added + ' screenshot' + (result.added === 1 ? '' : 's') : '', result.restored ? 'Restored ' + result.restored + ' missing file' + (result.restored === 1 ? '' : 's') : '', result.duplicates ? result.duplicates + ' already added' : '', result.errors[0] ?? '']
       const text = parts.filter(Boolean).join(' · ')
       if (text) say(text + (result.errors.length > 1 ? ' (+' + (result.errors.length - 1) + ' more)' : ''))
     } catch (error) { say(error instanceof Error ? error.message : 'Could not add screenshots') }
@@ -146,8 +171,8 @@ export function ImageWall({ game, igdb, shots, onShots }: { game: Game; igdb: Ig
       <button type="button" className="secondary-button wall-action" onClick={() => void add(false)} disabled={busy}><ImagePlus size={14} /> Add screenshots</button>
     </div>
     <div className="wall-grid" ref={setGrid} style={{ gridTemplateColumns: 'repeat(' + columns + ',minmax(0,1fr))', gridAutoRows: cell + 'px' }}>
-      {visible.map((image, index) => <Tile key={image.key} image={image} span={spans[index]} onOpen={() => setOpen(index)} onAspect={onAspect}
-        onMenu={image.shot ? (x, y) => setMenu({ x, y, shot: image.shot! }) : undefined} />)}
+      {order.map((index, position) => <Tile key={visible[index].key} image={visible[index]} place={placed[index]} onOpen={() => setOpen(position)} onAspect={onAspect} onFailed={onFailed}
+        onMenu={visible[index].shot ? (x, y) => setMenu({ x, y, shot: visible[index].shot! }) : undefined} />)}
     </div>
     <div className="wall-foot">
       {all.length > FIRST_TILES && <button type="button" className="link-button" onClick={() => setShowAll(value => !value)}>{showAll ? 'Show fewer' : 'Show all (' + all.length + ')'}</button>}

@@ -4,7 +4,7 @@
 use crate::launch::launch_game;
 use crate::platform::shell_open;
 use crate::state::AppState;
-use crate::steamgriddb::{self, Cover, FetchSummary, KeyStatus, KeyTest};
+use crate::steamgriddb::{self, CoverPage, FetchSummary, KeyStatus, KeyTest};
 use crate::tracker::RunningGame;
 use crate::types::*;
 use crate::{art, covercache, db, igdb, scan, secrets, theme, tracker, validation, windows};
@@ -553,8 +553,11 @@ pub async fn steamgriddb_test_key(state: State<'_, AppState>) -> CmdResult<KeyTe
 pub async fn steamgriddb_search(
     state: State<'_, AppState>,
     game_id: String,
-) -> CmdResult<Vec<Cover>> {
-    steamgriddb::search(&state, &game_id).await.map_err(err)
+    page: Option<u32>,
+) -> CmdResult<CoverPage> {
+    steamgriddb::search(&state, &game_id, page)
+        .await
+        .map_err(err)
 }
 
 #[tauri::command]
@@ -770,8 +773,9 @@ pub async fn art_set_logo_layout(
 pub async fn steamgriddb_search_heroes(
     state: State<'_, AppState>,
     game_id: String,
-) -> CmdResult<Vec<Cover>> {
-    steamgriddb::search_art(&state, &game_id, steamgriddb::ArtKind::Hero)
+    page: Option<u32>,
+) -> CmdResult<CoverPage> {
+    steamgriddb::search_art(&state, &game_id, steamgriddb::ArtKind::Hero, page)
         .await
         .map_err(err)
 }
@@ -781,8 +785,9 @@ pub async fn steamgriddb_search_heroes(
 pub async fn steamgriddb_search_logos(
     state: State<'_, AppState>,
     game_id: String,
-) -> CmdResult<Vec<Cover>> {
-    steamgriddb::search_art(&state, &game_id, steamgriddb::ArtKind::Logo)
+    page: Option<u32>,
+) -> CmdResult<CoverPage> {
+    steamgriddb::search_art(&state, &game_id, steamgriddb::ArtKind::Logo, page)
         .await
         .map_err(err)
 }
