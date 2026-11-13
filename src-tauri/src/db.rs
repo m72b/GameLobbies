@@ -1183,7 +1183,7 @@ pub fn remove_emulator(db: &Connection, id: &str) -> Result<bool> {
         return Ok(false);
     };
     let tx = db.unchecked_transaction()?;
-    if let Some(key) = crate::tracker::normalize_path(&profile.executable) {
+    if let Some(key) = crate::localscan::path_key(&profile.executable) {
         add_ignore(&tx, IGNORE_EMULATOR, &key, &profile.executable)?;
     }
     tx.execute("DELETE FROM emulators WHERE id=?", [id])?;

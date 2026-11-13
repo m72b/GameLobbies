@@ -345,7 +345,24 @@ pub struct ScanInputs {
     pub limits: ScanLimits,
 }
 
+/// The comparison key of a path that came from outside a walk (a stored path, an env var, a
+/// picker, typed text): its long form ([`crate::platform::long_path`], so `C:\Users\RUNNER~1`
+/// and `C:\Users\runneradmin` give the same key), normalized and lower-cased. Every stored
+/// identity (route `appId`, review keys, ignore list, shortcut confirmations, executable
+/// choices) uses it. `None` for relative or otherwise unusable paths.
+pub fn path_key(raw: &str) -> Option<String> {
+    normalize_path(&crate::platform::long_path(Path::new(raw.trim())).to_string_lossy())
+}
+
+/// [`path_key`] for a `Path` (empty when unusable).
 pub fn key_of(path: &Path) -> String {
+    path_key(&path.to_string_lossy()).unwrap_or_default()
+}
+
+/// The key of a path produced by a walk. Walks start from the long form of their root and
+/// append names exactly as listed, so the result is already long: plain string normalization
+/// suffices (and costs no disk access per entry).
+fn listed_key(path: &Path) -> String {
     normalize_path(&path.to_string_lossy()).unwrap_or_default()
 }
 
@@ -376,7 +393,7 @@ impl GameWalker<'_> {
     }
 
     fn ignored(&self, path: &Path) -> bool {
-        self.inputs.ignored.contains(&key_of(path))
+        self.inputs.ignored.contains(&listed_key(path))
     }
 
     fn count_entries(&mut self, n: usize) -> bool {
@@ -470,13 +487,13 @@ impl GameWalker<'_> {
                 && system.extensions.contains(&ext.as_str())
             {
                 for referenced in index_references(&item.path, &ext) {
-                    self.consumed.insert(key_of(&referenced));
+                    self.consumed.insert(listed_key(&referenced));
                 }
             }
         }
         let mut singles: Vec<(&Item, String)> = Vec::new();
         for item in files {
-            if self.consumed.contains(&key_of(&item.path)) {
+            if self.consumed.contains(&listed_key(&item.path)) {
                 continue;
             }
             let ext = catalog::extension_of(&item.name).unwrap_or_default();
@@ -584,7 +601,7 @@ impl GameWalker<'_> {
             if let Some(choice) = self
                 .inputs
                 .exe_choices
-                .get(&key_of(&item.path))
+                .get(&listed_key(&item.path))
                 .map(PathBuf::from)
                 .filter(|p| p.is_file())
             {
@@ -834,7 +851,7 @@ pub fn pick_executable(folder: &Path, name: &str) -> Pick {
     };
     let ranked: Vec<(PathBuf, usize)> = ranked
         .into_iter()
-        .filter(|(p, _)| !crate::tracker::is_helper_executable(&key_of(p)))
+        .filter(|(p, _)| !crate::tracker::is_helper_executable(&listed_key(p)))
         .collect();
     match ranked.as_slice() {
         [] => {}
@@ -875,6 +892,9 @@ pub fn scan_games(
     inputs: &ScanInputs,
     progress: &mut dyn FnMut(usize, &Path),
 ) -> Result<GameScan> {
+    // Walk from the long form, so every listed path (and its key) is long too.
+    let long_root = crate::platform::long_path(root);
+    let root = long_root.as_path();
     if let Err(e) = std::fs::read_dir(root) {
         bail!("{} can't be read: {e}", root.display());
     }
@@ -907,7 +927,7 @@ pub fn scan_games(
     // A file reached through two index files (or an .m3u and a disc group) is one game.
     let consumed = walker.consumed;
     out.roms
-        .retain(|g| g.format == "folder" || !consumed.contains(&key_of(&g.path)));
+        .retain(|g| g.format == "folder" || !consumed.contains(&listed_key(&g.path)));
     Ok(out)
 }
 
@@ -922,7 +942,8 @@ pub(crate) mod tests {
     impl TempDir {
         pub fn new(name: &str) -> Self {
             static COUNTER: AtomicUsize = AtomicUsize::new(0);
-            let dir = std::env::temp_dir().join(format!(
+            // The long form, as real roots are stored (CI runners have an 8.3 TEMP).
+            let dir = crate::platform::long_path(&std::env::temp_dir()).join(format!(
                 "gamelobby-test-{name}-{}-{}",
                 std::process::id(),
                 COUNTER.fetch_add(1, Ordering::SeqCst)
@@ -1590,5 +1611,38 @@ pub(crate) mod tests {
         );
         assert_eq!(parse_sfo_title(b"\0PSF"), None);
         assert_eq!(parse_sfo_title(b"junk"), None);
+    }
+    #[cfg(windows)]
+    #[test]
+    fn shortcut_confirmations_match_short_and_long_forms() {
+        use crate::platform::{create_shortcut, short_path};
+        let dir = TempDir::new("scan-short-lnk");
+        let tool = dir.file("Long Tools Folder/tool.exe");
+        dir.dir("Long Shortcut Folder");
+        let lnk = dir.path().join("Long Shortcut Folder/Server Join.lnk");
+        create_shortcut(&lnk, &tool.to_string_lossy(), "-connect x").unwrap();
+        let ShortcutKind::NeedsConfirmation { target, arguments } =
+            classify_shortcut(&lnk, &HashMap::new())
+        else {
+            panic!("needs confirmation")
+        };
+        let short = short_path(&lnk);
+        assert_eq!(key_of(&short), key_of(&lnk));
+        // Confirmed under the short form, looked up by the long one, and the other way round.
+        let by_short: HashMap<String, (String, String)> =
+            [(key_of(&short), (target.clone(), arguments.clone()))].into();
+        assert_eq!(classify_shortcut(&lnk, &by_short), ShortcutKind::Confirmed);
+        let by_long: HashMap<String, (String, String)> =
+            [(key_of(&lnk), (target, arguments))].into();
+        assert_eq!(classify_shortcut(&short, &by_long), ShortcutKind::Confirmed);
+        // Paths that don't exist keep plain normalization.
+        assert_eq!(
+            path_key(r"D:\Nope~1\Game.iso").as_deref(),
+            Some(r"d:\nope~1\game.iso")
+        );
+        // A file under a short-named folder that was deleted still keys like its long form.
+        let gone = dir.path().join("Long Tools Folder/deleted.exe");
+        let short_gone = short_path(&dir.path().join("Long Tools Folder")).join("deleted.exe");
+        assert_eq!(key_of(&short_gone), key_of(&gone));
     }
 }

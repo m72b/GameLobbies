@@ -9,7 +9,7 @@ use crate::review::{self, ReviewItem};
 use crate::roots::{self, LibraryRoot, RootGuard};
 use crate::scan::{self, LocalScope};
 use crate::state::AppState;
-use crate::tracker::{self, normalize_path};
+use crate::tracker;
 use crate::types::*;
 use crate::{db, launch, validation};
 use serde::Serialize;
@@ -254,7 +254,7 @@ fn ignored(state: &AppState, kind: &str) -> CmdResult<Vec<IgnoredPath>> {
 }
 
 fn unignore(state: &AppState, kind: &str, path: &str) -> CmdResult<()> {
-    let key = normalize_path(path).ok_or("That path is invalid.")?;
+    let key = crate::localscan::path_key(path).ok_or("That path is invalid.")?;
     if !db::remove_ignore(&state.db.lock(), kind, &key).map_err(err)? {
         return Err("That path isn't on the list.".into());
     }
