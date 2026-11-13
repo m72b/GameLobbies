@@ -62,6 +62,8 @@ export function UpdatesSection({ autoCheck, onAutoCheckChange }: { autoCheck: bo
       <div className="about-mark"><Gamepad2 /></div><h2>Game Lobby</h2>
       <p>Version {info?.currentVersion ?? packageInfo.version} · Local-first library manager</p>
       <p>Built with Tauri, Rust, React, TypeScript and SQLite.</p>
+      <p>Free and open source under the GNU GPL v3.0. Game Lobby includes no games, ROMs, BIOS files or game artwork; it shows the games you already have.</p>
+      <p>Cover art is provided by the SteamGridDB community and Steam, and stays on this PC. Game Lobby is not affiliated with or endorsed by Valve, Epic Games, GOG, Microsoft, Ubisoft, Electronic Arts, Blizzard, Amazon, itch.io, SteamGridDB or any emulator project. All names, logos and artwork belong to their owners.</p>
     </div>
     <div className="settings-card">
       <div className="card-heading">

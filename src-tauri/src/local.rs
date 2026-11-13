@@ -1698,10 +1698,10 @@ mod tests {
     }
     #[cfg(windows)]
     #[test]
-    fn the_users_hidden_library_scans_as_a_parent_and_as_a_system_folder_root() {
-        let f = Fixture::new("local-retro");
-        crate::localscan::tests::retro_project(&f.dir);
-        f.add_root("games", "Retro Project");
+    fn a_hidden_system_library_scans_as_a_parent_and_as_a_system_folder_root() {
+        let f = Fixture::new("local-library");
+        crate::localscan::tests::sample_library(&f.dir);
+        f.add_root("games", "Game Library");
         let summary = f.scan();
         assert!(summary.roots[0].ok && !summary.roots[0].truncated);
         assert_eq!(summary.roots[0].notice, None);
@@ -1734,10 +1734,10 @@ mod tests {
         assert_eq!(f.game("Cairn (my copy)").id, cairn.id);
 
         // The system folder itself as the root.
-        let g = Fixture::new("local-retro-system");
-        crate::localscan::tests::retro_project(&g.dir);
-        g.add_root("games", "Retro Project/Sony Playstation");
-        g.add_root("games", "Retro Project/PC Game");
+        let g = Fixture::new("local-library-system");
+        crate::localscan::tests::sample_library(&g.dir);
+        g.add_root("games", "Game Library/Sony Playstation");
+        g.add_root("games", "Game Library/PC Game");
         let summary = g.scan();
         assert_eq!(summary.games.added, 5, "2 PlayStation games and 3 PC games");
         assert!(g.games().iter().any(|game| game.title == "ObraDinn"));
@@ -1839,24 +1839,24 @@ mod tests {
         titles
     }
 
-    /// The user's layout: the games root `Retro Project` holds the emulator root
-    /// `Retro Project\Playnite\Emulators`.
+    /// A typical layout: the games root `Game Library` holds the emulator root
+    /// `Game Library\Launcher\Emulators`.
     #[test]
     fn a_games_root_may_contain_the_emulator_root_and_each_scan_skips_the_other() {
         let f = Fixture::new("local-nested");
-        f.dir.file("Retro Project/Nintendo 64/Mario 64.z64");
-        f.dir.file("Retro Project/Sega Genesis/Sonic.md");
+        f.dir.file("Game Library/Nintendo 64/Mario 64.z64");
+        f.dir.file("Game Library/Sega Genesis/Sonic.md");
         f.dir
-            .file("Retro Project/Playnite/Emulators/Dolphin/Dolphin.exe");
+            .file("Game Library/Launcher/Emulators/Dolphin/Dolphin.exe");
         // Inside the emulator root: things a game scan would pick up if it went in there.
         f.dir
-            .file("Retro Project/Playnite/Emulators/Dolphin/Sys/Wii/banner.iso");
+            .file("Game Library/Launcher/Emulators/Dolphin/Sys/Wii/banner.iso");
         f.dir
-            .file("Retro Project/Playnite/Emulators/Nintendo 64/Hidden.z64");
-        f.dir.file("Retro Project/Playnite/Playnite.DesktopApp.exe");
-        f.dir.file("Retro Project/Retro Books/00390/Volume 01.cbz");
-        let emus = f.add_root("emulators", "Retro Project/Playnite/Emulators");
-        let games = f.add_root("games", "Retro Project");
+            .file("Game Library/Launcher/Emulators/Nintendo 64/Hidden.z64");
+        f.dir.file("Game Library/Launcher/Launcher.DesktopApp.exe");
+        f.dir.file("Game Library/Comic Books/00390/Volume 01.cbz");
+        let emus = f.add_root("emulators", "Game Library/Launcher/Emulators");
+        let games = f.add_root("games", "Game Library");
 
         let first = f.scan();
         assert!(first
@@ -1870,7 +1870,7 @@ mod tests {
         assert!(
             items
                 .iter()
-                .all(|i| !i.details.to_string().contains("Playnite")),
+                .all(|i| !i.details.to_string().contains("Launcher")),
             "no review item for the folder holding the emulator root: {items:?}"
         );
         // Every route belongs to the games root only.

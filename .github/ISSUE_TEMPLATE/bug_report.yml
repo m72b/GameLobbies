@@ -1,0 +1,57 @@
+name: Bug report
+description: Something in Game Lobby doesn't work as expected.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Please **remove personal paths, account names and API keys** from anything you paste.
+        Security problems go to the Security tab instead (see SECURITY.md), not here.
+  - type: input
+    id: version
+    attributes:
+      label: Game Lobby version
+      description: Settings → About and Updates
+      placeholder: "0.3.0"
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version
+      placeholder: "Windows 11 24H2"
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Library / store import
+        - Emulators and ROM folders
+        - Launching games
+        - Playtime tracking
+        - Covers and artwork
+        - Updates
+        - Settings / other
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open Settings → Library folders
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: extra
+    attributes:
+      label: Screenshots or extra details
