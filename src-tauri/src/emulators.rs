@@ -29,7 +29,7 @@
 
 use crate::catalog::{self, KnownEmulator};
 use crate::db;
-use crate::localscan::{list_dir, ScanLimits, MAX_UNREADABLE};
+use crate::localscan::{list_dir, path_key, ScanLimits, MAX_UNREADABLE};
 use crate::tracker::{is_within, normalize_path};
 use crate::types::{now_ms, EmulatorProfile};
 use anyhow::{bail, Result};
@@ -146,6 +146,9 @@ pub fn discover(
     progress: &mut dyn FnMut(usize, &Path),
 ) -> Result<Discovery> {
     let mut out = Discovery::default();
+    // Walk from the long form, so found paths (and their keys) are long.
+    let long_root = crate::platform::long_path(root);
+    let root = long_root.as_path();
     let first = match list_dir(root) {
         Ok(listing) => listing,
         Err(e) => bail!("{} can't be read: {e}", root.display()),
@@ -228,7 +231,7 @@ pub fn apply_discovered(conn: &Connection, discovery: &Discovery) -> Result<Emul
     let scan_time = now_ms();
     for found in &discovery.found {
         let display = found.path.to_string_lossy().into_owned();
-        let Some(key) = normalize_path(&display) else {
+        let Some(key) = path_key(&display) else {
             continue;
         };
         if ignored.contains(&key) || !seen.insert(key.clone()) {
@@ -236,7 +239,7 @@ pub fn apply_discovered(conn: &Connection, discovery: &Discovery) -> Result<Emul
         }
         let existing = profiles
             .iter()
-            .find(|p| normalize_path(&p.executable).as_deref() == Some(key.as_str()));
+            .find(|p| path_key(&p.executable).as_deref() == Some(key.as_str()));
         match existing {
             Some(p) => {
                 // Only fill in what the user can't have chosen: the recognised emulator.
@@ -272,7 +275,7 @@ pub fn unavailable_in_root(profiles: &[EmulatorProfile], root: &str) -> usize {
     profiles
         .iter()
         .filter(|p| !p.available)
-        .filter(|p| normalize_path(&p.executable).is_some_and(|exe| is_within(root, &exe)))
+        .filter(|p| path_key(&p.executable).is_some_and(|exe| is_within(root, &exe)))
         .count()
 }
 

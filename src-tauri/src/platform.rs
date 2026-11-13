@@ -696,6 +696,74 @@ pub fn exe_product_name(_path: &Path) -> Option<String> {
     None
 }
 
+// ---------------------------------------------------------------------------
+// Long (non-8.3) paths
+
+/// The long form of a path: 8.3 short names (`RUNNER~1`) expanded to the real names with
+/// `GetLongPathNameW`, for the longest part of the path that exists (the rest is kept as
+/// given, so a file that was deleted still compares equal to how it was stored). Links are
+/// NOT resolved. Paths without a `~` can't contain a short name and are returned unchanged
+/// without touching the disk. Never fails: on any error the input is returned.
+#[cfg(windows)]
+pub fn long_path(path: &Path) -> PathBuf {
+    use std::ffi::OsString;
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    use windows_sys::Win32::Storage::FileSystem::GetLongPathNameW;
+    if !path.as_os_str().to_string_lossy().contains('~') {
+        return path.to_path_buf();
+    }
+    let mut existing = path;
+    let mut rest = Vec::new();
+    while !existing.exists() {
+        match (existing.parent(), existing.file_name()) {
+            (Some(parent), Some(name)) => {
+                rest.push(name.to_os_string());
+                existing = parent;
+            }
+            _ => return path.to_path_buf(),
+        }
+    }
+    let wide: Vec<u16> = existing
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let mut buffer = vec![0u16; 32_768];
+    let len = unsafe { GetLongPathNameW(wide.as_ptr(), buffer.as_mut_ptr(), buffer.len() as u32) };
+    if len == 0 || len as usize >= buffer.len() {
+        return path.to_path_buf();
+    }
+    let mut long = PathBuf::from(OsString::from_wide(&buffer[..len as usize]));
+    for name in rest.into_iter().rev() {
+        long.push(name);
+    }
+    long
+}
+
+#[cfg(not(windows))]
+pub fn long_path(path: &Path) -> PathBuf {
+    path.to_path_buf()
+}
+
+/// The 8.3 short form of an existing path, when the volume has short names (tests only).
+#[cfg(all(windows, test))]
+pub fn short_path(path: &Path) -> PathBuf {
+    use std::ffi::OsString;
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    use windows_sys::Win32::Storage::FileSystem::GetShortPathNameW;
+    let wide: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let mut buffer = vec![0u16; 32_768];
+    let len = unsafe { GetShortPathNameW(wide.as_ptr(), buffer.as_mut_ptr(), buffer.len() as u32) };
+    if len == 0 || len as usize >= buffer.len() {
+        return path.to_path_buf();
+    }
+    PathBuf::from(OsString::from_wide(&buffer[..len as usize]))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

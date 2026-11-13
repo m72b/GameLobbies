@@ -24,7 +24,9 @@
 use crate::catalog;
 use crate::db::{self, Db};
 use crate::emulators::{self, EmulatorCounts};
-use crate::localscan::{self, classify_shortcut, key_of, GameScan, ScanInputs, ShortcutKind};
+use crate::localscan::{
+    self, classify_shortcut, key_of, path_key, GameScan, ScanInputs, ShortcutKind,
+};
 use crate::review::{self, AMBIGUOUS_EXE, DUPLICATE, SHORTCUT, UNREADABLE, UNSUPPORTED};
 use crate::roots::LibraryRoot;
 use crate::tracker::{is_within, normalize_path};
@@ -276,11 +278,8 @@ pub fn apply_game_scan(
                     .to_string(),
             );
         } else {
-            let unreadable: Vec<String> = scan
-                .unreadable
-                .iter()
-                .filter_map(|p| normalize_path(p))
-                .collect();
+            let unreadable: Vec<String> =
+                scan.unreadable.iter().filter_map(|p| path_key(p)).collect();
             let applied = db::reconcile_local_root(conn, &root.id, &found, &|route| {
                 let key = non_empty_key(route);
                 unreadable.iter().any(|u| is_within(u, &key))
@@ -314,10 +313,7 @@ pub fn apply_game_scan(
         keep.insert(key);
     }
     for item in scan.unsupported.iter().take(MAX_REVIEW_PER_KIND) {
-        let key = format!(
-            "{UNSUPPORTED}:{}",
-            normalize_path(&item.path).unwrap_or_default()
-        );
+        let key = format!("{UNSUPPORTED}:{}", path_key(&item.path).unwrap_or_default());
         review::upsert(
             conn,
             UNSUPPORTED,
@@ -339,7 +335,7 @@ pub fn apply_game_scan(
         keep.insert(key);
     }
     for path in scan.unreadable.iter().take(MAX_REVIEW_PER_KIND) {
-        let key = format!("{UNREADABLE}:{}", normalize_path(path).unwrap_or_default());
+        let key = format!("{UNREADABLE}:{}", path_key(path).unwrap_or_default());
         review::upsert(
             conn,
             UNREADABLE,
@@ -719,11 +715,11 @@ fn check(
                 .filter_map(Value::as_str)
                 .map(String::from)
                 .collect();
-            let chosen = normalize_path(executable)
+            let chosen = path_key(executable)
                 .and_then(|k| {
                     candidates
                         .iter()
-                        .find(|c| normalize_path(c).as_deref() == Some(k.as_str()))
+                        .find(|c| path_key(c).as_deref() == Some(k.as_str()))
                 })
                 .cloned()
                 .ok_or_else(|| anyhow!("Choose one of the listed executables."))?;
@@ -832,9 +828,9 @@ fn apply(
         Resolution::Ignore { path } => {
             let allowed: HashSet<String> = detail_paths(item)
                 .iter()
-                .filter_map(|p| normalize_path(p))
+                .filter_map(|p| path_key(p))
                 .collect();
-            let key = normalize_path(path)
+            let key = path_key(path)
                 .filter(|k| allowed.contains(k))
                 .ok_or_else(|| anyhow!("Choose one of the paths listed in this item."))?;
             db::add_ignore(conn, db::IGNORE_PATH, &key, path.trim())?;
@@ -1750,5 +1746,71 @@ mod tests {
         assert!(full.contains("Games found so far were kept"));
         assert_eq!(group_thousands(999), "999");
         assert_eq!(group_thousands(1_000), "1,000");
+    }
+    /// 8.3 short forms (`LONGGA~1`) come in from env vars, pickers and typed paths; they must
+    /// match the long form stored by scans.
+    #[cfg(windows)]
+    #[test]
+    fn short_form_paths_match_their_long_form() {
+        use crate::platform::short_path;
+        let f = Fixture::new("local-short-form");
+        f.dir.file("Long Games Folder/PC/Mystery Game/alpha.exe");
+        let beta = f.dir.file("Long Games Folder/PC/Mystery Game/beta.exe");
+        let tetris = f.dir.file("Long Games Folder/GB/Tetris.gb");
+        f.dir
+            .file("Long Games Folder/GB/Unreadable Subfolder/Kirby.gb");
+        let root = f.add_root("games", "Long Games Folder");
+        f.scan();
+        assert_eq!(f.games().len(), 2);
+        let short_beta = short_path(&beta);
+        assert_eq!(key_of(&short_beta), key_of(&beta));
+        // ChooseExe with the short form of a listed candidate.
+        let item = review::list(&f.db.lock(), false)
+            .unwrap()
+            .into_iter()
+            .find(|i| i.kind == AMBIGUOUS_EXE)
+            .unwrap();
+        resolve(
+            &f.db,
+            &item.id,
+            &Resolution::ChooseExe {
+                executable: short_beta.to_string_lossy().into(),
+            },
+        )
+        .unwrap();
+        assert!(f.game("Mystery Game").routes[0]
+            .launch_target
+            .ends_with("beta.exe"));
+        // Unreadable protection given in short form still protects the long-form routes.
+        let mystery = f.dir.path().join("Long Games Folder/PC/Mystery Game");
+        let sub = f
+            .dir
+            .path()
+            .join("Long Games Folder/GB/Unreadable Subfolder");
+        let scan = GameScan {
+            roms: vec![localscan::RomGame {
+                system: "gb",
+                path: tetris,
+                title: "Tetris".into(),
+                format: ".gb".into(),
+                other_discs: vec![],
+            }],
+            pcs: vec![localscan::PcGame {
+                folder: Some(mystery.clone()),
+                source: mystery.clone(),
+                target: beta.to_string_lossy().into(),
+                title: "Mystery Game".into(),
+            }],
+            unreadable: vec![short_path(&sub).to_string_lossy().into()],
+            ..Default::default()
+        };
+        let (counts, _) = apply_game_scan(&mut f.db.lock(), &root, &scan, true).unwrap();
+        assert_eq!(counts.removed_or_uninstalled, 0);
+        assert_eq!(f.game("Kirby").routes[0].installed, Some(true));
+        // The ignore list matches either form too.
+        assert_eq!(
+            path_key(&short_path(&sub).to_string_lossy()),
+            path_key(&sub.to_string_lossy())
+        );
     }
 }

@@ -74,7 +74,12 @@ pub struct RootGuard {
 
 impl RootGuard {
     pub fn from_environment(data_dir: &Path) -> Self {
-        let env = |name: &str| std::env::var(name).ok().and_then(|v| normalize_path(&v));
+        // Long form: env vars may hold 8.3 short names (`C:\Users\RUNNER~1`).
+        let env = |name: &str| {
+            std::env::var(name)
+                .ok()
+                .and_then(|v| crate::localscan::path_key(&v))
+        };
         let mut guard = RootGuard::default();
         if let Some(windows) = env("SystemRoot").or_else(|| env("windir")) {
             guard.trees.push(windows);
@@ -84,7 +89,7 @@ impl RootGuard {
         if let Some(p) = env("APPDATA") {
             guard.trees.push(p);
         }
-        if let Some(p) = normalize_path(&data_dir.to_string_lossy()) {
+        if let Some(p) = crate::localscan::path_key(&data_dir.to_string_lossy()) {
             guard.trees.push(p);
         }
         if let Some(profile) = env("USERPROFILE") {
@@ -118,8 +123,8 @@ impl RootGuard {
     /// The kind-specific part of the guard.
     fn check_kind(&self, key: &str, kind: &str) -> Result<()> {
         if kind == "emulators" {
-            for tree in &self.emulator_trees {
-                if is_within(tree, key) || is_within(key, tree) {
+            for tree in long_forms(&self.emulator_trees) {
+                if is_within(&tree, key) || is_within(key, &tree) {
                     bail!("Emulators can't be scanned from Downloads, the Desktop or a Temp folder. Move them to a folder of their own first.");
                 }
             }
@@ -128,13 +133,13 @@ impl RootGuard {
     }
 
     fn check(&self, key: &str) -> Result<()> {
-        for tree in &self.trees {
-            if is_within(tree, key) || is_within(key, tree) {
+        for tree in long_forms(&self.trees) {
+            if is_within(&tree, key) || is_within(key, &tree) {
                 bail!("That folder is a system or app data folder (or contains one) and can't be a library folder.");
             }
         }
-        for folder in &self.containers {
-            if is_within(key, folder) {
+        for folder in long_forms(&self.containers) {
+            if is_within(key, &folder) {
                 bail!("That folder is a system folder like Program Files or your user folder (or contains one). Choose a folder inside it instead.");
             }
         }
@@ -142,7 +147,21 @@ impl RootGuard {
     }
 }
 
-/// Syntax check and normalization (no filesystem access): `(display path, comparison key)`.
+/// Each protected folder as given and in its long form (`RUNNER~1` → `runneradmin`), so a
+/// guard built from short-form paths still matches the canonical (long) root path.
+fn long_forms(folders: &[String]) -> Vec<String> {
+    let mut out = Vec::with_capacity(folders.len() * 2);
+    for folder in folders {
+        out.push(folder.clone());
+        if let Some(long) = crate::localscan::path_key(folder).filter(|l| l != folder) {
+            out.push(long);
+        }
+    }
+    out
+}
+
+/// Syntax check and normalization: `(display path, comparison key)`. The disk is touched
+/// only to expand 8.3 short names in protected folders (see [`long_forms`]).
 pub fn normalize_root_path(raw: &str, guard: &RootGuard) -> Result<(String, String)> {
     let raw = raw.trim();
     if raw.is_empty() {
@@ -525,7 +544,7 @@ mod tests {
     fn links_are_refused_and_resolved_before_the_guard() {
         let dir = TempDir::new("roots-links");
         let real = dir.dir("Real");
-        let protected = dir.dir("Protected");
+        let protected = dir.dir("Protected Folder");
         let link = dir.path().join("Link");
         let made = std::process::Command::new("cmd")
             .args(["/C", "mklink", "/J"])
@@ -542,8 +561,20 @@ mod tests {
         let err = prepare("games", &link.to_string_lossy(), &g).unwrap_err();
         assert!(err.to_string().contains("link"), "{err}");
         // A folder reached through a junction is checked where it really is.
-        dir.dir("Protected/Sub");
+        dir.dir("Protected Folder/Sub");
         assert!(prepare("games", &link.join("Sub").to_string_lossy(), &g).is_err());
+        // The same protected folder given in 8.3 short form (as env vars can hold it).
+        let short = RootGuard {
+            trees: vec![
+                normalize_path(&crate::platform::short_path(&protected).to_string_lossy()).unwrap(),
+            ],
+            ..Default::default()
+        };
+        assert!(prepare("games", &link.join("Sub").to_string_lossy(), &short).is_err());
+        assert!(prepare("games", &protected.join("Sub").to_string_lossy(), &short).is_err());
+        let short_sub = crate::platform::short_path(&protected.join("Sub"));
+        assert!(prepare("games", &short_sub.to_string_lossy(), &g).is_err());
+        assert!(prepare("games", &real.to_string_lossy(), &short).is_ok());
         let ok = prepare("games", &real.to_string_lossy(), &g).unwrap();
         assert_eq!(ok.1, normalize_path(&real.to_string_lossy()).unwrap());
         std::fs::remove_dir(&link).unwrap();
