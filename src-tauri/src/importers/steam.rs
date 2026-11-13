@@ -1,13 +1,11 @@
-//! Steam: installed games from `appmanifest_*.acf`, owned games from the Steam Web API.
+//! Steam: installed games from `appmanifest_*.acf` files in the Steam library folders.
 
 use super::{single_route_game, states};
 use crate::types::{Game, GameRoute};
 use anyhow::{anyhow, bail, Context, Result};
 use regex::Regex;
-use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
-use std::time::Duration;
 
 /// A quoted VDF string, honoring `\"` and `\\` escapes.
 const QUOTED: &str = r#""((?:[^"\\]|\\.)*)""#;
@@ -162,83 +160,6 @@ pub fn scan_installed() -> Result<Vec<Game>> {
         }
     }
     Ok(games)
-}
-
-#[derive(Deserialize)]
-struct OwnedResponse {
-    response: Option<OwnedGames>,
-}
-#[derive(Deserialize)]
-struct OwnedGames {
-    games: Option<Vec<OwnedGame>>,
-}
-#[derive(Deserialize)]
-struct OwnedGame {
-    appid: u64,
-    name: Option<String>,
-    playtime_forever: Option<i64>,
-    rtime_last_played: Option<i64>,
-}
-
-pub async fn scan_owned(steam_id: &str, api_key: &str) -> Result<Vec<Game>> {
-    if steam_id.len() != 17 || !steam_id.chars().all(|c| c.is_ascii_digit()) {
-        bail!("Steam ID must be a 17-digit SteamID64.");
-    }
-    let response = reqwest::Client::builder()
-        .timeout(Duration::from_secs(20))
-        .build()?
-        .get("https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/")
-        .query(&[
-            ("key", api_key),
-            ("steamid", steam_id),
-            ("include_appinfo", "true"),
-            ("include_played_free_games", "true"),
-        ])
-        .send()
-        .await
-        .map_err(|e| anyhow!("Could not reach Steam: {}", e.without_url()))?;
-    if !response.status().is_success() {
-        bail!("Steam returned HTTP {}.", response.status().as_u16());
-    }
-    let body: OwnedResponse = response
-        .json()
-        .await
-        .map_err(|e| anyhow!("Steam returned an unreadable response: {}", e.without_url()))?;
-    let Some(games) = body.response.and_then(|r| r.games) else {
-        bail!("Steam did not return an owned-games list. Check the API key and profile game-privacy settings.");
-    };
-    Ok(games
-        .into_iter()
-        .filter_map(|g| {
-            let title = g.name?.trim().to_string();
-            if title.is_empty() {
-                return None;
-            }
-            let app_id = g.appid.to_string();
-            let minutes = g.playtime_forever.unwrap_or(0).max(0);
-            let last_played = g.rtime_last_played.filter(|t| *t > 0).map(|t| t * 1000);
-            let mut game = single_route_game(
-                format!("steam:{app_id}"),
-                title,
-                "Steam",
-                Some(cover(&app_id)),
-                GameRoute {
-                    source_id: "steam".into(),
-                    store: "Steam".into(),
-                    launch_target: format!("steam://run/{app_id}"),
-                    app_id: Some(app_id),
-                    owned: Some(true),
-                    installed: Some(false),
-                    playtime_minutes: Some(minutes),
-                    last_played,
-                    ..Default::default()
-                },
-            );
-            game.playtime_minutes = minutes;
-            game.last_played = last_played;
-            Some(game)
-        })
-        .collect())
 }
 
 #[cfg(test)]

@@ -223,3 +223,13 @@
 .igdb-steps code{background:#ffffff10;padding:0 4px;border-radius:4px}
 .igdb-form{display:flex;flex-direction:column;gap:4px}
 .igdb-progress{margin-top:10px}
+.igdb-attribution{font-size:10px;color:var(--muted);white-space:nowrap}
+.igdb-attribution a{color:var(--muted);text-decoration:underline}
+.igdb-attribution a:hover{color:var(--accent)}
+.gp-side-attribution{display:block;margin-top:10px}
+.igdb-links{display:flex;align-items:baseline;flex-wrap:wrap;gap:14px;margin-top:4px}
+.igdb-links .external-link{margin-top:0}
+.settings-subtitle{margin:14px 0 0;font-size:12px}
+.settings-subhead{margin:-4px 0 6px;font-size:10px;letter-spacing:.4px;text-transform:uppercase}
+.store-row{display:grid;grid-template-columns:auto 1fr auto;gap:12px;align-items:center}
+.store-row small.store-error{color:#e8b44f}

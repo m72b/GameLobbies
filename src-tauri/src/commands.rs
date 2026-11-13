@@ -3,7 +3,6 @@
 
 use crate::launch::launch_game;
 use crate::platform::shell_open;
-use crate::secrets::{has_steam_api_key, set_steam_api_key};
 use crate::state::AppState;
 use crate::steamgriddb::{self, Cover, FetchSummary, KeyStatus, KeyTest};
 use crate::tracker::RunningGame;
@@ -95,56 +94,10 @@ pub async fn library_scan(app: AppHandle) -> CmdResult<LibraryStats> {
     scan::scan_libraries(&app).await
 }
 
-fn connections(state: &AppState) -> anyhow::Result<LibraryConnections> {
-    let values = db::get_connection_values(&state.db.lock())?;
-    Ok(LibraryConnections {
-        steam_id: values.steam_id,
-        steam_api_key_set: has_steam_api_key(state)?,
-        legendary_path: values.legendary_path,
-        gog_database_path: values.gog_database_path,
-    })
-}
-
+/// The automatically scanned stores, whether each is on, and what the last scan found.
 #[tauri::command]
-pub async fn library_connections(state: State<'_, AppState>) -> CmdResult<LibraryConnections> {
-    connections(&state).map_err(err)
-}
-
-#[tauri::command]
-pub async fn library_save_connections(
-    state: State<'_, AppState>,
-    input: Value,
-) -> CmdResult<LibraryConnections> {
-    let input = validation::connections(&input).map_err(err)?;
-    db::put_connection_values(
-        &state.db.lock(),
-        &ConnectionValues {
-            steam_id: input.steam_id,
-            legendary_path: input.legendary_path,
-            gog_database_path: input.gog_database_path,
-        },
-    )
-    .map_err(err)?;
-    if let Some(key) = input.steam_api_key.filter(|k| !k.trim().is_empty()) {
-        set_steam_api_key(&state, &key).map_err(err)?;
-    }
-    connections(&state).map_err(err)
-}
-
-#[tauri::command]
-pub async fn library_choose_legendary(window: WebviewWindow) -> CmdResult<Option<String>> {
-    Ok(pick_file(&window, "Legendary executable", &["exe"])
-        .await
-        .map(|p| p.to_string_lossy().into_owned()))
-}
-
-#[tauri::command]
-pub async fn library_choose_gog_database(window: WebviewWindow) -> CmdResult<Option<String>> {
-    Ok(
-        pick_file(&window, "SQLite database", &["db", "sqlite", "sqlite3"])
-            .await
-            .map(|p| p.to_string_lossy().into_owned()),
-    )
+pub async fn library_stores(state: State<'_, AppState>) -> CmdResult<Vec<StoreStatus>> {
+    scan::store_statuses(&state).map_err(err)
 }
 
 #[tauri::command]

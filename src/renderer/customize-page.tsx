@@ -104,7 +104,7 @@ function ArtSection({ kind, gameId, title, currentSrc, hasCustom }: { kind: 'her
     </div>
     <div className="cz-status" role="status" aria-live="polite">{error ? <span className="cz-error">{error}</span> : notice}</div>
     {state === 'loading' && <div className="cz-empty">Searching SteamGridDB…</div>}
-    {state === 'nokey' && <div className="cz-empty">Add a free SteamGridDB API key in settings to browse {noun}s. Choosing a file and resetting still work.<button type="button" className="secondary-button" onClick={() => void window.lobby.settings.open()}>Open settings</button></div>}
+    {state === 'nokey' && <div className="cz-empty">Add a free SteamGridDB API key in settings to browse {noun}s. Choosing a file and resetting still work.<button type="button" className="secondary-button" onClick={() => void window.lobby.settings.open('cover-art')}>Open settings</button></div>}
     {state === 'error' && <div className="cz-empty">{error || 'Could not search SteamGridDB'}<button type="button" className="secondary-button" onClick={() => void openPicker()}>Try again</button></div>}
     {state === 'ready' && items.length === 0 && <div className="cz-empty">No {noun}s found on SteamGridDB for this game</div>}
     {state === 'ready' && items.length > 0 && <div className={'cz-grid ' + kind + (busy ? ' busy' : '')} aria-label={title + ' options'}>

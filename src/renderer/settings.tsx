@@ -1,7 +1,7 @@
 import './lobby-api'
 import { useEffect, useState } from 'react'
-import { ArrowLeft, Blocks, BookOpen, ChevronRight, CircleHelp, Cloud, FolderSearch, Gamepad2, Image, ImagePlus, Keyboard, Library, ListChecks, Palette, Puzzle, RotateCcw, Settings2, SlidersHorizontal, Sparkles, Star } from 'lucide-react'
-import type { IgdbBulkProgress, IgdbCredentialStatus, LibraryConnections, Settings, SettingsSection, SteamGridDbStyle } from '../shared/types'
+import { ArrowLeft, Blocks, ChevronRight, CircleHelp, Cloud, FolderSearch, Gamepad2, Keyboard, Library, ListChecks, Puzzle, RotateCcw, Settings2, SlidersHorizontal, Sparkles, Star } from 'lucide-react'
+import type { IgdbBulkProgress, IgdbCredentialStatus, Settings, SettingsSection, SteamGridDbStyle, StoreId, StoreStatus } from '../shared/types'
 import { steamGridDbStyles } from '../shared/types'
 import { defaultSettings } from '../shared/defaults'
 import { applyTheme } from './theme'
@@ -9,21 +9,18 @@ import { StoreIcon } from './store-icons'
 import { EmulatorsSection, LibraryFoldersSection, useLocalScan } from './library-settings'
 import { ReviewSection } from './review-panel'
 import { UpdatesSection } from './updates-section'
+import { IgdbAttribution } from './igdb-details'
 import { createRoot } from 'react-dom/client'
 import './styles.css'
 
 const sections = [
-  ['Libraries', 'Connect stores and choose how often Game Lobby scans.', Library],
+  ['Libraries', 'Stores and launchers Game Lobby detects on this PC, and how often it scans.', Library],
   ['Library folders', 'Choose game and emulator folders and scan them.', FolderSearch],
   ['Emulators', 'Manage emulator profiles and the systems they run.', Gamepad2],
   ['Review', 'Decide on duplicates and games a scan could not place.', ListChecks],
-  ['Covers and Metadata', 'Choose metadata sources and configure artwork.', Image],
-  ['SteamGridDB', 'Cover art from SteamGridDB: API key and preferences.', ImagePlus],
-  ['IGDB', 'Descriptions, genres, companies and ratings from IGDB.', BookOpen],
-  ['Themes (MyUI)', 'Load themes from a remote JSON or CSS link.', Palette],
-  ['Appearance', 'Tune poster size, badges and motion.', SlidersHorizontal],
+  ['Appearance', 'Poster size and motion, cover art from SteamGridDB, and themes.', SlidersHorizontal],
   ['Startup and Behavior', 'Choose how the app opens and closes.', Settings2],
-  ['Playtime and Stats', 'Control local playtime tracking.', Star],
+  ['Playtime and Stats', 'Playtime tracking, game details from IGDB, and the cover cache.', Star],
   ['Collections and Tags', 'Organize the library into collections.', Blocks],
   ['Backup and Sync', 'Export or restore your local library.', Cloud],
   ['Keyboard Shortcuts', 'Browse available keyboard controls.', Keyboard],
@@ -36,12 +33,23 @@ const sgdbStyleLabels: Record<SteamGridDbStyle, string> = { alternate: 'Alternat
 type Section = typeof sections[number][0]
 
 /** Sections other windows can open with `settings.open(id)` (`settings.html?section=<id>`). */
-const sectionIds: Record<SettingsSection, Section> = { updates: 'About and Updates' }
+const sectionIds: Record<SettingsSection, Section> = { updates: 'About and Updates', 'cover-art': 'Appearance', metadata: 'Playtime and Stats' }
+/** Cards a deep link scrolls to once its section is shown. */
+const sectionAnchors: Partial<Record<SettingsSection, string>> = { 'cover-art': 'settings-cover-art', metadata: 'settings-metadata' }
+const anchorFor = (id: string | null) => id !== null && Object.prototype.hasOwnProperty.call(sectionAnchors, id) ? sectionAnchors[id as SettingsSection] : undefined
 const sectionFor = (id: string | null): Section | undefined => id !== null && Object.prototype.hasOwnProperty.call(sectionIds, id) ? sectionIds[id as SettingsSection] : undefined
 const initialSection = (): Section => sectionFor(new URLSearchParams(window.location.search).get('section')) ?? 'Libraries'
 
+function storeStatusText(store: StoreStatus) {
+  if (!store.enabled) return 'Off · not scanned'
+  if (store.error) return 'Could not read: ' + store.error
+  if (store.found === undefined) return 'Not scanned yet'
+  return store.found > 0 ? 'Detected · ' + store.found + ' game' + (store.found === 1 ? '' : 's') : 'Not detected on this PC'
+}
+
 export function SettingsApp() {
   const [section, setSection] = useState<Section>(initialSection)
+  const [anchor, setAnchor] = useState<string | undefined>(() => anchorFor(new URLSearchParams(window.location.search).get('section')))
   const [settings, setSettings] = useState<Settings>(defaultSettings)
   const [plugins, setPlugins] = useState<any[]>([])
   const localScan = useLocalScan()
@@ -49,8 +57,7 @@ export function SettingsApp() {
   const [repoUrl, setRepoUrl] = useState('')
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
-  const [connections, setConnections] = useState<LibraryConnections>({ steamId: '', steamApiKeySet: false, legendaryPath: '', gogDatabasePath: '' })
-  const [steamApiKey, setSteamApiKey] = useState('')
+  const [stores, setStores] = useState<StoreStatus[]>([])
   const [sgdbKeySet, setSgdbKeySet] = useState(false)
   const [sgdbKey, setSgdbKey] = useState('')
   const [sgdbBusy, setSgdbBusy] = useState(false)
@@ -67,12 +74,12 @@ export function SettingsApp() {
 
   useEffect(() => {
     const offSettings = window.lobby.settings.onChanged(setSettings)
-    const offSection = window.lobby.settings.onSection(id => { const next = sectionFor(id); if (next) setSection(next) })
+    const offSection = window.lobby.settings.onSection(id => { const next = sectionFor(id); if (next) { setSection(next); setAnchor(anchorFor(id)) } })
     const offIgdb = window.lobby.igdb.onProgress(setIgdbProgress)
     void Promise.all([
       window.lobby.settings.get().then(setSettings),
       window.lobby.plugins.list().then(setPlugins),
-      window.lobby.library.connections().then(setConnections),
+      window.lobby.library.stores().then(setStores).catch(() => undefined),
       window.lobby.steamGridDb.status().then(result => setSgdbKeySet(result.keySet)).catch(() => undefined),
       window.lobby.igdb.status().then(setIgdbStatus).catch(() => undefined),
       window.lobby.igdb.progress().then(next => { if (next.total > 0 || next.running) setIgdbProgress(next) }).catch(() => undefined)
@@ -80,6 +87,11 @@ export function SettingsApp() {
     return () => { offSettings(); offSection(); offIgdb() }
   }, [])
   useEffect(() => { applyTheme(settings.theme, settings) }, [settings])
+  useEffect(() => {
+    if (!anchor) return
+    const frame = requestAnimationFrame(() => { document.getElementById(anchor)?.scrollIntoView({ block: 'start' }); setAnchor(undefined) })
+    return () => cancelAnimationFrame(frame)
+  }, [anchor, section])
 
   const say = (text: string) => {
     setMessage(text)
@@ -185,19 +197,18 @@ export function SettingsApp() {
     setPlugins(list)
     say('Plugin manifest added')
   }
-  const saveConnections = async () => {
-    try {
-      const next = await window.lobby.library.saveConnections({ ...connections, steamApiKey: steamApiKey.trim() || undefined })
-      setConnections(next)
-      setSteamApiKey('')
-      say('Library connections saved. The Steam key is encrypted locally.')
-    } catch (error) { say(error instanceof Error ? error.message : 'Could not save library connections') }
+  const toggleStore = (id: StoreId, enabled: boolean) => {
+    const current = settings.disabledStores ?? []
+    const next = enabled ? current.filter(item => item !== id) : [...current.filter(item => item !== id), id]
+    setStores(list => list.map(store => store.id === id ? { ...store, enabled } : store))
+    void save({ disabledStores: next })
   }
   const scanLibraries = async () => {
     try {
       const result = await window.lobby.library.scan()
       say(result.errors?.length ? 'Imported ' + (result.imported || 0) + ' records. ' + result.errors[0] : 'Scan complete · ' + result.total + ' games in library')
     } catch (error) { say(error instanceof Error ? error.message : 'Library scan failed') }
+    finally { window.lobby.library.stores().then(setStores).catch(() => undefined) }
   }
   const resetPlaytime = async () => {
     await window.lobby.library.resetPlaytime()
@@ -223,27 +234,16 @@ export function SettingsApp() {
 
         {section === 'Libraries' && <>
           <div className="settings-card">
-            <h3>Library sources</h3>
-            <p className="muted-text">Steam and Epic support installed-game scans. Owned-game imports are available through a public Steam profile, Legendary, and a local GOG Galaxy database. Store credentials stay on this PC. Other stores scan local install data only and do not fetch complete account catalogs.</p>
-            {[
-              ['Steam', 'Installed manifests + public-profile ownership', connections.steamApiKeySet ? 'Ownership ready' : 'Installed scan'],
-              ['Epic Games', 'Installed manifests + Legendary account list', connections.legendaryPath ? 'Legendary configured' : 'Installed scan'],
-              ['GOG', 'Owned library from Galaxy database', connections.gogDatabasePath ? 'Database configured' : 'Auto-detect Galaxy']
-            ].map(([name, description, status]) => <div className="feature-row" key={name}><span className="store-badge small"><StoreIcon store={name} /></span><span className="feature-name">{name}<small>{description}</small></span><span className="status-pill">{status}</span></div>)}
-            {['EA app', 'Battle.net', 'Xbox / Microsoft Store', 'Ubisoft Connect', 'itch.io', 'Amazon Games'].map(name => <div className="feature-row" key={name}><span className="store-badge small"><StoreIcon store={name} /></span><span className="feature-name">{name}</span><span className="status-pill">Local scan</span></div>)}
+            <h3>Detected stores and launchers</h3>
+            <p className="muted-text">Game Lobby finds installed games on its own by reading each launcher's local files on this PC. No accounts or keys are needed. Turn a store off to stop scanning it; games already in the library stay until you remove them.</p>
+            {stores.map(store => <div className="toggle-row store-row" key={store.id}>
+              <span className="store-badge small"><StoreIcon store={store.name} /></span>
+              <div><b>{store.name}</b><small className={store.error ? 'store-error' : ''}>{storeStatusText(store)}</small></div>
+              <input type="checkbox" aria-label={'Scan ' + store.name} checked={store.enabled} onChange={event => toggleStore(store.id, event.target.checked)} />
+            </div>)}
+            <div className="settings-actions"><button className="primary-button" onClick={() => void scanLibraries()}><Library size={15} /> Scan libraries</button></div>
           </div>
-          <div className="settings-card">
-            <h3>Ownership imports</h3>
-            <p>Steam’s Web API requires your 17-digit SteamID64, an API key, and public game details. The API key is encrypted by Windows before local storage. For Epic, install and sign in to Legendary separately, then select its executable here.</p>
-            <label className="setting-row">SteamID64<input value={connections.steamId} onChange={event => setConnections({ ...connections, steamId: event.target.value })} placeholder="7656119…" inputMode="numeric" autoComplete="off" /></label>
-            <label className="setting-row">Steam Web API key<input type="password" value={steamApiKey} onChange={event => setSteamApiKey(event.target.value)} placeholder={connections.steamApiKeySet ? 'Saved encrypted · enter a new key to replace' : 'Not configured'} autoComplete="new-password" /></label>
-            <label className="setting-row">Legendary executable<input value={connections.legendaryPath} onChange={event => setConnections({ ...connections, legendaryPath: event.target.value })} placeholder="Path to legendary.exe" /></label>
-            <button className="secondary-button" onClick={async () => { const path = await window.lobby.library.chooseLegendary(); if (path) setConnections({ ...connections, legendaryPath: path }) }}>Browse for Legendary</button>
-            <label className="setting-row">GOG Galaxy database<input value={connections.gogDatabasePath} onChange={event => setConnections({ ...connections, gogDatabasePath: event.target.value })} placeholder="Auto-detected if installed" /></label>
-            <button className="secondary-button" onClick={async () => { const path = await window.lobby.library.chooseGogDatabase(); if (path) setConnections({ ...connections, gogDatabasePath: path }) }}>Browse for Galaxy database</button>
-            <div className="settings-actions"><button className="secondary-button" onClick={() => void saveConnections()}>Save connections</button><button className="primary-button" onClick={() => void scanLibraries()}><Library size={15} /> Scan libraries</button></div>
-          </div>
-          <div className="settings-card"><div className="toggle-row"><div><b>Show only installed games</b><small>Hide games you own but haven't installed</small></div><input type="checkbox" checked={settings.showOnlyInstalled} onChange={event => void save({ showOnlyInstalled: event.target.checked })} /></div></div>
+          <div className="settings-card"><div className="toggle-row"><div><b>Show only installed games</b><small>Hide games that are not installed</small></div><input type="checkbox" checked={settings.showOnlyInstalled} onChange={event => void save({ showOnlyInstalled: event.target.checked })} /></div></div>
           <label className="setting-row">Scan interval<select value={settings.scanIntervalHours} onChange={event => void save({ scanIntervalHours: +event.target.value })}><option value={0}>Manual only</option><option value={6}>Every 6 hours</option><option value={12}>Every 12 hours</option><option value={24}>Daily</option></select></label>
         </>}
 
@@ -251,20 +251,18 @@ export function SettingsApp() {
         {section === 'Emulators' && <EmulatorsSection scan={localScan} say={say} />}
         {section === 'Review' && <ReviewSection say={say} />}
 
-        {section === 'Covers and Metadata' && <div className="settings-card">
-          <h3>Metadata providers</h3><p>Steam cover art is used automatically when an app ID is available.</p>
-          <div className="feature-row"><span className="feature-name">SteamGridDB<small>API key and cover preferences</small></span><button className="secondary-button" onClick={() => setSection('SteamGridDB')}>Configure</button></div>
-          <div className="feature-row"><span className="feature-name">IGDB<small>Descriptions, genres, companies and ratings</small></span><button className="secondary-button" onClick={() => setSection('IGDB')}>Configure</button></div>
-          <div className="feature-row"><span>Default artwork style</span><span>Poster (2:3)</span></div>
-          <div className="feature-row"><span>Cover cache</span><span className="status-pill">Stored locally</span></div>
-          <div className="feature-row"><span>Custom cover images</span><span className="status-pill">User data folder</span></div>
-        </div>}
-
-        {section === 'SteamGridDB' && <>
+        {section === 'Appearance' && <>
           <div className="settings-card">
+            <h3>Library appearance</h3>
+            <label className="setting-row">Poster width <span>{settings.posterWidth}px</span><input type="range" min="120" max="250" value={settings.posterWidth} onChange={event => void save({ posterWidth: +event.target.value })} /></label>
+            <div className="toggle-row"><div><b>Store badges</b><small>Show a store mark on each poster</small></div><input type="checkbox" checked={settings.showBadges} onChange={event => void save({ showBadges: event.target.checked })} /></div>
+            <div className="toggle-row"><div><b>Animations</b><small>Enable poster hover motion</small></div><input type="checkbox" checked={settings.animations} onChange={event => void save({ animations: event.target.checked })} /></div>
+            <div className="feature-row"><span>Grid density</span><span className="coming-soon">COMING SOON</span></div>
+          </div>
+          <div className="settings-card" id="settings-cover-art">
           <div className="sgdb-card plain">
-            <h3>SteamGridDB</h3>
-            <p>SteamGridDB provides community cover art. It needs a free API key: sign in at steamgriddb.com, then open Profile → Preferences → API. <a className="external-link" href="https://www.steamgriddb.com/profile/preferences/api">Get an API key</a></p>
+            <h3>Cover art</h3>
+            <p>Community cover art from SteamGridDB. It needs a free API key: sign in at steamgriddb.com, then open Profile → Preferences → API. <a className="external-link" href="https://www.steamgriddb.com/profile/preferences/api">Get an API key</a></p>
             <form className="sgdb-key-row" onSubmit={event => { event.preventDefault(); if (sgdbKey.trim()) void saveSgdbKey(sgdbKey.trim()) }}>
               <input type="password" aria-label="SteamGridDB API key" value={sgdbKey} onChange={event => setSgdbKey(event.target.value)} placeholder={sgdbKeySet ? 'Enter a new key to replace' : 'Paste your API key'} autoComplete="new-password" spellCheck={false} />
               <button className="secondary-button" disabled={sgdbBusy || !sgdbKey.trim()}>Save</button>
@@ -276,7 +274,7 @@ export function SettingsApp() {
           </div>
           </div>
           <div className="settings-card">
-            <h3>Cover preferences</h3>
+            <h3>Cover art preferences</h3>
             <p className="muted-text">Applied when searching for covers and when fetching missing ones.</p>
             <div className="chip-group" role="group" aria-label="Cover styles">{steamGridDbStyles.map(style => <button key={style} type="button" className={'chip ' + (settings.steamGridDbStyles.includes(style) ? 'active' : '')} aria-pressed={settings.steamGridDbStyles.includes(style)} onClick={() => toggleSgdbStyle(style)}>{sgdbStyleLabels[style]}</button>)}</div>
             <small className="chip-hint">None selected = any style</small>
@@ -284,13 +282,30 @@ export function SettingsApp() {
             <div className="toggle-row"><div><b>Include adult (NSFW) covers</b></div><input type="checkbox" checked={settings.steamGridDbNsfw} onChange={event => void save({ steamGridDbNsfw: event.target.checked })} /></div>
             <div className="toggle-row"><div><b>Include humor covers</b></div><input type="checkbox" checked={settings.steamGridDbHumor} onChange={event => void save({ steamGridDbHumor: event.target.checked })} /></div>
           </div>
+          <div className="settings-card">
+            <h3>Themes</h3><p className="muted-text settings-subhead">MyUI remote theme</p><p>Load token-only JSON or CSS from a trusted HTTPS URL. Theme content is validated and applied live in both windows. No remote scripts are executed.</p>
+            <label className="field-label">Theme URL<input value={themeUrl || settings.themeUrl || ''} onChange={event => setThemeUrl(event.target.value)} placeholder="https://example.com/my-theme.json" /></label>
+            <div className="settings-actions"><button className="primary-button" disabled={busy || !themeUrl.trim()} onClick={() => void doTheme()}><Sparkles size={15} />{busy ? 'Loading…' : 'Load theme'}</button><button className="secondary-button" onClick={() => void resetTheme()}><RotateCcw size={15} /> Reset to default</button></div>
+            {settings.themeName && settings.themeUrl && <div className="remote-tag">REMOTE THEME · {settings.themeName}</div>}
+          </div>
+          <div className="settings-card"><h3>Theme repository</h3><p>Theme repository browsing is not available yet.</p><label className="field-label">Repository index URL<input value={repoUrl} onChange={event => setRepoUrl(event.target.value)} placeholder="Coming soon" disabled /></label><span className="coming-soon">COMING SOON</span></div>
         </>}
 
-        {section === 'IGDB' && <>
+        {section === 'Startup and Behavior' && <div className="settings-card">
+          {['Launch on boot', 'Minimize to tray', 'Close to tray'].map(label => <div className="feature-row" key={label}><span>{label}</span><span className="coming-soon">COMING SOON</span></div>)}
+        </div>}
+
+        {section === 'Playtime and Stats' && <>
           <div className="settings-card">
+            <h3>Playtime</h3>
+            <div className="toggle-row"><div><b>Track playtime</b><small>Store session time in the local library</small></div><input type="checkbox" checked={settings.tracking} onChange={event => void save({ tracking: event.target.checked })} /></div>
+            <div className="toggle-row"><div><b>Detect games launched outside Game Lobby</b><small>Tracks games started from Steam, Epic or shortcuts while Game Lobby is open</small></div><input type="checkbox" checked={settings.detectExternalLaunches} disabled={!settings.tracking} onChange={event => void save({ detectExternalLaunches: event.target.checked })} /></div>
+            <button className="secondary-button" onClick={() => void resetPlaytime()}>Reset playtime stats</button>
+          </div>
+          <div className="settings-card" id="settings-metadata">
           <div className="sgdb-card plain">
-            <h3>IGDB</h3>
-            <p>IGDB supplies game descriptions, genres, developers, publishers and ratings for the game page. It uses a free Twitch developer application. <a className="external-link" href="https://dev.twitch.tv/console">Open the Twitch developer console</a></p>
+            <h3>Metadata provider</h3>
+            <p>IGDB supplies the game descriptions, genres, developers, publishers and ratings for the game page. It uses a free Twitch developer application. <a className="external-link" href="https://dev.twitch.tv/console">Open the Twitch developer console</a></p>
             <ol className="igdb-steps">
               <li>Sign in at dev.twitch.tv/console (Twitch may ask you to turn on two-factor authentication).</li>
               <li>Choose Register Your Application. Use any name, OAuth Redirect URL <code>http://localhost</code>, category Application Integration and client type Confidential.</li>
@@ -306,11 +321,7 @@ export function SettingsApp() {
               </div>
             </form>
             <div className="sgdb-status-row"><span className="sgdb-status">{igdbConfigured ? 'Credentials saved' : igdbStatus.clientIdSet ? 'Client Secret missing' : igdbStatus.clientSecretSet ? 'Client ID missing' : 'Not configured'}</span><button className="secondary-button" disabled={!igdbConfigured || igdbTesting} onClick={() => void testIgdb()}>{igdbTesting ? 'Testing…' : 'Test connection'}</button>{igdbTest && <span className={'sgdb-test ' + (igdbTest.ok ? 'ok' : 'fail')}>{igdbTest.ok ? '✓' : '✗'} {igdbTest.message}</span>}</div>
-            <a className="external-link" href="https://api-docs.igdb.com/#account-creation">IGDB account setup guide</a>
-          </div>
-          </div>
-          <div className="settings-card">
-            <h3>Metadata for the whole library</h3>
+            <h4 className="settings-subtitle">Whole library</h4>
             <p className="muted-text">Game pages load details from IGDB when you open them and refresh them after 30 days. You can also fetch details for every game now. It runs in the background at about four requests per second.</p>
             <div className="settings-actions">
               <button className="secondary-button" disabled={!igdbConfigured || !!igdbProgress?.running} onClick={() => void fetchAllIgdb()}>{igdbProgress?.running ? 'Fetching…' : 'Fetch metadata for all games'}</button>
@@ -319,35 +330,17 @@ export function SettingsApp() {
             {igdbProgress && <div className="sgdb-status igdb-progress" role="status">
               {igdbProgress.running ? 'Fetching ' : 'Done: '}{igdbProgress.done} of {igdbProgress.total} · {igdbProgress.updated} found · {igdbProgress.notFound} not found{igdbProgress.failed ? ' · ' + igdbProgress.failed + ' failed' : ''}{igdbProgress.message ? ' · ' + igdbProgress.message : ''}
             </div>}
+            <div className="igdb-links"><a className="external-link" href="https://api-docs.igdb.com/#account-creation">IGDB account setup guide</a><IgdbAttribution /></div>
           </div>
-        </>}
-
-        {section === 'Themes (MyUI)' && <>
+          </div>
           <div className="settings-card">
-            <h3>Remote MyUI theme</h3><p>Load token-only JSON or CSS from a trusted HTTPS URL. Theme content is validated and applied live in both windows. No remote scripts are executed.</p>
-            <label className="field-label">Theme URL<input value={themeUrl || settings.themeUrl || ''} onChange={event => setThemeUrl(event.target.value)} placeholder="https://example.com/my-theme.json" /></label>
-            <div className="settings-actions"><button className="primary-button" disabled={busy || !themeUrl.trim()} onClick={() => void doTheme()}><Sparkles size={15} />{busy ? 'Loading…' : 'Load theme'}</button><button className="secondary-button" onClick={() => void resetTheme()}><RotateCcw size={15} /> Reset to default</button></div>
-            {settings.themeName && settings.themeUrl && <div className="remote-tag">REMOTE THEME · {settings.themeName}</div>}
+            <h3>Covers and cache</h3>
+            <p className="muted-text">Steam cover art is used automatically when an app ID is available. Cover art from SteamGridDB is set up under Appearance.</p>
+            <div className="feature-row"><span>Default artwork style</span><span>Poster (2:3)</span></div>
+            <div className="feature-row"><span>Cover cache</span><span className="status-pill">Stored locally</span></div>
+            <div className="feature-row"><span>Custom cover images</span><span className="status-pill">User data folder</span></div>
           </div>
-          <div className="settings-card"><h3>Theme repository</h3><p>Theme repository browsing is not available yet.</p><label className="field-label">Repository index URL<input value={repoUrl} onChange={event => setRepoUrl(event.target.value)} placeholder="Coming soon" disabled /></label><span className="coming-soon">COMING SOON</span></div>
         </>}
-
-        {section === 'Appearance' && <div className="settings-card">
-          <label className="setting-row">Poster width <span>{settings.posterWidth}px</span><input type="range" min="120" max="250" value={settings.posterWidth} onChange={event => void save({ posterWidth: +event.target.value })} /></label>
-          <div className="toggle-row"><div><b>Store badges</b><small>Show a store mark on each poster</small></div><input type="checkbox" checked={settings.showBadges} onChange={event => void save({ showBadges: event.target.checked })} /></div>
-          <div className="toggle-row"><div><b>Animations</b><small>Enable poster hover motion</small></div><input type="checkbox" checked={settings.animations} onChange={event => void save({ animations: event.target.checked })} /></div>
-          <div className="feature-row"><span>Grid density</span><span className="coming-soon">COMING SOON</span></div>
-        </div>}
-
-        {section === 'Startup and Behavior' && <div className="settings-card">
-          {['Launch on boot', 'Minimize to tray', 'Close to tray'].map(label => <div className="feature-row" key={label}><span>{label}</span><span className="coming-soon">COMING SOON</span></div>)}
-        </div>}
-
-        {section === 'Playtime and Stats' && <div className="settings-card">
-          <div className="toggle-row"><div><b>Track playtime</b><small>Store session time in the local library</small></div><input type="checkbox" checked={settings.tracking} onChange={event => void save({ tracking: event.target.checked })} /></div>
-          <div className="toggle-row"><div><b>Detect games launched outside Game Lobby</b><small>Tracks games started from Steam, Epic or shortcuts while Game Lobby is open</small></div><input type="checkbox" checked={settings.detectExternalLaunches} disabled={!settings.tracking} onChange={event => void save({ detectExternalLaunches: event.target.checked })} /></div>
-          <button className="secondary-button" onClick={() => void resetPlaytime()}>Reset playtime stats</button>
-        </div>}
 
         {section === 'Collections and Tags' && <div className="settings-card">
           <h3>Collections</h3><p>Collection creation and tags are not available yet.</p>

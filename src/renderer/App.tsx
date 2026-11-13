@@ -13,7 +13,19 @@ import { GamePage, type GamePageActions } from './game-page'
 import { elapsedSeconds, formatClock, useNow } from './format'
 
 type View = 'All Games' | 'Favorites' | 'Recently Played' | 'Hidden'
-type SortBy = 'title' | 'lastPlayed' | 'playtime'
+type SortBy = 'title' | 'lastPlayed' | 'playtime' | 'library'
+const sortOptions: SortBy[] = ['title', 'lastPlayed', 'playtime', 'library']
+const SORT_KEY = 'gameLobby.sortBy'
+/** The library sort is remembered per viewer (browser storage may be unavailable). */
+function storedSort(): SortBy {
+  try {
+    const value = window.localStorage.getItem(SORT_KEY)
+    return sortOptions.includes(value as SortBy) ? value as SortBy : 'title'
+  } catch { return 'title' }
+}
+function rememberSort(value: SortBy) {
+  try { window.localStorage.setItem(SORT_KEY, value) } catch { /* not persisted */ }
+}
 type MenuAction = 'Play' | 'Edit metadata' | 'Set custom cover' | 'Find cover on SteamGridDB' | 'Hide' | 'Unhide' | 'Add to collection' | 'Link another game' | 'Open install folder' | 'Remove'
 
 const isInstalled = (game: Game) => game.routes.some(route => route.installed === true)
@@ -25,7 +37,8 @@ export default function App() {
   const [query, setQuery] = useState('')
   const [store, setStore] = useState('All Games')
   const [view, setView] = useState<View>('All Games')
-  const [sortBy, setSortBy] = useState<SortBy>('title')
+  const [sortBy, setSortByState] = useState<SortBy>(storedSort)
+  const setSortBy = (value: SortBy) => { setSortByState(value); rememberSort(value) }
   const [openId, setOpenId] = useState<string | null>(null)
   const [running, setRunning] = useState<RunningGame[]>([])
   const [libraryVersion, setLibraryVersion] = useState(0)
@@ -342,7 +355,8 @@ export default function App() {
     if (query.trim()) return filtered
     return [...filtered].sort((a, b) =>
       sortBy === 'lastPlayed' ? (b.lastPlayed || 0) - (a.lastPlayed || 0) :
-        sortBy === 'playtime' ? b.playtimeMinutes - a.playtimeMinutes : a.title.localeCompare(b.title)
+        sortBy === 'playtime' ? b.playtimeMinutes - a.playtimeMinutes :
+          sortBy === 'library' ? a.store.localeCompare(b.store) || a.title.localeCompare(b.title) : a.title.localeCompare(b.title)
     )
   }, [filtered, query, sortBy])
   const cols = Math.max(2, Math.floor(gridWidth / (settings.posterWidth + Number.parseInt(settings.theme.gap || '9'))))
@@ -429,7 +443,7 @@ export default function App() {
       <div className="library-meta">
         <span>{filtered.length} GAMES</span><span className="meta-dot" />
         <button onClick={() => setView('Recently Played')}><ListFilter size={13} /> Recently played</button>
-        <label className="sort-control">Sort<select value={sortBy} onChange={event => setSortBy(event.target.value as SortBy)}><option value="title">Title</option><option value="lastPlayed">Last played</option><option value="playtime">Playtime</option></select></label>
+        <label className="sort-control">Sort<select value={sortBy} onChange={event => setSortBy(event.target.value as SortBy)}><option value="title">Title</option><option value="lastPlayed">Last played</option><option value="playtime">Playtime</option><option value="library">Library</option></select></label>
         <span className="meta-spacer" />
         <div className="segmented" role="group" aria-label="Installed filter"><button className={onlyInstalled ? 'active' : ''} aria-pressed={onlyInstalled} onClick={() => void setInstalledFilter(true)}>Installed</button><button className={!onlyInstalled ? 'active' : ''} aria-pressed={!onlyInstalled} onClick={() => void setInstalledFilter(false)}>All</button></div>
         <button onClick={() => setView('Favorites')}><Star size={13} /> Favorites</button>
@@ -495,7 +509,7 @@ export default function App() {
     {sgdbGame && <div className="modal-scrim"><div className="modal sgdb-modal" role="dialog" aria-label={'Find cover for ' + sgdbGame.title}>
       <div className="modal-head"><h2>{sgdbGame.title}</h2><button type="button" aria-label="Close" onClick={closeFindCover}><X size={17} /></button></div>
       {sgdbState === 'loading' && <div className="empty-inline">Searching SteamGridDB…</div>}
-      {sgdbState === 'nokey' && <div className="empty-inline">Add a free SteamGridDB API key in settings to search for covers.<br /><button className="secondary-button" onClick={() => void window.lobby.settings.open()}>Open settings</button></div>}
+      {sgdbState === 'nokey' && <div className="empty-inline">Add a free SteamGridDB API key in settings to search for covers.<br /><button className="secondary-button" onClick={() => void window.lobby.settings.open('cover-art')}>Open settings</button></div>}
       {sgdbState === 'error' && <div className="empty-inline">{sgdbError}</div>}
       {sgdbState === 'ready' && sgdbCovers.length === 0 && <div className="empty-inline">No covers found on SteamGridDB for this game</div>}
       {sgdbState === 'ready' && sgdbCovers.length > 0 && <CoverTiles covers={sgdbCovers} animated={settings.steamGridDbAnimated} applying={sgdbApplying} onApply={cover => void applySgdbCover(cover)} />}

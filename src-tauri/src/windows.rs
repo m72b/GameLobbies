@@ -49,7 +49,7 @@ fn open_if_allowed_external(url: &Url) {
 }
 
 /// Settings pages that `settings_open` may jump to (`settings.html?section=<id>`).
-pub const SETTINGS_SECTIONS: [&str; 1] = ["updates"];
+pub const SETTINGS_SECTIONS: [&str; 3] = ["updates", "cover-art", "metadata"];
 
 pub fn create(app: &AppHandle, settings: bool) -> tauri::Result<()> {
     create_page(app, settings, None)

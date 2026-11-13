@@ -45,10 +45,7 @@ const api: LobbyAPI = {
     chooseCover: id => call('library_choose_cover', { id }),
     chooseInstallFolder: id => call('library_open_install_folder', { id }),
     add: (title, target) => call('library_add', { title, target }),
-    connections: () => call('library_connections'),
-    saveConnections: input => call('library_save_connections', { input }),
-    chooseLegendary: () => call('library_choose_legendary'),
-    chooseGogDatabase: () => call('library_choose_gog_database'),
+    stores: () => call('library_stores'),
     onChanged: callback => subscribe('library:changed', () => callback()),
     setEmulator: (gameId, routeIndex, emulatorId) => call('library_set_emulator', { gameId, routeIndex, emulatorId }),
     addLocalGame: () => call('library_add_local_game')

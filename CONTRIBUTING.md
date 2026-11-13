@@ -40,7 +40,7 @@ These areas protect users' files and machines. Changes to them get a closer revi
 
 - **Launching** (`src-tauri/src/launch.rs`, `platform.rs`): games and emulators are started without a shell, and each argument is passed separately. Keep it that way.
 - **Library folders and scanning** (`roots.rs`, `localscan.rs`, `local.rs`): scans only read; they never rename, move or delete user files. Offline or unreadable folders must never cause games to be removed.
-- **Network and downloads** (`covercache.rs`, `steamgriddb.rs`, `updater.rs`): HTTPS only, host allow-lists, size limits and content checks.
+- **Network and downloads** (`covercache.rs`, `steamgriddb.rs`, `igdb.rs`, `updater.rs`): HTTPS only, host allow-lists, size limits and content checks.
 - **Secrets** (`secrets.rs`): credentials are encrypted with Windows DPAPI and never logged, returned to the UI, or placed in URLs or error messages.
 - **The renderer** is treated as semi-trusted: new IPC commands must validate their input and must not let the UI run arbitrary programs or read arbitrary files.
 

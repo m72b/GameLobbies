@@ -10,6 +10,11 @@ const emptyView: IgdbMetadataView = { configured: false, pending: false, checked
 const formatRelease = (ms?: number) => ms === undefined ? '' : new Date(ms).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' })
 const releaseYear = (ms?: number) => ms === undefined ? '' : String(new Date(ms).getUTCFullYear())
 
+/** IGDB's required attribution, shown wherever IGDB data appears. */
+export function IgdbAttribution({ className }: { className?: string }) {
+  return <span className={'igdb-attribution' + (className ? ' ' + className : '')}>Game data from <a href="https://www.igdb.com/">IGDB.com</a></span>
+}
+
 /** Cached metadata for a game, updated live when a background fetch stores new data. */
 export function useIgdb(gameId: string) {
   const [view, setView] = useState<IgdbMetadataView>(emptyView)
@@ -61,6 +66,7 @@ export function IgdbAbout({ view, onSearch }: { view: IgdbMetadataView; onSearch
     <div className="gp-igdb-links">
       {metadata.url && <a className="external-link" href={metadata.url}>View on IGDB</a>}
       <button className="link-button" onClick={onSearch} title={view.source === 'user' ? 'You chose this IGDB entry' : 'Matched automatically'}>Wrong game? Search IGDB</button>
+      <IgdbAttribution />
     </div>
   </section>
 }
@@ -79,6 +85,7 @@ export function IgdbRatings({ view }: { view: IgdbMetadataView }) {
       {critic && <div title="IGDB aggregated critic rating"><span>Critics</span><b>{critic.score}<small className="gp-rating-max">/100</small></b>{ratingText(critic, 'review') && <small className="gp-rating-count">{ratingText(critic, 'review')}</small>}</div>}
       {user && <div title="IGDB user rating"><span>Users</span><b>{user.score}<small className="gp-rating-max">/100</small></b>{ratingText(user, 'rating') && <small className="gp-rating-count">{ratingText(user, 'rating')}</small>}</div>}
     </div>
+    <IgdbAttribution className="gp-side-attribution" />
   </div>
 }
 
@@ -86,9 +93,12 @@ export function IgdbRatings({ view }: { view: IgdbMetadataView }) {
 export function GenreBlock({ game, view }: { game: Game; view: IgdbMetadataView }) {
   const userGenre = game.genre?.trim()
   const igdbGenres = (view.metadata?.genres ?? []).filter(genre => genre.toLocaleLowerCase() !== userGenre?.toLocaleLowerCase())
+  // The ratings block below carries the attribution when it is shown.
+  const hasRatings = !!(view.metadata?.criticRating || view.metadata?.userRating)
   return <div className="gp-side-block"><div className="detail-label">GENRE</div>
     {userGenre ? <div className="muted-text">{userGenre}</div> : igdbGenres.length === 0 && <div className="muted-text">Not set</div>}
     {igdbGenres.length > 0 && <div className="chip-group compact" title="Genres from IGDB">{igdbGenres.map(genre => <span key={genre} className="chip static">{genre}</span>)}</div>}
+    {igdbGenres.length > 0 && !hasRatings && <IgdbAttribution className="gp-side-attribution" />}
   </div>
 }
 
@@ -132,9 +142,9 @@ export function IgdbPicker({ game, view, onClose, onChosen }: { game: Game; view
     <div className="modal link-modal" role="dialog" aria-label={'Find ' + game.title + ' on IGDB'}>
       <div className="modal-head"><h2>Find on IGDB</h2><button type="button" aria-label="Close" onClick={onClose}><X size={17} /></button></div>
       {!view.configured
-        ? <div className="empty-inline">Add your IGDB (Twitch) Client ID and Client Secret in settings to search IGDB.<br /><button className="secondary-button" onClick={() => void window.lobby.settings.open()}>Open settings</button></div>
+        ? <div className="empty-inline">Add your IGDB (Twitch) Client ID and Client Secret in settings to search IGDB.<br /><button className="secondary-button" onClick={() => void window.lobby.settings.open('metadata')}>Open settings</button></div>
         : <>
-          <p>Choose the IGDB entry for <b>{game.title}</b>. Your choice is kept for this game.</p>
+          <p>Choose the IGDB entry for <b>{game.title}</b>. Your choice is kept for this game. <IgdbAttribution /></p>
           <form onSubmit={event => { event.preventDefault(); void run(query) }}>
             <label>Search IGDB<input value={query} onChange={event => setQuery(event.target.value)} placeholder={game.title} maxLength={200} autoFocus spellCheck={false} /></label>
           </form>

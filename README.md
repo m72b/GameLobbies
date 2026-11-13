@@ -24,14 +24,14 @@ The installer isn't signed with a Windows code-signing certificate, so Windows S
 
 ## Optional accounts and API keys
 
-Game Lobby works without any account. These optional features use credentials that **you** create and enter yourself. Each is stored on your PC, encrypted with Windows DPAPI for your user account, and is never shared, sent anywhere other than the service it belongs to, or included in backups. Game Lobby never ships a shared key.
+Game Lobby works without any account: it detects installed games from your launchers' local files. These optional features use credentials that **you** create and enter yourself. Each is stored on your PC, encrypted with Windows DPAPI for your user account, and is never shared, sent anywhere other than the service it belongs to, or included in backups. Game Lobby never ships a shared key.
 
 | Feature | What you need | Where to enter it |
 | --- | --- | --- |
-| Cover art from SteamGridDB | A free SteamGridDB account and API key from [steamgriddb.com/profile/preferences/api](https://www.steamgriddb.com/profile/preferences/api) | **Settings → SteamGridDB** |
-| Steam owned-games import | Your SteamID64 and a Steam Web API key from [steamcommunity.com/dev/apikey](https://steamcommunity.com/dev/apikey); your profile's game details must be public | **Settings → Libraries** |
-| Epic owned-games import | The [Legendary](https://github.com/legendary-gl/legendary) CLI, installed and signed in by you | **Settings → Libraries** (select its executable) |
-| GOG owned games | GOG Galaxy installed; detected automatically, or select its database file | **Settings → Libraries** |
+| Cover art from SteamGridDB | A free SteamGridDB account and API key from [steamgriddb.com/profile/preferences/api](https://www.steamgriddb.com/profile/preferences/api) | **Settings → Appearance → Cover art** |
+| Game details from IGDB (description, genres, developers, publishers, ratings) | Your own Twitch developer application from [dev.twitch.tv/console](https://dev.twitch.tv/console): its **Client ID** and a **Client Secret** | **Settings → Playtime and Stats → Metadata provider** |
+| Steam | Nothing: installed games are detected automatically | **Settings → Libraries** (turn the store on or off) |
+| GOG | Nothing: GOG Galaxy's local database is detected automatically | **Settings → Libraries** (turn the store on or off) |
 
 Keep your keys private: don't paste them into issues, screenshots or logs.
 
@@ -40,7 +40,8 @@ Keep your keys private: don't paste them into issues, screenshots or logs.
 Game Lobby talks to these services directly from your PC, using your own credentials where needed. By using a feature, you use that service under its own terms.
 
 - **SteamGridDB** (cover art, heroes, logos): community-made artwork; copyright belongs to its creators. Use is limited to personal, non-commercial use under the [SteamGridDB Terms of Use](https://www.steamgriddb.com/terms). Game Lobby fetches art on demand, spaces out bulk requests, and only caches images on your PC.
-- **Steam** (store artwork CDN, optional Web API import): artwork belongs to Valve and the games' publishers. The Steam Web API is used under the [Steam Web API Terms of Use](https://steamcommunity.com/dev/apiterms) with your own key.
+- **IGDB** (game descriptions, genres, companies, ratings): game data from [IGDB.com](https://www.igdb.com/), requested with your own Twitch application under the [Twitch Developer Services Agreement](https://www.twitch.tv/p/legal/developer-agreement/) and IGDB's terms. Game Lobby shows the "Game data from IGDB.com" attribution wherever it displays this data, spaces requests to stay within IGDB's rate limit, and caches results only on your PC (refreshed after 30 days). The access token is kept in memory only.
+- **Steam** (store artwork CDN): artwork belongs to Valve and the games' publishers.
 - **Local launchers** (Steam, Epic, GOG Galaxy, Xbox, EA app, Battle.net, Ubisoft Connect, Amazon Games, itch.io): Game Lobby reads their local install data and opens their own launch links; it doesn't sign in to them.
 
 Downloaded artwork is cached only in your local data folder. It is never committed to this repository or bundled in the installer.
@@ -74,14 +75,14 @@ The Windows scanners support these sources:
 
 | Store | Current import method |
 | --- | --- |
-| Steam | Installed `appmanifest_*.acf` files; optional owned-game import through Steam Web API |
-| Epic Games | Installed `.item` manifests; optional owned-game import through the Legendary CLI |
+| Steam | Auto-detected installed games from `appmanifest_*.acf` files |
+| Epic Games | Auto-detected installed games from the Epic Games Launcher `.item` manifests |
 | GOG | Owned titles from the local GOG Galaxy database, with installed state when available |
 | EA app, Battle.net, Ubisoft Connect, Amazon Games | Best-effort installed-game discovery from Windows registry and uninstall records |
 | itch.io | Installed games found in the local itch app folders |
 | Xbox / Microsoft Store | Best-effort installed game-package scan; package-name matching can miss games |
 
-To import Steam ownership, enter a SteamID64 and Web API key in **Settings → Libraries**. Steam must make the profile's game details public for the API to return the library. The key is encrypted with Windows DPAPI for your user account. For Epic ownership, install and sign in to [Legendary](https://github.com/legendary-gl/legendary), then select its executable in the same settings page. GOG Galaxy is auto-detected when possible; otherwise, select its database file.
+All stores are detected automatically; no store accounts or keys are used. **Settings → Libraries** shows which stores and launchers were found on this PC, lets you turn each one off, and sets the scan interval. In the library, **Sort → Library** orders games by store, then title.
 
 Scanning combines routes when their stable source and external app identity match. Games with the same title remain separate unless a source provides a shared identity; use **Link another game** in a game's detail panel to manually combine cross-store duplicates. This avoids merging unrelated games such as different releases with identical names. Open a game's detail panel to choose **Play from** a particular store. Installed discovery for the other listed stores is local-only; those integrations do not retrieve complete online account catalogs.
 

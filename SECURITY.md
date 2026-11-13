@@ -22,7 +22,7 @@ Examples of issues we want to hear about:
 
 - running an unintended program, or passing extra arguments to one, through launching, shortcuts, emulator profiles or scanned files;
 - reading, changing or deleting files outside what the app needs;
-- leaking credentials (Steam, SteamGridDB or other API keys) or other personal data;
+- leaking credentials (SteamGridDB keys, IGDB/Twitch client secrets or other API keys) or other personal data;
 - bypassing the update signature check or the download host allow-lists;
 - code execution in the app's window, for example through themes, release notes or game metadata.
 

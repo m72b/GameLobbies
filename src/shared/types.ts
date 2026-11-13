@@ -21,8 +21,14 @@ export interface GameRoute { sourceId: string; store: Store; appId?: string; lau
 export interface Game { id: string; title: string; cover?: string; defaultCover?: string; store: Store; genre?: string; playtimeMinutes: number; playtimeSeconds?: number; lastPlayed?: number; hidden: boolean; favorite: boolean; routes: GameRoute[] }
 /** `library.scan()` result. `local` is the library folder part, present when any folder was scanned (store scans and folder scans run side by side). */
 export interface LibraryStats { total: number; imported?: number; errors?: string[]; scannedAt?: number; local?: LocalScanSummary }
-export interface LibraryConnections { steamId: string; steamApiKeySet: boolean; legendaryPath: string; gogDatabasePath: string }
-export interface LibraryConnectionInput { steamId: string; steamApiKey?: string; legendaryPath: string; gogDatabasePath: string }
+/**
+ * A store or launcher Game Lobby scans automatically (`library.stores()`). `id` is what
+ * `Settings.disabledStores` holds; `found` is the number of installed games the last scan found
+ * (absent before the first scan); `error` is set when the last scan could not read it.
+ */
+export interface StoreStatus { id: StoreId; name: string; enabled: boolean; found?: number; error?: string; scannedAt?: number }
+export const storeIds = ['steam', 'epic', 'gog', 'ea', 'battlenet', 'ubisoft', 'amazon', 'itch', 'xbox'] as const
+export type StoreId = typeof storeIds[number]
 export interface ThemeTokens { name: string; bg: string; surface: string; surface2: string; accent: string; text: string; muted: string; radius: string; gap: string; font: string; hover: string; backgroundImage?: string }
 export interface Settings { scanIntervalHours: number; posterWidth: number; showBadges: boolean; animations: boolean; tracking: boolean; theme: ThemeTokens; themeUrl?: string; themeName?: string; /** Fetch missing covers from SteamGridDB after each library scan (needs a key). Default true. */ steamGridDbAutoFetch: boolean
   /** Library shows only games with an installed route. UI-only filter. Default true. */
@@ -48,7 +54,9 @@ export interface Settings { scanIntervalHours: number; posterWidth: number; show
    */
   trackingExcludedGameIds: string[]
   /** Check for a new release about 10 s after startup, at most once a day. Never installs without a click. Default true. */
-  autoCheckUpdates: boolean }
+  autoCheckUpdates: boolean
+  /** Stores that library scans skip (distinct `StoreId`s). Default []. */
+  disabledStores: StoreId[] }
 /** Grid styles accepted by `Settings.steamGridDbStyles` (the backend rejects anything else). */
 export const steamGridDbStyles = ['alternate', 'blurred', 'white_logo', 'material', 'no_logo'] as const
 export type SteamGridDbStyle = typeof steamGridDbStyles[number]
@@ -375,7 +383,7 @@ export interface UpdateInfo { available: boolean; currentVersion: string; versio
 /** `updates.onProgress`: bytes downloaded so far; `total` when the server sent a size. Throttled. */
 export interface UpdateProgress { downloaded: number; total?: number }
 /** Settings pages `settings.open(section)` can show. */
-export type SettingsSection = 'updates'
+export type SettingsSection = 'updates' | 'cover-art' | 'metadata'
 /**
  * Signed updates (all work happens in the backend; one check or install at a time, a concurrent
  * call rejects).
@@ -439,7 +447,7 @@ export interface IgdbAPI {
 }
 export interface LobbyAPI {
   window: { minimize(): Promise<void>; toggleMaximize(): Promise<void>; close(): Promise<void>; isMaximized(): Promise<boolean> }
-  library: { list(): Promise<Game[]>; scan(): Promise<LibraryStats>; launch(id: string, route?: number): Promise<void>; save(game: Partial<Game> & { id: string }): Promise<Game[]>; remove(id: string): Promise<Game[]>; merge(targetId: string, sourceId: string): Promise<Game[]>; resetPlaytime(): Promise<Game[]>; setCover(id: string, dataUrl: string | null): Promise<Game[]>; chooseCover(id: string): Promise<Game[]>; chooseInstallFolder(id: string): Promise<void>; add(title: string, target: string): Promise<Game[]>; connections(): Promise<LibraryConnections>; saveConnections(input: LibraryConnectionInput): Promise<LibraryConnections>; chooseLegendary(): Promise<string | null>; chooseGogDatabase(): Promise<string | null>; onChanged(callback: () => void): () => void
+  library: { list(): Promise<Game[]>; scan(): Promise<LibraryStats>; launch(id: string, route?: number): Promise<void>; save(game: Partial<Game> & { id: string }): Promise<Game[]>; remove(id: string): Promise<Game[]>; merge(targetId: string, sourceId: string): Promise<Game[]>; resetPlaytime(): Promise<Game[]>; setCover(id: string, dataUrl: string | null): Promise<Game[]>; chooseCover(id: string): Promise<Game[]>; chooseInstallFolder(id: string): Promise<void>; add(title: string, target: string): Promise<Game[]>; stores(): Promise<StoreStatus[]>; onChanged(callback: () => void): () => void
     /** Sets the emulator of a `rom` route (`routeIndex` into `game.routes`); `null` = automatic. The profile must exist; other route kinds are rejected. Returns the library. */
     setEmulator(gameId: string, routeIndex: number, emulatorId: string | null): Promise<Game[]>
     /**

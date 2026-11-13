@@ -1,16 +1,14 @@
 //! API keys stored DPAPI-encrypted (current Windows user) in the `secrets` table.
 //!
 //! Plaintext keys never leave the backend: the renderer only ever sees `…Set: bool` flags,
-//! and no key is written to logs, error messages or URLs (except the Steam Web API, which
-//! only accepts its key as a query parameter).
+//! and no key is written to logs, error messages or URLs.
 
 use crate::db;
 use crate::state::AppState;
 use anyhow::{anyhow, bail, Result};
 
-/// Stored under a new key: the Electron build's `safeStorage` blobs can't be read here,
-/// so users re-enter their Steam API key once after upgrading.
-const STEAM_API_KEY: &str = "steam-api-key-dpapi";
+/// Secret names of removed features, deleted by the database migration.
+pub const RETIRED_SECRETS: &[&str] = &["steam-api-key-dpapi"];
 const STEAMGRIDDB_API_KEY: &str = "steamgriddb-api-key-dpapi";
 const IGDB_CLIENT_ID: &str = "igdb-client-id-dpapi";
 const IGDB_CLIENT_SECRET: &str = "igdb-client-secret-dpapi";
@@ -36,26 +34,6 @@ fn write(state: &AppState, name: &str, service: &str, key: &str) -> Result<()> {
         anyhow!("Windows secure storage is unavailable; the {service} API key was not saved.")
     })?;
     db::write_secret(&state.db.lock(), name, &sealed)
-}
-
-// ---------------------------------------------------------------------------
-// Steam Web API
-
-pub fn has_steam_api_key(state: &AppState) -> Result<bool> {
-    has(state, STEAM_API_KEY)
-}
-
-pub fn get_steam_api_key(state: &AppState) -> Result<Option<String>> {
-    read(state, STEAM_API_KEY, "Steam API")
-}
-
-/// An empty value keeps the stored key (the connections form leaves the field blank).
-pub fn set_steam_api_key(state: &AppState, value: &str) -> Result<()> {
-    let key = value.trim();
-    if key.is_empty() {
-        return Ok(());
-    }
-    write(state, STEAM_API_KEY, "Steam", key)
 }
 
 // ---------------------------------------------------------------------------

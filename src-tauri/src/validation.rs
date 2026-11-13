@@ -80,7 +80,10 @@ const SETTINGS_KEYS: &[&str] = &[
     "detectExternalLaunches",
     "trackingExcludedGameIds",
     "autoCheckUpdates",
+    "disabledStores",
 ];
+/// Settings keys of older versions that are dropped (not rejected) when a backup is imported.
+const RETIRED_SETTINGS_KEYS: &[&str] = &["steamId", "steamApiKey", "legendaryPath"];
 const EMULATOR_KEYS: &[&str] = &[
     "id",
     "name",
@@ -96,9 +99,17 @@ const EMULATOR_KEYS: &[&str] = &[
     "needsConfiguration",
     "addedAt",
 ];
-const CONNECTION_KEYS: &[&str] = &["steamId", "steamApiKey", "legendaryPath", "gogDatabasePath"];
 const PLUGIN_KEYS: &[&str] = &["id", "name", "version", "kind", "store", "manifestFolder"];
 const BACKUP_KEYS: &[&str] = &["games", "settings", "emulators", "gamePageCustom"];
+/// Top-level backup keys of older versions (library connections and store accounts) that are
+/// ignored on import.
+const RETIRED_BACKUP_KEYS: &[&str] = &[
+    "connections",
+    "libraryConnections",
+    "steamId",
+    "steamApiKey",
+    "legendaryPath",
+];
 const PAGE_CUSTOM_KEYS: &[&str] = &["gameId", "hero", "logo", "logoPosition", "logoScale"];
 /// Image types accepted for custom heroes and logos (`lobby-cover://` files).
 pub const PAGE_IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "webp", "avif"];
@@ -393,6 +404,9 @@ pub fn settings_patch(value: &Value) -> Result<Map<String, Value>> {
     if let Some(v) = map.get("trackingExcludedGameIds") {
         excluded_game_ids(v)?;
     }
+    if let Some(v) = map.get("disabledStores") {
+        store_ids(v)?;
+    }
     if let Some(t) = map.get("theme") {
         let t = theme(t)?;
         map.insert("theme".into(), serde_json::to_value(t)?);
@@ -484,20 +498,35 @@ pub fn emulator(value: &Value) -> Result<EmulatorProfile> {
     Ok(p)
 }
 
-pub fn connections(value: &Value) -> Result<LibraryConnectionInput> {
-    let c: LibraryConnectionInput = decode(
-        strict(value, CONNECTION_KEYS, "Library connections")?,
-        "Library connections",
-    )?;
-    max_len(&Some(c.steam_id.clone()), 64, "Steam ID")?;
-    max_len(&c.steam_api_key, 256, "Steam API key")?;
-    max_len(&Some(c.legendary_path.clone()), 8_192, "Legendary path")?;
-    max_len(
-        &Some(c.gog_database_path.clone()),
-        8_192,
-        "GOG database path",
-    )?;
-    Ok(c)
+/// `disabledStores`: distinct ids from [`STORE_SOURCES`].
+fn store_ids(value: &Value) -> Result<()> {
+    let list = value
+        .as_array()
+        .ok_or_else(|| anyhow!("disabledStores must be a list."))?;
+    let mut seen = std::collections::HashSet::new();
+    for item in list {
+        let id = item
+            .as_str()
+            .filter(|id| STORE_SOURCES.iter().any(|(known, _)| known == id))
+            .ok_or_else(|| anyhow!("disabledStores has an unknown store."))?;
+        if !seen.insert(id) {
+            bail!("disabledStores lists a store twice.");
+        }
+    }
+    Ok(())
+}
+
+/// Removes retired keys from an object (old backups), so they are ignored rather than rejected.
+fn without(value: &Value, retired: &[&str]) -> Value {
+    match value {
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .filter(|(key, _)| !retired.contains(&key.as_str()))
+                .map(|(key, v)| (key.clone(), v.clone()))
+                .collect(),
+        ),
+        other => other.clone(),
+    }
 }
 
 pub fn plugin_manifest(value: &Value) -> Result<PluginManifest> {
@@ -610,7 +639,7 @@ pub fn page_custom_entry(value: &Value) -> Result<GamePageCustomEntry> {
 }
 
 pub fn backup(value: &Value) -> Result<Backup> {
-    let clean = strict(value, BACKUP_KEYS, "Backup")?;
+    let clean = strict(&without(value, RETIRED_BACKUP_KEYS), BACKUP_KEYS, "Backup")?;
     let games = clean
         .get("games")
         .and_then(Value::as_array)
@@ -619,7 +648,10 @@ pub fn backup(value: &Value) -> Result<Backup> {
         bail!("Backup has too many games.");
     }
     let games = games.iter().map(game).collect::<Result<Vec<_>>>()?;
-    let settings = clean.get("settings").map(settings).transpose()?;
+    let settings = clean
+        .get("settings")
+        .map(|s| settings(&without(s, RETIRED_SETTINGS_KEYS)))
+        .transpose()?;
     let emulators = match clean.get("emulators") {
         Some(Value::Array(list)) if list.len() <= 1_000 => {
             Some(list.iter().map(emulator).collect::<Result<Vec<_>>>()?)
@@ -688,6 +720,17 @@ mod tests {
             game_patch(&json!({ "id": "x", "routes": [with(route(), "extra", json!(1))] }))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn disabled_stores_must_be_known_and_distinct() {
+        assert!(settings_patch(&json!({ "disabledStores": ["steam", "xbox"] })).is_ok());
+        assert!(settings_patch(&json!({ "disabledStores": [] })).is_ok());
+        assert!(settings_patch(&json!({ "disabledStores": ["legendary"] })).is_err());
+        assert!(settings_patch(&json!({ "disabledStores": ["gog", "gog"] })).is_err());
+        assert!(settings_patch(&json!({ "disabledStores": "steam" })).is_err());
+        // The retired account fields are rejected when saving settings directly.
+        assert!(settings_patch(&json!({ "steamApiKey": "x" })).is_err());
     }
 
     #[test]
