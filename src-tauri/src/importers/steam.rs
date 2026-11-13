@@ -48,6 +48,31 @@ fn registry_steam_path() -> Result<Option<String>> {
     Ok(None)
 }
 
+/// The Steam client's own folders (where `userdata` lives): the usual install paths that exist
+/// plus the registry's `SteamPath`. Never fails; an unreadable registry just adds nothing.
+pub fn steam_client_dirs() -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    let candidates = [
+        r"C:\Program Files (x86)\Steam".to_string(),
+        r"C:\Program Files\Steam".to_string(),
+    ];
+    let registry = registry_steam_path()
+        .ok()
+        .flatten()
+        .map(|p| p.trim().replace('/', "\\"));
+    for path in candidates.into_iter().chain(registry) {
+        let key = path.to_lowercase();
+        if Path::new(&path).is_dir()
+            && !dirs
+                .iter()
+                .any(|d| d.to_string_lossy().to_lowercase() == key)
+        {
+            dirs.push(PathBuf::from(path));
+        }
+    }
+    dirs
+}
+
 /// Steam client folders and every Steam library folder (`libraryfolders.vdf`).
 pub fn steam_roots() -> Result<Vec<PathBuf>> {
     let mut roots: Vec<PathBuf> = Vec::new();

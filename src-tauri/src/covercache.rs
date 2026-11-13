@@ -809,6 +809,8 @@ pub fn clean_up(state: &AppState) {
     if let Err(e) = sweep(&state.db.lock(), &state.covers_dir()) {
         eprintln!("Could not clean up the cover cache: {e:#}");
     }
+    // Games removed or merged may also leave screenshots behind (their own folder).
+    crate::screenshots::clean_up(state);
 }
 
 /// Starts a background pass after `delay`. If one is running, it runs once more when done.
@@ -834,6 +836,10 @@ pub fn spawn_startup(app: &AppHandle) {
             if let Err(e) = sweep_files(&conn, &covers_dir).and_then(|_| sweep(&conn, &covers_dir))
             {
                 eprintln!("Could not clean up the cover cache: {e:#}");
+            }
+            let shots = state.screenshots_dir();
+            if let Err(e) = crate::screenshots::sweep_files(&conn, &shots) {
+                eprintln!("Could not clean up screenshots: {e:#}");
             }
         }
         run_until_idle(&app).await;

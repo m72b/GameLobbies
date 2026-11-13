@@ -16,6 +16,7 @@ mod platform;
 mod review;
 mod roots;
 mod scan;
+mod screenshots;
 mod secrets;
 mod state;
 mod steamgriddb;
@@ -105,6 +106,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(updater::Updates::default())
         .register_uri_scheme_protocol("lobby-cover", cover_protocol)
+        .register_uri_scheme_protocol("lobby-shot", screenshots::protocol)
         .setup(|app| {
             let data_dir = match data_dir_override() {
                 Some(dir) => {
@@ -210,6 +212,11 @@ pub fn run() {
             commands::art_set_logo_layout,
             commands::steamgriddb_search_heroes,
             commands::steamgriddb_search_logos,
+            screenshots::screenshots_list,
+            screenshots::screenshots_add,
+            screenshots::screenshots_import_steam,
+            screenshots::screenshots_remove,
+            screenshots::screenshots_set_as_hero,
             commands::igdb_status,
             commands::igdb_save_credentials,
             commands::igdb_clear_credentials,

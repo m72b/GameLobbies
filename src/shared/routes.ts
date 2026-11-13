@@ -1,4 +1,4 @@
-import type { GameRoute } from './types'
+import type { Game, GameRoute } from './types'
 
 /**
  * Whether a route runs through an emulator, so the game page offers an emulator picker: ROM
@@ -8,4 +8,9 @@ import type { GameRoute } from './types'
 export function isEmulatorRoute(route: Pick<GameRoute, 'sourceId' | 'store' | 'system'>): boolean {
   if (route.sourceId === 'local' || route.system === 'pc') return false
   return route.sourceId === 'rom' || route.store === 'Emulator'
+}
+
+/** Whether a game has a Steam route with a numeric app id (Steam screenshots can be imported). */
+export function isSteamGame(game: Pick<Game, 'routes'>): boolean {
+  return game.routes.some(route => route.sourceId === 'steam' && /^\d{1,12}$/.test(route.appId ?? ''))
 }

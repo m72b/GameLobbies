@@ -348,7 +348,7 @@ export function SettingsApp() {
         </div>}
 
         {section === 'Backup and Sync' && <div className="settings-card">
-          <h3>Local backup</h3><p>Export titles, routes, settings and emulator profiles to JSON. Cover image files remain in the local covers folder.</p>
+          <h3>Local backup</h3><p>Export titles, routes, settings and emulator profiles to JSON. Image files are not included: covers and your screenshots stay in Game Lobby's local data folder, and screenshots must be added again on another PC.</p>
           <div className="settings-actions"><button className="primary-button" onClick={() => void exportBackup()}>Export library</button><button className="secondary-button" onClick={() => void importBackup()}>Import backup</button></div>
           <div className="feature-row"><span>Automatic backup</span><span className="coming-soon">COMING SOON</span></div>
         </div>}

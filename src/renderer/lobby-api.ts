@@ -123,6 +123,14 @@ const api: LobbyAPI = {
     setLogoLayout: (gameId, position, scale) => call('art_set_logo_layout', { gameId, position, scale }),
     onChanged: callback => subscribe<ArtChangedEvent>('art:changed', callback)
   },
+  screenshots: {
+    list: gameId => call('screenshots_list', { gameId }),
+    add: gameId => call('screenshots_add', { gameId }),
+    importSteam: gameId => call('screenshots_import_steam', { gameId }),
+    remove: id => call('screenshots_remove', { id }),
+    setAsHero: id => call('screenshots_set_as_hero', { id }),
+    onChanged: callback => subscribe<{ gameId: string }>('screenshots:changed', callback)
+  },
   igdb: {
     status: () => call('igdb_status'),
     saveCredentials: (clientId, clientSecret) => call('igdb_save_credentials', { clientId, clientSecret }),
@@ -151,7 +159,12 @@ const api: LobbyAPI = {
 
 window.lobby = api
 
-/** Custom covers are stored as `lobby-cover://name`; WebView2 serves them from this origin. */
+/**
+ * Custom covers are stored as `lobby-cover://name` and screenshots as `lobby-shot://dir/file`;
+ * WebView2 serves them from these origins.
+ */
 export function coverUrl(value: string) {
-  return value.startsWith('lobby-cover://') ? `http://lobby-cover.localhost/${value.slice('lobby-cover://'.length)}` : value
+  if (value.startsWith('lobby-cover://')) return `http://lobby-cover.localhost/${value.slice('lobby-cover://'.length)}`
+  if (value.startsWith('lobby-shot://')) return `http://lobby-shot.localhost/${value.slice('lobby-shot://'.length)}`
+  return value
 }

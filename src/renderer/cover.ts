@@ -9,7 +9,7 @@ export function coverSrc(value?: string): string | undefined {
   if (!value) return undefined
   try {
     const url = new URL(coverUrl(value), window.location.href)
-    if (url.protocol !== 'https:' && url.origin !== 'http://lobby-cover.localhost') return undefined
+    if (url.protocol !== 'https:' && url.origin !== 'http://lobby-cover.localhost' && url.origin !== 'http://lobby-shot.localhost') return undefined
     return url.href
   } catch { return undefined }
 }

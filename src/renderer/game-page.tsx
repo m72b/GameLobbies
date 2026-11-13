@@ -8,6 +8,7 @@ import { coverLayerStyle, coverStyle } from './cover'
 import { CoverLayer, useCover } from './poster'
 import { GenreBlock, IgdbAbout, IgdbPicker, IgdbRatings, useIgdb } from './igdb-details'
 import { isEmulatorRoute } from '../shared/routes'
+import { ImageWall, useScreenshots } from './image-wall'
 import { elapsedSeconds, formatClock, formatDate, formatSession, formatTime, formatTotal, useNow } from './format'
 import type { EmulatorCatalog, EmulatorProfile, Game, GamePageArt, PlaySession, PlayStats, RunningGame, Settings } from '../shared/types'
 
@@ -41,6 +42,7 @@ export function GamePage({ game, index, settings, running, libraryVersion, actio
   const [customizing, setCustomizing] = useState(false)
   const [igdbPicking, setIgdbPicking] = useState(false)
   const { view: igdb, setView: setIgdb } = useIgdb(game.id)
+  const { shots, setShots } = useScreenshots(game.id)
   const { layout, change: changeLayout, flush: flushLayout } = useLogoLayout(game.id, art.custom)
   const now = useNow(!!running || sessions.some(session => !session.endedAt))
 
@@ -185,6 +187,8 @@ export function GamePage({ game, index, settings, running, libraryVersion, actio
         </div>
         <IgdbAbout view={igdb} title={game.title} onSearch={() => setIgdbPicking(true)} />
       </section>
+
+      <ImageWall game={game} igdb={igdb} shots={shots} onShots={setShots} />
 
       <aside className="gp-side">
         <div className={'gp-poster cover-' + cover.status} style={coverStyle(game, index)}><CoverLayer src={cover.src} status={cover.status} />{cover.status !== 'loaded' && <span>{game.title}</span>}</div>

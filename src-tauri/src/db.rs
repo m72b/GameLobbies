@@ -67,7 +67,9 @@ fn migrate(db: &Connection, file: Option<&Path>) -> Result<()> {
         CREATE TABLE IF NOT EXISTS local_shortcut_ok(shortcutKey TEXT PRIMARY KEY,target TEXT NOT NULL,arguments TEXT NOT NULL,confirmedAt INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS cover_cache(url TEXT PRIMARY KEY,file TEXT NOT NULL,fetchedAt INTEGER NOT NULL);
         CREATE INDEX IF NOT EXISTS cover_cache_file ON cover_cache(file);
-        CREATE TABLE IF NOT EXISTS game_metadata(gameId TEXT PRIMARY KEY,igdbId INTEGER,json TEXT,fetchedAt INTEGER NOT NULL,source TEXT NOT NULL DEFAULT 'auto');",
+        CREATE TABLE IF NOT EXISTS game_metadata(gameId TEXT PRIMARY KEY,igdbId INTEGER,json TEXT,fetchedAt INTEGER NOT NULL,source TEXT NOT NULL DEFAULT 'auto');
+        CREATE TABLE IF NOT EXISTS game_screenshots(id TEXT PRIMARY KEY,gameId TEXT NOT NULL,file TEXT NOT NULL,hash TEXT NOT NULL,width INTEGER NOT NULL,height INTEGER NOT NULL,addedAt INTEGER NOT NULL,source TEXT NOT NULL DEFAULT 'user',originalPath TEXT,UNIQUE(gameId,hash));
+        CREATE INDEX IF NOT EXISTS game_screenshots_game ON game_screenshots(gameId,addedAt);",
         GAMES_TABLE.replace("CREATE TABLE games", "CREATE TABLE IF NOT EXISTS games")
     ))?;
     let columns: HashSet<String> = db
@@ -636,7 +638,8 @@ const LOCAL_ONLY_SOURCES: [&str; 6] = [
 
 /// Ids of games with a page customization (loaded once per reconcile).
 fn customized_game_ids(db: &Connection) -> Result<HashSet<String>> {
-    let mut stmt = db.prepare("SELECT gameId FROM game_page_custom")?;
+    let mut stmt = db
+        .prepare("SELECT gameId FROM game_page_custom UNION SELECT gameId FROM game_screenshots")?;
     let ids = stmt
         .query_map([], |row| row.get(0))?
         .collect::<rusqlite::Result<_>>()?;
@@ -796,6 +799,7 @@ fn delete_game_rows(db: &Connection, id: &str) -> Result<()> {
         "DELETE FROM game_art WHERE gameId=?",
         "DELETE FROM game_page_custom WHERE gameId=?",
         "DELETE FROM game_metadata WHERE gameId=?",
+        "DELETE FROM game_screenshots WHERE gameId=?",
         "DELETE FROM games WHERE id=?",
     ] {
         db.execute(sql, [id])?;
@@ -875,6 +879,12 @@ pub fn merge_games(db: &mut Connection, target_id: &str, source_id: &str) -> Res
     )?;
     tx.execute(
         "UPDATE OR IGNORE game_metadata SET gameId=?1 WHERE gameId=?2 AND source='user'",
+        params![target_id, source_id],
+    )?;
+    // Screenshots move over; a picture both games have is kept once (the target's row). The
+    // files stay where they are; unreferenced ones go with `screenshots::sweep_files`.
+    tx.execute(
+        "UPDATE OR IGNORE game_screenshots SET gameId=?1 WHERE gameId=?2",
         params![target_id, source_id],
     )?;
     delete_game_rows(&tx, source_id)?;

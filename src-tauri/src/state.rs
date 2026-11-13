@@ -26,4 +26,9 @@ impl AppState {
     pub fn covers_dir(&self) -> PathBuf {
         self.data_dir.join("covers")
     }
+
+    /// The user's screenshots (see `screenshots`); the cover cache never touches it.
+    pub fn screenshots_dir(&self) -> PathBuf {
+        self.data_dir.join("screenshots")
+    }
 }

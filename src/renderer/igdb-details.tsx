@@ -6,9 +6,8 @@ import { ChevronLeft, ChevronRight, X } from 'lucide-react'
 // Bundled (SIL Open Font License), never loaded from the network: regular and bold only.
 import '@fontsource/quantico/400.css'
 import '@fontsource/quantico/700.css'
-import type { Game, IgdbImage, IgdbMetadataView, IgdbRating, IgdbSearchResult, IgdbTimeToBeat } from '../shared/types'
+import type { Game, IgdbMetadataView, IgdbRating, IgdbSearchResult, IgdbTimeToBeat } from '../shared/types'
 import { coverSrc, useCoverStatus } from './cover'
-import { CoverLayer } from './poster'
 
 const emptyView: IgdbMetadataView = { configured: false, pending: false, checked: false }
 
@@ -33,24 +32,17 @@ function TimeToBeat({ time, title }: { time: IgdbTimeToBeat; title: string }) {
   return <div className="gp-ttb">
     <div className="gp-ttb-head"><h3>Time to beat</h3>{time.count ? <small>{time.count.toLocaleString()} submission{time.count === 1 ? '' : 's'} on IGDB</small> : null}</div>
     <div className="gp-ttb-tiles">
-      {tiles.map(([label, value]) => <div key={label} className={'gp-ttb-tile' + (value ? '' : ' empty')}><span>{label}</span><b>{value ?? '–'}</b></div>)}
+      {tiles.map(([label, value]) => <div key={label} className={'gp-ttb-tile' + (value ? '' : ' is-missing')}><span>{label}</span><b>{value ?? '–'}</b></div>)}
     </div>
     <a className="external-link gp-ttb-link" href={hltbSearch(title)}>Search on HowLongToBeat</a>
   </div>
 }
 
-/** One thumbnail: a shimmer while loading, hidden when it fails. */
-function Thumb({ image, index, onOpen }: { image: IgdbImage; index: number; onOpen(index: number): void }) {
-  const src = coverSrc(image.thumb)
-  const status = useCoverStatus(src)
-  if (!src || status === 'error') return null
-  return <button type="button" className="gp-shot" onClick={() => onOpen(index)} aria-label={'Open ' + image.kind + ' ' + (index + 1)}>
-    <CoverLayer src={src} status={status} />
-  </button>
-}
+/** A picture the lightbox can show; `igdb` adds the IGDB attribution. */
+export interface LightboxImage { full: string; alt: string; igdb: boolean }
 
 /** Full-size picture with Esc to close and the arrow keys to move. */
-function Lightbox({ images, index, onIndex, onClose }: { images: IgdbImage[]; index: number; onIndex(index: number): void; onClose(): void }) {
+export function Lightbox({ images, index, onIndex, onClose }: { images: LightboxImage[]; index: number; onIndex(index: number): void; onClose(): void }) {
   const image = images[index]
   const src = coverSrc(image?.full)
   const status = useCoverStatus(src)
@@ -71,7 +63,7 @@ function Lightbox({ images, index, onIndex, onClose }: { images: IgdbImage[]; in
   return <div className="modal-scrim gp-lightbox" role="dialog" aria-label="Picture viewer" onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}>
     <div className="gp-lightbox-frame">
       {status === 'loading' && <div className="cover-shimmer" aria-hidden="true" />}
-      {src && <img key={src} src={src} alt={image.kind === 'artwork' ? 'Artwork' : 'Screenshot'} className={status === 'loaded' ? 'loaded' : ''} />}
+      {src && <img key={src} src={src} alt={image.alt} className={status === 'loaded' ? 'loaded' : ''} />}
       {status === 'error' && <div className="gp-lightbox-error">This picture could not be loaded.</div>}
     </div>
     {images.length > 1 && <>
@@ -79,7 +71,7 @@ function Lightbox({ images, index, onIndex, onClose }: { images: IgdbImage[]; in
       <button type="button" className="gp-lightbox-nav next" aria-label="Next picture" onClick={() => step(1)}><ChevronRight size={22} /></button>
     </>}
     <button type="button" className="gp-lightbox-close" aria-label="Close" onClick={onClose}><X size={18} /></button>
-    <div className="gp-lightbox-meta">{index + 1} / {images.length} · <IgdbAttribution images /></div>
+    <div className="gp-lightbox-meta">{index + 1} / {images.length}{image.igdb && <> · <IgdbAttribution images /></>}</div>
   </div>
 }
 
@@ -107,11 +99,9 @@ function names(list: string[]) {
 /** Left column, under Activity: description and facts. Renders nothing without data, except a quiet hint. */
 export function IgdbAbout({ view, title, onSearch }: { view: IgdbMetadataView; title: string; onSearch(): void }) {
   const [more, setMore] = useState(false)
-  const [open, setOpen] = useState<number | null>(null)
   const metadata = view.metadata
-  const images = view.images ?? []
-  useEffect(() => { setMore(false); setOpen(null) }, [metadata?.igdbId])
-  const closeLightbox = useCallback(() => setOpen(null), [])
+  const hasImages = (view.images ?? []).length > 0
+  useEffect(() => { setMore(false) }, [metadata?.igdbId])
   if (!metadata) {
     if (view.configured && view.checked && !view.pending) {
       return <div className="gp-igdb-hint muted-text">No IGDB match for this game.<button className="link-button" onClick={onSearch}>Search IGDB</button></div>
@@ -135,15 +125,11 @@ export function IgdbAbout({ view, title, onSearch }: { view: IgdbMetadataView; t
       {facts.map(([label, value]) => value ? <div key={label}><span>{label}</span><b>{value}</b></div> : null)}
     </div>}
     {view.timeToBeat && <TimeToBeat time={view.timeToBeat} title={metadata.name || title} />}
-    {images.length > 0 && <div className="gp-shots" role="list" aria-label="Screenshots and artwork">
-      {images.map((image, index) => <Thumb key={image.thumb} image={image} index={index} onOpen={setOpen} />)}
-    </div>}
     <div className="gp-igdb-links">
       {metadata.url && <a className="external-link" href={metadata.url}>View on IGDB</a>}
       <button className="link-button" onClick={onSearch} title={view.source === 'user' ? 'You chose this IGDB entry' : 'Matched automatically'}>Wrong game? Search IGDB</button>
-      <IgdbAttribution images={images.length > 0} />
+      <IgdbAttribution images={hasImages} />
     </div>
-    {open !== null && images.length > 0 && <Lightbox images={images} index={Math.min(open, images.length - 1)} onIndex={setOpen} onClose={closeLightbox} />}
   </section>
 }
 
