@@ -153,7 +153,7 @@ export interface LibraryRoot { id: string; kind: LibraryRootKind; path: string; 
 export interface LocalScanProgress { phase: 'emulators' | 'games' | 'library' | 'done'; root: string; processed: number; total?: number; current?: string }
 /** Result of a library folder scan (also pushed as `library-scan:finished`). `review`: open review items afterwards. `unsupportedSamples`: up to 20 skipped paths with reasons. */
 export interface LocalScanSummary { roots: RootScanOutcome[]; emulators: EmulatorScanCounts; games: GameScanCounts; review: number; unsupportedSamples: string[]; durationMs: number }
-export interface ReviewItemBase { id: string; status: 'open' | 'resolved'; resolution?: 'kept-separate' | 'linked' | 'ignored' | 'exe-chosen' | 'shortcut-confirmed' | 'dismissed'; rootId?: string; createdAt: number; updatedAt: number }
+export interface ReviewItemBase { id: string; status: 'open' | 'resolved'; resolution?: 'kept-separate' | 'linked' | 'ignored' | 'exe-chosen' | 'shortcut-confirmed' | 'dismissed' | 'repaired' | 'route-removed' | 'merged-routes'; rootId?: string; createdAt: number; updatedAt: number }
 /**
  * Something a scan won't decide on its own. `details` per `kind`:
  * - `duplicate`: different games with the same system and clean title (e.g. USA and Europe
@@ -173,6 +173,9 @@ export type ReviewItem = ReviewItemBase & (
   | { kind: 'duplicate'; details: { system: string; title: string; games: { gameId: string; title: string; paths: string[] }[] } }
   | { kind: 'ambiguous-exe'; details: { title: string; folder: string; candidates: string[]; rootId: string } }
   | { kind: 'unsupported' | 'unreadable'; details: { path: string; reason: string; rootId: string } }
+  | { kind: 'missing-file'; details: { gameId: string; title: string; routeId: string; sourceId: string; system: string | null; path: string; folder: boolean; status: 'missing' | 'offline'; drive: string | null; candidates: string[] } }
+  | { kind: 'health-duplicate'; details: { reasons: ('title' | 'store-id' | 'same-file')[]; games: { gameId: string; title: string; store: string; playtimeMinutes: number; paths: string[] }[] } }
+  | { kind: 'duplicate-route'; details: { gameId: string; title: string; routes: { store: string; target: string; installed?: boolean }[] } }
   | { kind: 'shortcut'; details: { title: string; shortcut: string; target: string; arguments: string; folder: string | null; rootId: string | null } }
 )
 /**
@@ -251,6 +254,18 @@ export interface EmulatorsAPI { list(): Promise<EmulatorProfile[]>; save(profile
  * - ignored() / unignore(path): game files and folders scans skip.
  * - onChanged(cb): items may have changed (after scans and resolutions).
  */
+/**
+ * Library health (items arrive through `review.list` as `missing-file`, `health-duplicate` and `duplicate-route`).
+ * Nothing here takes a path: a repair uses a location Game Lobby found itself (`useFound(id, index)` of
+ * `details.candidates`) or one the user picks in a native dialog (`locate`, same file type only). No file is
+ * ever deleted. Every call returns the open review items.
+ * - check(): looks for missing and moved files and for duplicates (also done quickly after each scan).
+ * - removeRoute(id): removes the launch route (the caller must have confirmed it with the user).
+ * - dismiss(id): "Ignore" / "Not duplicates" / "Keep both"; remembered.
+ * - merge(id, targetGameId?): merges a duplicate pair like `library.merge`. mergeRoutes(id): joins duplicate routes of one game.
+ */
+export interface HealthSummary { missing: number; offline: number; withSuggestions: number; duplicateGames: number; duplicateRoutes: number }
+export interface HealthAPI { check(): Promise<HealthSummary>; useFound(id: string, index: number): Promise<ReviewItem[]>; locate(id: string): Promise<ReviewItem[]>; removeRoute(id: string, confirmed: boolean): Promise<ReviewItem[]>; dismiss(id: string): Promise<ReviewItem[]>; merge(id: string, targetGameId?: string): Promise<ReviewItem[]>; mergeRoutes(id: string): Promise<ReviewItem[]> }
 export interface ReviewAPI { list(includeResolved?: boolean): Promise<ReviewItem[]>; resolve(id: string, resolution: ReviewResolution): Promise<ReviewItem[]>; ignored(): Promise<IgnoredPath[]>; unignore(path: string): Promise<IgnoredPath[]>; onChanged(callback: () => void): () => void }
 export interface PluginManifest { id: string; name: string; version: string; kind: 'library'; store: Store; manifestFolder?: string }
 /** A SteamGridDB poster candidate. `url`/`thumb` are https://*.steamgriddb.com images. */
@@ -517,6 +532,7 @@ export interface LobbyAPI {
   emulators: EmulatorsAPI
   roots: RootsAPI
   review: ReviewAPI
+  health: HealthAPI
   backup: { export(): Promise<string | null>; import(): Promise<number> }
   plugins: { list(): Promise<PluginManifest[]>; install(): Promise<PluginManifest[]> }
   steamGridDb: SteamGridDbAPI

@@ -6,6 +6,8 @@ mod commands;
 mod covercache;
 mod db;
 mod emulators;
+mod health;
+mod health_commands;
 mod igdb;
 mod importers;
 mod launch;
@@ -192,6 +194,13 @@ pub fn run() {
             local_commands::review_resolve,
             local_commands::review_ignored,
             local_commands::review_unignore,
+            health_commands::health_check,
+            health_commands::health_use_found,
+            health_commands::health_locate,
+            health_commands::health_remove_route,
+            health_commands::health_dismiss,
+            health_commands::health_merge,
+            health_commands::health_merge_routes,
             local_commands::library_set_emulator,
             local_commands::library_add_local_game,
             commands::plugins_list,

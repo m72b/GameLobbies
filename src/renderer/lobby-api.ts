@@ -88,6 +88,15 @@ const api: LobbyAPI = {
     unignore: path => call('review_unignore', { path }),
     onChanged: callback => subscribe('review:changed', () => callback())
   },
+  health: {
+    check: () => call('health_check'),
+    useFound: (id, index) => call('health_use_found', { id, index }),
+    locate: id => call('health_locate', { id }),
+    removeRoute: (id, confirmed) => call('health_remove_route', { id, confirmed }),
+    dismiss: id => call('health_dismiss', { id }),
+    merge: (id, targetGameId) => call('health_merge', { id, targetGameId: targetGameId ?? null }),
+    mergeRoutes: id => call('health_merge_routes', { id })
+  },
   backup: {
     export: () => call('backup_export'),
     import: () => call('backup_import')

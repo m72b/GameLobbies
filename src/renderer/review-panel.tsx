@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { HealthCheckCard, HealthItem, healthLabels, healthTitle, isHealthItem, type HealthKind } from './health-items'
 import type { IgnoredPath, ReviewItem, ReviewResolution } from '../shared/types'
 
 const errorText = (error: unknown) => error instanceof Error ? error.message : typeof error === 'string' ? error : 'Could not apply this decision'
@@ -49,8 +50,8 @@ function ShortcutItem({ item, apply, busy }: ItemProps<'shortcut'>) {
   </>
 }
 
-const kindLabels: Record<ReviewItem['kind'], string> = { duplicate: 'Possible duplicate', 'ambiguous-exe': 'Choose executable', unsupported: 'Unsupported', unreadable: 'Unreadable folder', shortcut: 'Confirm shortcut' }
-const itemTitle = (item: ReviewItem) => item.kind === 'duplicate' ? item.details.title + ' · ' + item.details.system : item.kind === 'ambiguous-exe' || item.kind === 'shortcut' ? item.details.title : item.details.path.split(/[\\/]/).filter(Boolean).pop() ?? item.details.path
+const kindLabels: Record<Exclude<ReviewItem['kind'], HealthKind>, string> = { duplicate: 'Possible duplicate', 'ambiguous-exe': 'Choose executable', unsupported: 'Unsupported', unreadable: 'Unreadable folder', shortcut: 'Confirm shortcut' }
+const itemTitle = (item: ReviewItem) => isHealthItem(item) ? healthTitle(item) : item.kind === 'duplicate' ? item.details.title + ' · ' + item.details.system : item.kind === 'ambiguous-exe' || item.kind === 'shortcut' ? item.details.title : item.details.path.split(/[\\/]/).filter(Boolean).pop() ?? item.details.path
 
 export function ReviewSection({ say }: { say(text: string): void }) {
   const [items, setItems] = useState<ReviewItem[]>([])
@@ -70,18 +71,26 @@ export function ReviewSection({ say }: { say(text: string): void }) {
     catch (caught) { setError(errorText(caught)); void reload() }
     finally { setBusyId(null) }
   }
+  const run = async (id: string, action: () => Promise<ReviewItem[]>, done: string) => {
+    setBusyId(id); setError('')
+    try { setItems(await action()); say(done) }
+    catch (caught) { setError(errorText(caught)); void reload() }
+    finally { setBusyId(null) }
+  }
   const unignore = async (path: string) => {
     try { setIgnored(await window.lobby.review.unignore(path)); say('Restored. It will be included in the next scan.') }
     catch (caught) { setError(errorText(caught)) }
   }
   return <>
+    <HealthCheckCard say={say} onError={setError} />
     <div className="settings-card">
       <h3>Needs review ({items.length})</h3>
       <p className="muted-text">Things a scan won’t decide on its own. Rescans refresh these instead of adding copies.</p>
       {error && <div className="form-error" role="alert">{error}</div>}
       {loaded && items.length === 0 && <div className="empty-inline">Nothing to review. Duplicates, ambiguous games and unreadable folders show up here after a scan.</div>}
       {items.map(item => <div className="review-item" key={item.id}>
-        <div className="emu-name"><span className="status-pill">{kindLabels[item.kind]}</span><b>{itemTitle(item)}</b></div>
+        <div className="emu-name"><span className="status-pill">{isHealthItem(item) ? healthLabels[item.kind] : kindLabels[item.kind]}</span><b>{itemTitle(item)}</b></div>
+        {isHealthItem(item) && <HealthItem item={item} busy={busyId === item.id} run={(action, done) => void run(item.id, action, done)} />}
         {item.kind === 'duplicate' && <DuplicateItem item={item} busy={busyId === item.id} apply={resolution => void apply(item.id, resolution)} />}
         {item.kind === 'ambiguous-exe' && <ExeItem item={item} busy={busyId === item.id} apply={resolution => void apply(item.id, resolution)} />}
         {(item.kind === 'unsupported' || item.kind === 'unreadable') && <PathItem item={item} busy={busyId === item.id} apply={resolution => void apply(item.id, resolution)} />}
