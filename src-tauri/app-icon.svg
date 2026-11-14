@@ -1,10 +1,28 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
-  <rect width="1024" height="1024" rx="224" fill="#101113"/>
-  <rect x="72" y="72" width="880" height="880" rx="180" fill="#181a1d"/>
-  <g fill="none" stroke="#75d18a" stroke-width="56" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M352 400h320a160 160 0 0 1 154 117l38 140a80 80 0 0 1-135 75l-81-86H376l-81 86a80 80 0 0 1-135-75l38-140a160 160 0 0 1 154-117z"/>
-    <path d="M352 488v96M304 536h96"/>
+  <!-- "GL" monogram, same family as Tool Hub (TL) and the password manager (VL). -->
+  <defs>
+    <linearGradient id="green" gradientUnits="userSpaceOnUse" x1="250" y1="180" x2="800" y2="860">
+      <stop offset="0" stop-color="#86efac"/>
+      <stop offset="0.5" stop-color="#34d17a"/>
+      <stop offset="1" stop-color="#16a34a"/>
+    </linearGradient>
+    <mask id="g-gap" maskUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
+      <rect width="1024" height="1024" fill="#fff"/>
+      <rect x="452" y="200" width="200" height="268" fill="#000"/>
+    </mask>
+    <clipPath id="g-outline">
+      <ellipse cx="315" cy="505" rx="245" ry="293"/>
+    </clipPath>
+  </defs>
+  <g fill="url(#green)">
+    <!-- G: a thick bowl with the upper right cut away, a crossbar and a stem, clipped to the bowl's outline. -->
+    <g clip-path="url(#g-outline)">
+      <ellipse cx="315" cy="505" rx="181" ry="229" fill="none" stroke="url(#green)" stroke-width="128" mask="url(#g-gap)"/>
+      <rect x="340" y="468" width="240" height="112"/>
+      <rect x="440" y="468" width="140" height="300"/>
+    </g>
+    <!-- L -->
+    <rect x="620" y="212" width="128" height="586"/>
+    <rect x="620" y="685" width="334" height="113"/>
   </g>
-  <circle cx="648" cy="512" r="30" fill="#75d18a"/>
-  <circle cx="720" cy="584" r="30" fill="#75d18a"/>
 </svg>
