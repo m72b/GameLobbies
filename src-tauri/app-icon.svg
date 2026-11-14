@@ -1,28 +1,12 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
-  <!-- "GL" monogram, same family as Tool Hub (TL) and the password manager (VL). -->
+  <!-- "GL" monogram in the style of Tool Hub (TL) and the password manager (VL).
+       Letter outlines: Inter ExtraBold (SIL Open Font License), converted to paths. -->
   <defs>
     <linearGradient id="green" gradientUnits="userSpaceOnUse" x1="250" y1="180" x2="800" y2="860">
       <stop offset="0" stop-color="#86efac"/>
       <stop offset="0.5" stop-color="#34d17a"/>
       <stop offset="1" stop-color="#16a34a"/>
     </linearGradient>
-    <mask id="g-gap" maskUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
-      <rect width="1024" height="1024" fill="#fff"/>
-      <rect x="452" y="200" width="200" height="268" fill="#000"/>
-    </mask>
-    <clipPath id="g-outline">
-      <ellipse cx="315" cy="505" rx="245" ry="293"/>
-    </clipPath>
   </defs>
-  <g fill="url(#green)">
-    <!-- G: a thick bowl with the upper right cut away, a crossbar and a stem, clipped to the bowl's outline. -->
-    <g clip-path="url(#g-outline)">
-      <ellipse cx="315" cy="505" rx="181" ry="229" fill="none" stroke="url(#green)" stroke-width="128" mask="url(#g-gap)"/>
-      <rect x="340" y="468" width="240" height="112"/>
-      <rect x="440" y="468" width="140" height="300"/>
-    </g>
-    <!-- L -->
-    <rect x="620" y="212" width="128" height="586"/>
-    <rect x="620" y="685" width="334" height="113"/>
-  </g>
+  <path fill="url(#green)" d="M327.9 779.2L327.9 779.2Q252.0 779.2 194.4 746.1Q136.8 712.9 104.4 651.7Q72.0 590.5 72.0 506.4L72.0 506.4Q72.0 419.1 106.2 357.7Q140.4 296.3 197.8 264.0Q255.2 231.6 326.5 231.6L326.5 231.6Q372.6 231.6 412.2 244.8Q451.7 258.0 482.7 282.4Q513.7 306.7 532.8 339.8Q551.9 372.9 557.0 412.7L557.0 412.7L429.2 412.7Q424.5 396.2 415.8 383.1Q407.0 370.1 394.1 360.9Q381.2 351.8 364.9 347.2Q348.7 342.5 328.6 342.5L328.6 342.5Q290.0 342.5 261.2 361.5Q232.3 380.5 216.8 416.8Q201.2 453.1 201.2 504.6L201.2 504.6Q201.2 556.5 216.4 593.0Q231.6 629.6 260.3 648.9Q288.9 668.2 329.0 668.2L329.0 668.2Q365.1 668.2 390.0 656.4Q414.9 644.6 427.8 622.4L427.8 622.4Q439.9 601.6 440.6 574.1L440.6 574.1L334.0 574.1L334.0 481.4L562.7 481.4L562.7 551.5Q562.7 622.8 532.6 673.8Q502.6 724.8 449.4 752.0Q396.3 779.2 327.9 779.2ZM952.0 772L602.7 772L602.7 238.7L729.0 238.7L729.0 668.9L952.0 668.9L952.0 772Z"/>
 </svg>
