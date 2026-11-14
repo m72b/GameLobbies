@@ -217,7 +217,9 @@ const SHELL_CHARACTERS: [char; 7] = ['&', '|', '<', '>', '^', '%', '`'];
 ///   contain `..`.
 ///
 /// Each token is checked in parts split at `=` (`--core=cores\x.dll`). A part
-/// like `/fullscreen` (one leading `/`, no other separator) is an option, not a path. Control
+/// like `/fullscreen` (`/` then a letter, then only letters, digits, `_` and `-`) is an
+/// option, not a path; `/evil.dll` is a path. A placeholder may not be glued to an option or
+/// `@` (`-L{rom}`, `@{rom}`); see the residual risk noted in `check_template_piece`. Control
 /// characters, [`SHELL_CHARACTERS`] and non-ASCII characters other than letters and digits
 /// (look-alikes of `\ / : " .`) are refused. A template without `{rom}` stays valid:
 /// the ROM path is then appended as the last argument.
@@ -270,6 +272,18 @@ fn check_template_piece(piece: &str, folder: &str) -> Result<(), &'static str> {
             Ok(())
         };
     }
+    // A placeholder glued to a short option or a response-file prefix (`-L{rom}`,
+    // `/x{romdir}`, `@{rom}`) hands the game file to that option, or makes the emulator read
+    // it as a list of more arguments.
+    //
+    // Residual risk, by design: the placeholders always name the game file, and Game Lobby
+    // can't know what each emulator does with each option. A template that passes the game
+    // file to an option that loads code (`-L {rom}` as separate arguments, or a code-loading
+    // `--key={rom}`) would run that file as code. Such templates must be written by hand in
+    // Settings, and the game file itself comes from a scan or a native picker.
+    if piece.starts_with(['-', '/', '@']) && PLACEHOLDERS.iter().any(|p| piece.contains(p)) {
+        return Err("it glues the game file to an option (\"-L{rom}\") or to \"@\".");
+    }
     if piece.contains(r"\\") || piece.contains("//") {
         return Err("it names a network location.");
     }
@@ -291,7 +305,12 @@ fn check_template_piece(piece: &str, folder: &str) -> Result<(), &'static str> {
     if !piece.contains(is_separator) {
         return Ok(());
     }
-    if piece.starts_with('/') && !piece[1..].contains(is_separator) {
+    // `/fullscreen` is an option; `/evil.dll` is a file at the root of the drive.
+    let mut rest = piece.chars();
+    if rest.next() == Some('/')
+        && rest.next().is_some_and(|c| c.is_ascii_alphabetic())
+        && rest.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
         return Ok(());
     }
     let first = piece.chars().next().unwrap_or(' ');
@@ -732,6 +751,7 @@ mod tests {
             r"--cfg={romdir}\game.cfg",
             "-C Dolphin.Display.Fullscreen=True -b -e {rom}",
             "--set-volume=50",
+            "/f-1 /no_gui {rom}",
             // Letters and digits of any script are fine.
             "--profile=Pokémon_ポケモン {rom}",
         ] {
@@ -766,6 +786,16 @@ mod tests {
             "`calc`",
             "{rom}\ncalc.exe",
             "{rom}\tx",
+            // A root-relative file is not an option.
+            "-L /evil.dll {rom}",
+            "/evil.dll",
+            "/1x",
+            // The game file glued to an option or a response-file prefix.
+            "-L{rom}",
+            "-d{romdir}",
+            "/x{rom}",
+            "@{rom}",
+            "--core=-L{rom}",
             // Look-alikes that best-fit to \ / : " . on an ANSI command line.
             "-L C\u{FF1A}\u{FF3C}Users\u{FF3C}Me\u{FF3C}evil.dll {rom}",
             "-L \u{FF3C}\u{FF3C}attacker\u{FF3C}share\u{FF3C}evil.dll {rom}",
