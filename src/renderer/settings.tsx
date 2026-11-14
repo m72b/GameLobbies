@@ -10,6 +10,7 @@ import { EmulatorsSection, LibraryFoldersSection, useLocalScan } from './library
 import { ReviewSection } from './review-panel'
 import { UpdatesSection } from './updates-section'
 import { IgdbAttribution } from './igdb-details'
+import { IgdbSetup, cleanPaste } from './igdb-setup'
 import { createRoot } from 'react-dom/client'
 import './styles.css'
 
@@ -124,7 +125,7 @@ export function SettingsApp() {
   const saveIgdb = async () => {
     setIgdbBusy(true)
     try {
-      const result = await window.lobby.igdb.saveCredentials(igdbClientId.trim(), igdbSecret.trim())
+      const result = await window.lobby.igdb.saveCredentials(cleanPaste(igdbClientId), cleanPaste(igdbSecret))
       setIgdbStatus(result)
       setIgdbClientId(''); setIgdbSecret(''); setIgdbTest(null)
       say(result.clientIdSet && result.clientSecretSet ? 'IGDB credentials saved' : 'Saved. Enter both the Client ID and the Client Secret.')
@@ -305,22 +306,7 @@ export function SettingsApp() {
           <div className="settings-card" id="settings-metadata">
           <div className="sgdb-card plain">
             <h3>Metadata provider</h3>
-            <p>IGDB supplies the game descriptions, genres, developers, publishers and ratings for the game page. It uses a free Twitch developer application. <a className="external-link" href="https://dev.twitch.tv/console">Open the Twitch developer console</a></p>
-            <ol className="igdb-steps">
-              <li>Sign in at dev.twitch.tv/console (Twitch may ask you to turn on two-factor authentication).</li>
-              <li>Choose Register Your Application. Use any name, OAuth Redirect URL <code>http://localhost</code>, category Application Integration and client type Confidential.</li>
-              <li>Open the application and copy the Client ID. Choose New Secret and copy the Client Secret.</li>
-              <li>Paste both below and save. They are encrypted by Windows and are not shown again.</li>
-            </ol>
-            <form className="igdb-form" onSubmit={event => { event.preventDefault(); if (igdbClientId.trim() || igdbSecret.trim()) void saveIgdb() }}>
-              <label className="field-label">Client ID<input type="password" value={igdbClientId} onChange={event => setIgdbClientId(event.target.value)} placeholder={igdbStatus.clientIdSet ? 'Saved · enter a new Client ID to replace it' : 'Paste the Client ID'} autoComplete="off" spellCheck={false} maxLength={256} /></label>
-              <label className="field-label">Client Secret<input type="password" value={igdbSecret} onChange={event => setIgdbSecret(event.target.value)} placeholder={igdbStatus.clientSecretSet ? 'Saved · enter a new secret to replace it' : 'Paste the Client Secret'} autoComplete="new-password" spellCheck={false} maxLength={256} /></label>
-              <div className="settings-actions">
-                <button className="secondary-button" disabled={igdbBusy || (!igdbClientId.trim() && !igdbSecret.trim())}>Save</button>
-                {(igdbStatus.clientIdSet || igdbStatus.clientSecretSet) && <button type="button" className="secondary-button" disabled={igdbBusy} onClick={() => void clearIgdb()}>Clear credentials</button>}
-              </div>
-            </form>
-            <div className="sgdb-status-row"><span className="sgdb-status">{igdbConfigured ? 'Credentials saved' : igdbStatus.clientIdSet ? 'Client Secret missing' : igdbStatus.clientSecretSet ? 'Client ID missing' : 'Not configured'}</span><button className="secondary-button" disabled={!igdbConfigured || igdbTesting} onClick={() => void testIgdb()}>{igdbTesting ? 'Testing…' : 'Test connection'}</button>{igdbTest && <span className={'sgdb-test ' + (igdbTest.ok ? 'ok' : 'fail')}>{igdbTest.ok ? '✓' : '✗'} {igdbTest.message}</span>}</div>
+            <IgdbSetup status={igdbStatus} clientId={igdbClientId} secret={igdbSecret} busy={igdbBusy} testing={igdbTesting} test={igdbTest} onClientId={setIgdbClientId} onSecret={setIgdbSecret} onSave={() => void saveIgdb()} onClear={() => void clearIgdb()} onTest={() => void testIgdb()} />
             <h4 className="settings-subtitle">Whole library</h4>
             <p className="muted-text">Game pages load details from IGDB when you open them and refresh them after 30 days. You can also fetch details for every game now. It runs in the background at about four requests per second.</p>
             <div className="settings-actions">
@@ -330,7 +316,7 @@ export function SettingsApp() {
             {igdbProgress && <div className="sgdb-status igdb-progress" role="status">
               {igdbProgress.running ? 'Fetching ' : 'Done: '}{igdbProgress.done} of {igdbProgress.total} · {igdbProgress.updated} found · {igdbProgress.notFound} not found{igdbProgress.failed ? ' · ' + igdbProgress.failed + ' failed' : ''}{igdbProgress.message ? ' · ' + igdbProgress.message : ''}
             </div>}
-            <div className="igdb-links"><a className="external-link" href="https://api-docs.igdb.com/#account-creation">IGDB account setup guide</a><IgdbAttribution /></div>
+            <div className="igdb-links"><IgdbAttribution /></div>
           </div>
           </div>
           <div className="settings-card">
