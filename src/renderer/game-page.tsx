@@ -9,6 +9,8 @@ import { CoverLayer, useCover } from './poster'
 import { GenreBlock, IgdbAbout, IgdbPicker, IgdbRatings, useIgdb } from './igdb-details'
 import { isEmulatorRoute, routeLabel, routeTitle } from '../shared/routes'
 import { ImageWall, useScreenshots } from './image-wall'
+import { SessionHistory } from './session-history'
+import { formatRange } from '../shared/sessions'
 import { elapsedSeconds, formatClock, formatDate, formatSession, formatTime, formatTotal, useNow } from './format'
 import type { EmulatorCatalog, EmulatorProfile, Game, GamePageArt, GameRoute, PlaySession, PlayStats, RunningGame, Settings } from '../shared/types'
 
@@ -41,6 +43,7 @@ export function GamePage({ game, index, settings, running, libraryVersion, actio
   const [emuError, setEmuError] = useState('')
   const [customizing, setCustomizing] = useState(false)
   const [igdbPicking, setIgdbPicking] = useState(false)
+  const [historyOpen, setHistoryOpen] = useState(false)
   const { view: igdb, setView: setIgdb } = useIgdb(game.id)
   const { shots, setShots } = useScreenshots(game.id)
   const { layout, change: changeLayout, flush: flushLayout } = useLogoLayout(game.id, art.custom)
@@ -164,7 +167,8 @@ export function GamePage({ game, index, settings, running, libraryVersion, actio
 
     <div className="gp-body">
       <section className="gp-activity">
-        <h2>Activity</h2>
+        <div className="gp-activity-head"><h2>Activity</h2><button type="button" className="secondary-button" onClick={() => setHistoryOpen(true)}>All sessions</button></div>
+        {historyOpen && <SessionHistory gameId={game.id} title={game.title} running={running ? [running] : []} onClose={() => setHistoryOpen(false)} />}
         {sessions.length === 0 && !isRunning
           ? <div className="gp-empty">No play sessions recorded yet. Sessions appear here once you play{settings.tracking ? '.' : ' (tracking is off in settings).'}</div>
           : <ul className="gp-sessions">
@@ -175,10 +179,12 @@ export function GamePage({ game, index, settings, running, libraryVersion, actio
             </li>}
             {sessions.map(session => {
               const inProgress = !session.endedAt
+              // Only a session the tracker is running now counts up; any other keeps its saved length.
+              const live = inProgress && isRunning
               return <li key={session.id} className={inProgress ? 'live' : ''}>
-                <div><b>{formatDate(session.startedAt)}</b><small>{formatTime(session.startedAt)}</small></div>
+                <div><b>{formatDate(session.startedAt)}</b><small>{formatRange(session.startedAt, session.endedAt, formatTime)}{session.interrupted ? ' · Interrupted' : ''}{session.edited ? ' · Edited' : ''}</small></div>
                 <span className="gp-tag">{sourceLabel(session.source)}</span>
-                <span className="gp-dur">{inProgress ? <><span className="gp-live-dot" /> {formatClock(elapsedSeconds(session.startedAt, now))}</> : formatSession(session.seconds)}</span>
+                <span className="gp-dur">{live ? <><span className="gp-live-dot" /> {formatClock(elapsedSeconds(session.startedAt, now))}</> : formatSession(session.seconds)}</span>
               </li>
             })}
           </ul>}

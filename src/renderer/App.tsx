@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import Fuse from 'fuse.js'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { Boxes, Clock3, CloudDownload, EyeOff, Gamepad2, Heart, Library, ListFilter, MoreHorizontal, Pencil, Play, Plus, Search, Settings2, Star, X } from 'lucide-react'
+import { Boxes, Clock3, CloudDownload, EyeOff, Gamepad2, Heart, History, Library, ListFilter, MoreHorizontal, Pencil, Play, Plus, Search, Settings2, Star, X } from 'lucide-react'
 import { StoreIcon } from './store-icons'
 import type { Game, RunningGame, Settings, Store as StoreName, SteamGridDbCover, UpdateInfo } from '../shared/types'
 import { defaultSettings } from '../shared/defaults'
@@ -10,6 +10,7 @@ import { coverStyle } from './cover'
 import { CoverLayer, useCover } from './poster'
 import { CoverTiles, LoadMore, pickerCovers, useSgdbPages } from './cover-picker'
 import { GamePage, type GamePageActions } from './game-page'
+import { SessionHistory } from './session-history'
 import { elapsedSeconds, formatClock, useNow } from './format'
 
 type View = 'All Games' | 'Favorites' | 'Recently Played' | 'Hidden'
@@ -64,6 +65,7 @@ export default function App() {
   const [collapsed, setCollapsed] = useState(true)
   const [gridWidth, setGridWidth] = useState(1200)
   const [focusedId, setFocusedId] = useState<string | null>(null)
+  const [historyOpen, setHistoryOpen] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
   const filteredRef = useRef<Game[]>([])
@@ -398,6 +400,7 @@ export default function App() {
       <button className={'rail-button ' + (view === 'Favorites' ? 'active' : '')} onClick={() => setView('Favorites')} title="Favorites"><Heart /></button>
       <button className={'rail-button ' + (view === 'Recently Played' ? 'active' : '')} onClick={() => setView('Recently Played')} title="Recently played"><Clock3 /></button>
       <button className={'rail-button ' + (view === 'Hidden' ? 'active' : '')} onClick={() => setView('Hidden')} title="Hidden games"><EyeOff /></button>
+      <button className={'rail-button ' + (historyOpen ? 'active' : '')} onClick={() => setHistoryOpen(true)} title="Play history (all games)"><History /></button>
       <div className="rail-sep" />
       <div className="rail-stores">{railStores.map(item =>
         <button key={item} className={'rail-button mini ' + (store === item ? 'active' : '')} title={item} onClick={() => { setStore(store === item ? 'All Games' : item); setView('All Games') }}><StoreIcon store={item} size={16} /></button>
@@ -424,6 +427,7 @@ export default function App() {
       <div className="library-meta">
         <span>{filtered.length} GAMES</span><span className="meta-dot" />
         <button onClick={() => setView('Recently Played')}><ListFilter size={13} /> Recently played</button>
+        <button onClick={() => setHistoryOpen(true)}><History size={13} /> Play history</button>
         <label className="sort-control">Sort<select value={sortBy} onChange={event => setSortBy(event.target.value as SortBy)}><option value="title">Title</option><option value="lastPlayed">Last played</option><option value="playtime">Playtime</option><option value="library">Library</option></select></label>
         <span className="meta-spacer" />
         <div className="segmented" role="group" aria-label="Installed filter"><button className={onlyInstalled ? 'active' : ''} aria-pressed={onlyInstalled} onClick={() => void setInstalledFilter(true)}>Installed</button><button className={!onlyInstalled ? 'active' : ''} aria-pressed={!onlyInstalled} onClick={() => void setInstalledFilter(false)}>All</button></div>
@@ -462,6 +466,7 @@ export default function App() {
     {menu && <><div className="menu-dismiss" onMouseDown={() => setMenu(null)} /><div className="context-menu" style={{ left: Math.min(menu.x, window.innerWidth - 230), top: Math.min(menu.y, window.innerHeight - 330) }}>
       {menuOptions.map(option => <button key={option.action} disabled={option.disabled} className={(option.action === 'Remove' ? 'danger ' : '') + (option.disabled ? 'menu-item-disabled' : '')} onClick={() => { if (!option.disabled) void menuAction(option.action, menu.game) }}>{option.label}</button>)}
     </div></>}
+    {historyOpen && <SessionHistory running={running} onClose={() => setHistoryOpen(false)} />}
     {adding && <div className="modal-scrim"><form className="modal" onSubmit={addGame}>
       <div className="modal-head"><h2>Add a game</h2><button type="button" onClick={() => setAdding(false)}><X size={17} /></button></div>
       <label>Title<input required name="title" placeholder="Game title" autoFocus /></label>
