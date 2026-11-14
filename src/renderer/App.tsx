@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import Fuse from 'fuse.js'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { Boxes, Clock3, CloudDownload, EyeOff, Gamepad2, Heart, Library, ListFilter, MoreHorizontal, Pencil, Play, Plus, Search, Settings2, Star, X } from 'lucide-react'
+import { Boxes, Clock3, CloudDownload, EyeOff, Gamepad2, HardDrive, Heart, Library, ListFilter, MoreHorizontal, Pencil, Play, Plus, Search, Settings2, Star, X } from 'lucide-react'
 import { StoreIcon } from './store-icons'
 import type { Game, RunningGame, Settings, Store as StoreName, SteamGridDbCover, UpdateInfo } from '../shared/types'
 import { defaultSettings } from '../shared/defaults'
@@ -9,6 +9,8 @@ import { applyTheme } from './theme'
 import { coverStyle } from './cover'
 import { CoverLayer, useCover } from './poster'
 import { CoverTiles, LoadMore, pickerCovers, useSgdbPages } from './cover-picker'
+import { StorageView } from './storage-view'
+import { RecentShelf } from './recent-shelf'
 import { GamePage, type GamePageActions } from './game-page'
 import { elapsedSeconds, formatClock, useNow } from './format'
 
@@ -43,6 +45,7 @@ export default function App() {
   const [sortBy, setSortByState] = useState<SortBy>(storedSort)
   const setSortBy = (value: SortBy) => { setSortByState(value); rememberSort(value) }
   const [openId, setOpenId] = useState<string | null>(null)
+  const [storageOpen, setStorageOpen] = useState(false)
   const [running, setRunning] = useState<RunningGame[]>([])
   const [libraryVersion, setLibraryVersion] = useState(0)
   const savedScroll = useRef(0)
@@ -394,10 +397,11 @@ export default function App() {
       <button className="rail-button" onClick={() => setCollapsed(!collapsed)} title="Menu"><Boxes /></button>
       <button className="rail-button search-button" onClick={() => searchRef.current?.focus()} title="Search"><Search /></button>
       <div className="rail-sep" />
-      <button className={'rail-button ' + (view === 'All Games' ? 'active' : '')} onClick={() => { setView('All Games'); setStore('All Games') }} title="All games"><Library /></button>
-      <button className={'rail-button ' + (view === 'Favorites' ? 'active' : '')} onClick={() => setView('Favorites')} title="Favorites"><Heart /></button>
-      <button className={'rail-button ' + (view === 'Recently Played' ? 'active' : '')} onClick={() => setView('Recently Played')} title="Recently played"><Clock3 /></button>
-      <button className={'rail-button ' + (view === 'Hidden' ? 'active' : '')} onClick={() => setView('Hidden')} title="Hidden games"><EyeOff /></button>
+      <button className={'rail-button ' + (view === 'All Games' ? 'active' : '')} onClick={() => { setStorageOpen(false); setView('All Games'); setStore('All Games') }} title="All games"><Library /></button>
+      <button className={'rail-button ' + (view === 'Favorites' ? 'active' : '')} onClick={() => { setStorageOpen(false); setView('Favorites') }} title="Favorites"><Heart /></button>
+      <button className={'rail-button ' + (view === 'Recently Played' ? 'active' : '')} onClick={() => { setStorageOpen(false); setView('Recently Played') }} title="Recently played"><Clock3 /></button>
+      <button className={'rail-button ' + (view === 'Hidden' ? 'active' : '')} onClick={() => { setStorageOpen(false); setView('Hidden') }} title="Hidden games"><EyeOff /></button>
+      <button className={'rail-button ' + (storageOpen ? 'active' : '')} onClick={() => { setOpenId(null); setStorageOpen(!storageOpen) }} title="Storage"><HardDrive /></button>
       <div className="rail-sep" />
       <div className="rail-stores">{railStores.map(item =>
         <button key={item} className={'rail-button mini ' + (store === item ? 'active' : '')} title={item} onClick={() => { setStore(store === item ? 'All Games' : item); setView('All Games') }}><StoreIcon store={item} size={16} /></button>
@@ -411,7 +415,8 @@ export default function App() {
     </aside>
     <main className={'main' + (pageOpen ? ' page-open' : '')}>
       {openGameData && <GamePage game={openGameData} index={Math.max(0, games.findIndex(game => game.id === openGameData.id))} settings={settings} running={runningById.get(openGameData.id)} libraryVersion={libraryVersion} actions={pageActions} />}
-      {!pageOpen && <>
+      {!pageOpen && storageOpen && <StorageView notice={notice} onClose={() => setStorageOpen(false)} onOpen={id => { const game = games.find(item => item.id === id); if (game) { setStorageOpen(false); openGame(game) } }} />}
+      {!pageOpen && !storageOpen && <>
       <div className="toolbar">
         <div><div className="eyebrow">YOUR COLLECTION</div><h1>{view === 'All Games' ? (store === 'All Games' ? 'All games' : store) : view}</h1></div>
         <div className="toolbar-actions">
@@ -429,6 +434,7 @@ export default function App() {
         <div className="segmented" role="group" aria-label="Installed filter"><button className={onlyInstalled ? 'active' : ''} aria-pressed={onlyInstalled} onClick={() => void setInstalledFilter(true)}>Installed</button><button className={!onlyInstalled ? 'active' : ''} aria-pressed={!onlyInstalled} onClick={() => void setInstalledFilter(false)}>All</button></div>
         <button onClick={() => setView('Favorites')}><Star size={13} /> Favorites</button>
       </div>
+      {view === 'All Games' && store === 'All Games' && !query && <RecentShelf games={games} libraryVersion={libraryVersion} onOpen={openGame} />}
       <section className="grid-scroll" ref={scrollRef} onContextMenu={event => { if (!(event.target as HTMLElement).closest('.game-card')) event.preventDefault() }}>
         <div className="virtual-content" style={{ height: virtual.getTotalSize() }}>
           {virtual.getVirtualItems().map(row => {
