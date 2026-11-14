@@ -89,8 +89,6 @@ export function LoadMore({ shown, hasMore, loading, onMore, noun }: { shown: num
   </div>
 }
 
-export { previewKind }
-
 /** Candidates the picker can show with the user's animated setting (previews it can't play are left out). */
 export function pickerCovers(covers: SteamGridDbCover[], animated: boolean) {
   return covers.filter(cover => previewKind(cover.thumb, animated) !== null)
