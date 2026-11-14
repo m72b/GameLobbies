@@ -19,11 +19,6 @@ export function cssUrl(src: string) {
   return `url("${src.replace(/[\\"\r\n\f]/g, character => `\\${character}`)}")`
 }
 
-export function coverImage(value?: string) {
-  const src = coverSrc(value)
-  return src ? cssUrl(src) : undefined
-}
-
 /** The colored placeholder behind every poster; shown on its own while the image loads or when it fails. */
 export function coverStyle(game: Game, index: number): CSSProperties {
   const color = colors[index % colors.length]
