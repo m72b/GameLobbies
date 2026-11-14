@@ -12,6 +12,7 @@ mod launch;
 mod local;
 mod local_commands;
 mod localscan;
+mod picks;
 mod platform;
 mod review;
 mod roots;
@@ -139,6 +140,7 @@ pub fn run() {
                 local_scan_lock: tokio::sync::Mutex::new(()),
                 covers: Default::default(),
                 igdb: Default::default(),
+                picks: Default::default(),
             });
             scan::configure_schedule(app.handle(), hours);
             tracker::start(app.handle());

