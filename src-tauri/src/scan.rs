@@ -170,6 +170,8 @@ pub async fn scan_local(
     .await
     .map_err(|e| format!("{e}"))?
     .map_err(|e| format!("{e:#}"))?;
+    // Cheap health pass (missing files, duplicates; no search for moved files).
+    let _ = crate::health_commands::run_check(app, false).await;
     state.tracker.library_changed();
     let _ = app.emit("library:changed", ());
     let _ = app.emit("review:changed", ());
