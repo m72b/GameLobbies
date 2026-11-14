@@ -130,12 +130,10 @@ fn migrate(db: &Connection, file: Option<&Path>) -> Result<()> {
              COMMIT;"
         ))?;
     }
-    // Sessions still open belong to a previous run that ended without closing them (crash,
-    // power loss): they keep their last saved length and are closed at that point.
-    db.execute(
-        "UPDATE play_sessions SET endedAt=startedAt+seconds*1000 WHERE endedAt IS NULL",
-        [],
-    )?;
+    // Session history columns and tables. Sessions still open belong to a previous run that
+    // ended without closing them (crash, power loss): they keep their last saved length, are
+    // closed at that point and marked interrupted.
+    crate::sessions::migrate(db)?;
     db.execute(
         "INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)",
         params!["app", serde_json::to_string(&Settings::default())?],
@@ -932,7 +930,7 @@ pub fn close_session(db: &Connection, id: i64, ended_at: i64, seconds: i64) -> R
 /// A game's sessions, newest first.
 pub fn play_sessions(db: &Connection, game_id: &str, limit: i64) -> Result<Vec<PlaySession>> {
     let mut stmt = db.prepare(
-        "SELECT id,startedAt,endedAt,seconds,source FROM play_sessions WHERE gameId=? ORDER BY startedAt DESC,id DESC LIMIT ?",
+        "SELECT id,startedAt,endedAt,seconds,source,edited,interrupted FROM play_sessions WHERE gameId=? ORDER BY startedAt DESC,id DESC LIMIT ?",
     )?;
     let rows = stmt
         .query_map(params![game_id, limit], |row| {
@@ -942,6 +940,8 @@ pub fn play_sessions(db: &Connection, game_id: &str, limit: i64) -> Result<Vec<P
                 ended_at: row.get(2)?,
                 seconds: row.get(3)?,
                 source: row.get(4)?,
+                edited: row.get::<_, i64>(5)? != 0,
+                interrupted: row.get::<_, i64>(6)? != 0,
             })
         })?
         .collect::<rusqlite::Result<_>>()?;
@@ -1660,6 +1660,9 @@ pub fn restore_backup(db: &mut Connection, backup: &Backup) -> Result<usize> {
     // Entries for games that aren't in the library are skipped.
     for entry in backup.game_page_custom.iter().flatten() {
         put_page_custom(&tx, &entry.game_id, &entry.custom())?;
+    }
+    if let Some(sessions) = &backup.play_sessions {
+        crate::sessions::restore(&tx, sessions, now_ms())?;
     }
     tx.commit()?;
     Ok(backup.games.len())
@@ -2485,6 +2488,7 @@ mod tests {
             settings: None,
             emulators: None,
             game_page_custom: Some(all_page_custom(&conn).unwrap()),
+            play_sessions: None,
         };
         let text = serde_json::to_string(&backup).unwrap();
         let raw: Value = serde_json::from_str(&text).unwrap();
@@ -2613,6 +2617,7 @@ mod tests {
             settings: None,
             emulators: Some(vec![p.clone()]),
             game_page_custom: None,
+            play_sessions: None,
         })
         .unwrap();
         let parsed = crate::validation::backup(&text).unwrap();

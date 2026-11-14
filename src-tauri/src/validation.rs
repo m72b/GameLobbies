@@ -100,7 +100,13 @@ const EMULATOR_KEYS: &[&str] = &[
     "addedAt",
 ];
 const PLUGIN_KEYS: &[&str] = &["id", "name", "version", "kind", "store", "manifestFolder"];
-const BACKUP_KEYS: &[&str] = &["games", "settings", "emulators", "gamePageCustom"];
+const BACKUP_KEYS: &[&str] = &[
+    "games",
+    "settings",
+    "emulators",
+    "gamePageCustom",
+    "playSessions",
+];
 /// Top-level backup keys of older versions (library connections and store accounts) that are
 /// ignored on import.
 const RETIRED_BACKUP_KEYS: &[&str] = &[
@@ -803,11 +809,16 @@ pub fn backup(value: &Value) -> Result<Backup> {
         Some(_) => bail!("Backup game page customizations are invalid."),
         None => None,
     };
+    let play_sessions = clean
+        .get("playSessions")
+        .map(|list| crate::sessions::validate_backup(list, now_ms()))
+        .transpose()?;
     Ok(Backup {
         games,
         settings,
         emulators,
         game_page_custom,
+        play_sessions,
     })
 }
 
