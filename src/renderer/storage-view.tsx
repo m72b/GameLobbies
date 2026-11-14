@@ -13,13 +13,6 @@ function storedSort(): StorageSort {
   } catch { return 'size' }
 }
 
-const handoffText = (entry: StorageEntry) => {
-  const u = entry.uninstall!
-  if (u.kind === 'uninstall') return 'Open ' + u.launcher + "'s uninstall dialog for " + entry.title + '? Game Lobby does not delete anything itself.'
-  if (u.kind === 'library') return 'Open ' + u.launcher + ' so you can uninstall ' + entry.title + ' from its library? Game Lobby does not delete anything itself.'
-  return 'Open Windows Installed apps so you can uninstall ' + entry.title + '? Game Lobby does not delete anything itself.'
-}
-
 /** Installed games with their size on disk. Sizes come from the backend's cache; "Rescan sizes" measures again. */
 export function StorageView({ onOpen, onClose, notice }: { onOpen: (gameId: string) => void; onClose: () => void; notice: (message: string) => void }) {
   const [report, setReport] = useState<StorageReport | null>(null)
@@ -45,7 +38,7 @@ export function StorageView({ onOpen, onClose, notice }: { onOpen: (gameId: stri
     finally { setScanning(false); setProgress(null) }
   }
   const uninstall = async (entry: StorageEntry) => {
-    if (!entry.uninstall || !window.confirm(handoffText(entry))) return
+    if (!entry.uninstall) return  // the backend asks for confirmation in a native dialog
     try { await window.lobby.storage.uninstall(entry.gameId, entry.uninstall.routeIndex) }
     catch (error) { notice(error instanceof Error ? error.message : 'Could not open the launcher') }
   }

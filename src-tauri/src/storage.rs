@@ -17,7 +17,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::LazyLock;
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 
 type CmdResult<T> = Result<T, String>;
 
@@ -379,8 +379,24 @@ fn uninstall_info(game: &Game) -> Option<UninstallInfo> {
     })
 }
 
+/// The native confirmation text: which game, which launcher, and that nothing is deleted here.
+pub fn handoff_prompt(title: &str, h: &Handoff) -> String {
+    let what = match h.kind {
+        "uninstall" => format!("Open {}'s uninstall dialog for {title}?", h.launcher),
+        "library" => format!(
+            "Open {} so you can uninstall {title} from its library?",
+            h.launcher
+        ),
+        _ => format!("Open {} so you can uninstall {title}?", h.launcher),
+    };
+    format!("{what} Game Lobby does not delete anything itself.")
+}
+
+/// Opens the launcher's uninstall screen after a native confirmation naming the game and the
+/// launcher; the renderer only names the game and route.
 #[tauri::command]
 pub async fn storage_uninstall(
+    window: WebviewWindow,
     state: State<'_, AppState>,
     game_id: String,
     route_index: i64,
@@ -399,6 +415,10 @@ pub async fn storage_uninstall(
     // The scheme check of launch links does not cover ms-settings; that link is fixed text.
     if h.uri != URI_APPS {
         crate::launch::validate_launch_uri(&h.uri).map_err(err)?;
+    }
+    let prompt = handoff_prompt(&game.title, &h);
+    if !crate::local_commands::confirm_natively(&window, "Uninstall game", &prompt, "Open").await {
+        return Ok(());
     }
     platform::shell_open(h.uri).await.map_err(err)
 }
@@ -624,6 +644,17 @@ mod tests {
             installed: Some(true),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn the_confirmation_names_the_game_and_the_launcher() {
+        let steam = handoff_prompt("Hades", &handoff(&route("steam", Some("1"))).unwrap());
+        assert!(steam.contains("Hades") && steam.contains("Steam"), "{steam}");
+        let epic = handoff_prompt("Hades", &handoff(&route("epic", Some("x"))).unwrap());
+        assert!(epic.contains("Hades") && epic.contains("Epic Games Launcher"));
+        let other = handoff_prompt("Hades", &handoff(&route("local", None)).unwrap());
+        assert!(other.contains("Windows Installed apps"));
+        assert!(other.contains("does not delete anything"));
     }
 
     fn temp(name: &str) -> PathBuf {
