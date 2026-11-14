@@ -9,6 +9,8 @@ import { CoverLayer, useCover } from './poster'
 import { GenreBlock, IgdbAbout, IgdbPicker, IgdbRatings, useIgdb } from './igdb-details'
 import { isEmulatorRoute, routeLabel, routeTitle } from '../shared/routes'
 import { ImageWall, useScreenshots } from './image-wall'
+import { GameNotesSection, YourScore } from './game-notes'
+import { ControllerBadge, ControllerBlock, useGameInput } from './controller-info'
 import { elapsedSeconds, formatClock, formatDate, formatSession, formatTime, formatTotal, useNow } from './format'
 import type { EmulatorCatalog, EmulatorProfile, Game, GamePageArt, GameRoute, PlaySession, PlayStats, RunningGame, Settings } from '../shared/types'
 
@@ -43,6 +45,7 @@ export function GamePage({ game, index, settings, running, libraryVersion, actio
   const [igdbPicking, setIgdbPicking] = useState(false)
   const { view: igdb, setView: setIgdb } = useIgdb(game.id)
   const { shots, setShots } = useScreenshots(game.id)
+  const inputState = useGameInput(game.id)
   const { layout, change: changeLayout, flush: flushLayout } = useLogoLayout(game.id, art.custom)
   const now = useNow(!!running || sessions.some(session => !session.endedAt))
 
@@ -150,6 +153,7 @@ export function GamePage({ game, index, settings, running, libraryVersion, actio
         {settings.tracking && running && <span className="gp-live-dot" />}
         {!settings.tracking ? 'Tracking off' : running ? 'Tracking' : 'Not running'}
       </div>
+      <ControllerBadge input={inputState.input} />
       <button className={'gp-icon' + (game.favorite ? ' active' : '')} aria-pressed={game.favorite} title={game.favorite ? 'Remove from favorites' : 'Add to favorites'} onClick={() => actions.toggleFavorite(game)}><Heart size={18} fill={game.favorite ? 'currentColor' : 'none'} /></button>
       <div className="gp-more">
         <button className="gp-icon" title="More actions" aria-haspopup="menu" aria-expanded={menuOpen} onClick={() => setMenuOpen(value => !value)}><MoreHorizontal size={18} /></button>
@@ -187,6 +191,7 @@ export function GamePage({ game, index, settings, running, libraryVersion, actio
           <div><span>First played</span><b>{formatDate(stats?.firstPlayed)}</b></div>
         </div>
         <IgdbAbout view={igdb} title={game.title} onSearch={() => setIgdbPicking(true)} />
+        <GameNotesSection gameId={game.id} shots={shots} />
       </section>
 
       <ImageWall game={game} igdb={igdb} shots={shots} onShots={setShots} />
@@ -220,7 +225,9 @@ export function GamePage({ game, index, settings, running, libraryVersion, actio
           {emuError && <div className="form-error" role="alert">{emuError}</div>}
         </div>
         <GenreBlock game={game} view={igdb} />
+        <YourScore gameId={game.id} />
         <IgdbRatings view={igdb} />
+        <ControllerBlock gameId={game.id} state={inputState} />
         <div className="gp-side-block"><div className="detail-label">INSTALL FOLDER</div>
           <div className="muted-text gp-path">{installFolder || 'Unknown'}</div>
           <button className="secondary-button gp-folder" onClick={() => actions.openFolder(game)}><FolderOpen size={14} /> Open folder</button>

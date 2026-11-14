@@ -12,6 +12,7 @@ mod launch;
 mod local;
 mod local_commands;
 mod localscan;
+mod notes;
 mod picks;
 mod platform;
 mod review;
@@ -196,6 +197,14 @@ pub fn run() {
             commands::plugins_install,
             commands::backup_export,
             commands::backup_import,
+            notes::notes_get,
+            notes::notes_set_rating,
+            notes::notes_set_text,
+            notes::notes_save_memory,
+            notes::notes_delete_memory,
+            notes::input_get,
+            notes::input_save,
+            notes::input_refresh,
             commands::steamgriddb_status,
             commands::steamgriddb_save_key,
             commands::steamgriddb_test_key,

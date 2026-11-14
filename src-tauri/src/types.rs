@@ -417,6 +417,10 @@ pub struct Backup {
         skip_serializing_if = "Option::is_none"
     )]
     pub game_page_custom: Option<Vec<GamePageCustomEntry>>,
+    /// Personal scores, notes, memories and controller details. Optional: older backups
+    /// don't have it.
+    #[serde(default, rename = "gameNotes", skip_serializing_if = "Option::is_none")]
+    pub game_notes: Option<crate::notes::NotesBackup>,
 }
 
 /// One stored play session (`tracking_sessions`). `ended_at` is absent while it is in progress.
