@@ -5,6 +5,7 @@ mod catalog;
 mod commands;
 mod covercache;
 mod db;
+mod dbrepair;
 mod emulators;
 mod health;
 mod health_commands;
@@ -132,7 +133,10 @@ pub fn run() {
                     data_dir
                 }
             };
-            let database = db::Db::open(&data_dir.join("library.sqlite"))?;
+            let (database, repair) = db::Db::open_checked(
+                &data_dir.join("library.sqlite"),
+                Some(&data_dir.join("screenshots")),
+            )?;
             let hours = db::get_settings(&database.lock())?.scan_interval_hours;
             app.manage(AppState {
                 db: database,
@@ -150,6 +154,22 @@ pub fn run() {
             scan::configure_schedule(app.handle(), hours);
             tracker::start(app.handle());
             windows::create(app.handle(), false)?;
+            if let Some(notice) = repair {
+                use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+                app.dialog()
+                    .message(notice.message())
+                    .title(if notice.replaced {
+                        "Library repaired"
+                    } else {
+                        "Library damaged"
+                    })
+                    .kind(if notice.replaced {
+                        MessageDialogKind::Info
+                    } else {
+                        MessageDialogKind::Warning
+                    })
+                    .show(|_| {});
+            }
             // Off the UI path: a few seconds after launch, cache remote covers locally.
             covercache::spawn_startup(app.handle());
             Ok(())

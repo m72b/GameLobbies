@@ -17,15 +17,29 @@ pub struct Db {
 }
 
 impl Db {
+    #[cfg(test)]
     pub fn open(file: &Path) -> Result<Self> {
+        Ok(Self::open_checked(file, None)?.0)
+    }
+
+    /// Opens the library after a `PRAGMA quick_check`. A damaged library is repaired into a
+    /// new file and swapped in before the connection is kept ([`crate::dbrepair::open_or_repair`]);
+    /// the notice says what happened, for the user.
+    pub fn open_checked(
+        file: &Path,
+        screenshots_dir: Option<&Path>,
+    ) -> Result<(Self, Option<crate::dbrepair::RepairNotice>)> {
         if let Some(dir) = file.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        let conn = Connection::open(file).with_context(|| format!("opening {}", file.display()))?;
+        let (conn, notice) = crate::dbrepair::open_or_repair(file, screenshots_dir)?;
         migrate(&conn, Some(file))?;
-        Ok(Self {
-            conn: Mutex::new(conn),
-        })
+        Ok((
+            Self {
+                conn: Mutex::new(conn),
+            },
+            notice,
+        ))
     }
 
     #[cfg(test)]
@@ -42,6 +56,21 @@ impl Db {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
+}
+
+/// Creates the current schema in an empty database (the repair tool's target).
+pub(crate) fn create_schema(db: &Connection) -> Result<()> {
+    migrate(db, None)
+}
+
+/// A copy of the library made before a migration changes it, with the online backup API.
+fn migration_backup(db: &Connection, file: &Path, kind: &str) -> Result<()> {
+    let backup = file.with_file_name(format!(
+        "library.sqlite.pre-{kind}-migration-{}.bak",
+        now_ms()
+    ));
+    crate::dbrepair::backup_to(db, &backup)
+        .context("Could not back up the library before its database migration.")
 }
 
 fn migrate(db: &Connection, file: Option<&Path>) -> Result<()> {
@@ -117,15 +146,7 @@ fn migrate(db: &Connection, file: Option<&Path>) -> Result<()> {
         regex::Regex::new(r"(?i)title\s+TEXT\s+NOT\s+NULL\s+COLLATE\s+NOCASE\s+UNIQUE")?;
     if unique_title.is_match(&schema) {
         if let Some(file) = file {
-            let busy: i64 = db.query_row("PRAGMA wal_checkpoint(FULL)", [], |row| row.get(0))?;
-            if busy != 0 {
-                bail!("Could not safely checkpoint the library before its database migration.");
-            }
-            let backup = file.with_file_name(format!(
-                "library.sqlite.pre-title-migration-{}.bak",
-                now_ms()
-            ));
-            std::fs::copy(file, backup)?;
+            migration_backup(db, file, "title")?;
         }
         db.execute_batch(&format!(
             "BEGIN;
@@ -226,15 +247,7 @@ fn remove_store_accounts(db: &Connection, file: Option<&Path>, version: i64) -> 
         return Ok(());
     }
     if let Some(file) = file {
-        let busy: i64 = db.query_row("PRAGMA wal_checkpoint(FULL)", [], |row| row.get(0))?;
-        if busy != 0 {
-            bail!("Could not safely checkpoint the library before its database migration.");
-        }
-        let backup = file.with_file_name(format!(
-            "library.sqlite.pre-store-accounts-migration-{}.bak",
-            now_ms()
-        ));
-        std::fs::copy(file, backup)?;
+        migration_backup(db, file, "store-accounts")?;
     }
     let tx = db.unchecked_transaction()?;
     for name in &plan.secrets {
@@ -1701,17 +1714,25 @@ pub fn migrate_from_electron(data_dir: &Path) -> Result<bool> {
     let Some(appdata) = std::env::var_os("APPDATA").map(PathBuf::from) else {
         return Ok(false);
     };
-    let old_dir = appdata.join("game-lobby");
+    copy_library_from(&appdata.join("game-lobby"), data_dir)
+}
+
+/// Copies `old_dir/library.sqlite` (read through its WAL, with the online backup API) and the
+/// custom covers into `data_dir`. The `-wal` and `-shm` files are never copied: a WAL copied
+/// apart from its main file can be replayed onto the wrong database.
+pub(crate) fn copy_library_from(old_dir: &Path, data_dir: &Path) -> Result<bool> {
+    let target = data_dir.join("library.sqlite");
     let old = old_dir.join("library.sqlite");
-    if !old.exists() {
+    if target.exists() || !old.exists() {
         return Ok(false);
     }
     std::fs::create_dir_all(data_dir)?;
-    for suffix in ["", "-wal", "-shm"] {
-        let from = old_dir.join(format!("library.sqlite{suffix}"));
-        if from.exists() {
-            std::fs::copy(&from, data_dir.join(format!("library.sqlite{suffix}")))?;
-        }
+    let copied = crate::dbrepair::open_source(&old, false)
+        .and_then(|source| crate::dbrepair::backup_to(&source, &target));
+    if let Err(e) = copied {
+        // Only the file this call created; the next start tries again.
+        let _ = std::fs::remove_file(&target);
+        return Err(e);
     }
     let old_covers = old_dir.join("covers");
     if old_covers.is_dir() {
