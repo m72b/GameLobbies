@@ -69,7 +69,11 @@ fn migrate(db: &Connection, file: Option<&Path>) -> Result<()> {
         CREATE INDEX IF NOT EXISTS cover_cache_file ON cover_cache(file);
         CREATE TABLE IF NOT EXISTS game_metadata(gameId TEXT PRIMARY KEY,igdbId INTEGER,json TEXT,fetchedAt INTEGER NOT NULL,source TEXT NOT NULL DEFAULT 'auto');
         CREATE TABLE IF NOT EXISTS game_screenshots(id TEXT PRIMARY KEY,gameId TEXT NOT NULL,file TEXT NOT NULL,hash TEXT NOT NULL,width INTEGER NOT NULL,height INTEGER NOT NULL,addedAt INTEGER NOT NULL,source TEXT NOT NULL DEFAULT 'user',originalPath TEXT,UNIQUE(gameId,hash));
-        CREATE INDEX IF NOT EXISTS game_screenshots_game ON game_screenshots(gameId,addedAt);",
+        CREATE INDEX IF NOT EXISTS game_screenshots_game ON game_screenshots(gameId,addedAt);
+        CREATE TABLE IF NOT EXISTS game_notes(gameId TEXT PRIMARY KEY,rating REAL,notes TEXT NOT NULL DEFAULT '',updatedAt INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS game_memories(id INTEGER PRIMARY KEY,gameId TEXT NOT NULL,date TEXT NOT NULL,text TEXT NOT NULL,screenshotId TEXT,createdAt INTEGER NOT NULL);
+        CREATE INDEX IF NOT EXISTS game_memories_game ON game_memories(gameId,date);
+        CREATE TABLE IF NOT EXISTS game_input(gameId TEXT PRIMARY KEY,support TEXT NOT NULL DEFAULT 'unknown',supportSource TEXT NOT NULL DEFAULT '',preferred TEXT NOT NULL DEFAULT '',notes TEXT NOT NULL DEFAULT '',updatedAt INTEGER NOT NULL,steamCheckedAt INTEGER NOT NULL DEFAULT 0);",
         GAMES_TABLE.replace("CREATE TABLE games", "CREATE TABLE IF NOT EXISTS games")
     ))?;
     let columns: HashSet<String> = db
@@ -639,7 +643,7 @@ const LOCAL_ONLY_SOURCES: [&str; 6] = [
 /// Ids of games with a page customization (loaded once per reconcile).
 fn customized_game_ids(db: &Connection) -> Result<HashSet<String>> {
     let mut stmt = db
-        .prepare("SELECT gameId FROM game_page_custom UNION SELECT gameId FROM game_screenshots")?;
+        .prepare("SELECT gameId FROM game_page_custom UNION SELECT gameId FROM game_screenshots UNION SELECT gameId FROM game_notes UNION SELECT gameId FROM game_memories UNION SELECT gameId FROM game_input WHERE supportSource='user' OR preferred<>'' OR notes<>''")?;
     let ids = stmt
         .query_map([], |row| row.get(0))?
         .collect::<rusqlite::Result<_>>()?;
@@ -800,6 +804,9 @@ fn delete_game_rows(db: &Connection, id: &str) -> Result<()> {
         "DELETE FROM game_page_custom WHERE gameId=?",
         "DELETE FROM game_metadata WHERE gameId=?",
         "DELETE FROM game_screenshots WHERE gameId=?",
+        "DELETE FROM game_notes WHERE gameId=?",
+        "DELETE FROM game_memories WHERE gameId=?",
+        "DELETE FROM game_input WHERE gameId=?",
         "DELETE FROM games WHERE id=?",
     ] {
         db.execute(sql, [id])?;
@@ -887,6 +894,14 @@ pub fn merge_games(db: &mut Connection, target_id: &str, source_id: &str) -> Res
         "UPDATE OR IGNORE game_screenshots SET gameId=?1 WHERE gameId=?2",
         params![target_id, source_id],
     )?;
+    // Notes, memories and controller details: the target's win; memories all move over.
+    for sql in [
+        "UPDATE OR IGNORE game_notes SET gameId=?1 WHERE gameId=?2",
+        "UPDATE game_memories SET gameId=?1 WHERE gameId=?2",
+        "UPDATE OR IGNORE game_input SET gameId=?1 WHERE gameId=?2",
+    ] {
+        tx.execute(sql, params![target_id, source_id])?;
+    }
     delete_game_rows(&tx, source_id)?;
     tx.commit()?;
     all_games(db)
@@ -1660,6 +1675,9 @@ pub fn restore_backup(db: &mut Connection, backup: &Backup) -> Result<usize> {
     // Entries for games that aren't in the library are skipped.
     for entry in backup.game_page_custom.iter().flatten() {
         put_page_custom(&tx, &entry.game_id, &entry.custom())?;
+    }
+    if let Some(notes) = &backup.game_notes {
+        crate::notes::restore_backup(&tx, notes)?;
     }
     tx.commit()?;
     Ok(backup.games.len())
@@ -2485,6 +2503,7 @@ mod tests {
             settings: None,
             emulators: None,
             game_page_custom: Some(all_page_custom(&conn).unwrap()),
+            game_notes: None,
         };
         let text = serde_json::to_string(&backup).unwrap();
         let raw: Value = serde_json::from_str(&text).unwrap();
@@ -2517,6 +2536,7 @@ mod tests {
         assert_eq!(page_custom(&conn, "a").unwrap(), custom);
         let without = serde_json::to_value(Backup {
             game_page_custom: None,
+            game_notes: None,
             ..parsed
         })
         .unwrap();
@@ -2613,6 +2633,7 @@ mod tests {
             settings: None,
             emulators: Some(vec![p.clone()]),
             game_page_custom: None,
+            game_notes: None,
         })
         .unwrap();
         let parsed = crate::validation::backup(&text).unwrap();

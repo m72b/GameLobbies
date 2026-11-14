@@ -100,7 +100,13 @@ const EMULATOR_KEYS: &[&str] = &[
     "addedAt",
 ];
 const PLUGIN_KEYS: &[&str] = &["id", "name", "version", "kind", "store", "manifestFolder"];
-const BACKUP_KEYS: &[&str] = &["games", "settings", "emulators", "gamePageCustom"];
+const BACKUP_KEYS: &[&str] = &[
+    "games",
+    "settings",
+    "emulators",
+    "gamePageCustom",
+    "gameNotes",
+];
 /// Top-level backup keys of older versions (library connections and store accounts) that are
 /// ignored on import.
 const RETIRED_BACKUP_KEYS: &[&str] = &[
@@ -803,11 +809,21 @@ pub fn backup(value: &Value) -> Result<Backup> {
         Some(_) => bail!("Backup game page customizations are invalid."),
         None => None,
     };
+    let game_notes = match clean.get("gameNotes") {
+        Some(v) => {
+            let parsed: crate::notes::NotesBackup = serde_json::from_value(v.clone())
+                .map_err(|e| anyhow!("Backup notes are invalid: {e}"))?;
+            crate::notes::validate_backup(&parsed)?;
+            Some(parsed)
+        }
+        None => None,
+    };
     Ok(Backup {
         games,
         settings,
         emulators,
         game_page_custom,
+        game_notes,
     })
 }
 
