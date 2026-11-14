@@ -3,6 +3,7 @@ import { ImagePlus, RotateCcw, Search, X } from 'lucide-react'
 import { coverUrl } from './lobby-api'
 import { LoadMore, useSgdbPages } from './cover-picker'
 import { defaultGamePageCustom } from '../shared/defaults'
+import { artPreview } from '../shared/preview'
 import { logoPositions, logoScaleRange } from '../shared/types'
 import type { GamePageCustom, LogoPosition, SteamGridDbCover } from '../shared/types'
 
@@ -52,7 +53,20 @@ export function useLogoLayout(gameId: string, custom: GamePageCustom) {
   return { layout, change, flush }
 }
 
-function ArtSection({ kind, gameId, title, currentSrc, hasCustom, settingsKey }: { kind: 'hero' | 'logo'; gameId: string; title: string; currentSrc?: string; hasCustom: boolean; settingsKey: string }) {
+function ArtTile({ item, label, animated, disabled, onApply }: { item: SteamGridDbCover; label: string; animated: boolean; disabled: boolean; onApply(cover: SteamGridDbCover): void }) {
+  const [failed, setFailed] = useState(false)
+  const preview = artPreview(item, animated)
+  if (!preview) return null
+  return <button type="button" className={'cz-tile' + (failed ? ' failed' : '')} disabled={disabled} onClick={() => onApply(item)} title={item.author ? 'By ' + item.author : undefined} aria-label={label}>
+    {failed
+      ? <span className="cz-tile-note" aria-hidden="true">Preview unavailable</span>
+      : preview.kind === 'video'
+        ? <video src={preview.src} muted loop autoPlay playsInline preload="auto" disablePictureInPicture aria-hidden="true" ref={video => { if (video) video.muted = true }} onError={() => setFailed(true)} />
+        : <img src={coverUrl(preview.src)} loading="lazy" alt="" onError={() => setFailed(true)} />}
+  </button>
+}
+
+function ArtSection({ kind, gameId, title, currentSrc, hasCustom, settingsKey, animated }: { kind: 'hero' | 'logo'; gameId: string; title: string; currentSrc?: string; hasCustom: boolean; settingsKey: string; animated: boolean }) {
   const pages = useSgdbPages(kind, gameId, settingsKey)
   const { state, covers: items, reset: resetPages } = pages
   const [actionError, setActionError] = useState('')
@@ -84,7 +98,7 @@ function ArtSection({ kind, gameId, title, currentSrc, hasCustom, settingsKey }:
 
   return <div className="cz-section">
     <div className={'cz-preview ' + kind}>
-      {currentSrc ? <img src={currentSrc} alt={'Current ' + noun} /> : <span>No {noun} available. The game title is shown instead.</span>}
+      {currentSrc ? <img key={currentSrc} src={currentSrc} alt={'Current ' + noun} onError={event => { event.currentTarget.style.display = 'none' }} /> : <span>No {noun} available. The game title is shown instead.</span>}
     </div>
     <div className="cz-row">
       <button type="button" className="secondary-button" onClick={() => void openPicker()} disabled={busy || state === 'loading'}><Search size={13} /> Choose from SteamGridDB</button>
@@ -97,9 +111,7 @@ function ArtSection({ kind, gameId, title, currentSrc, hasCustom, settingsKey }:
     {state === 'error' && <div className="cz-empty">{error || 'Could not search SteamGridDB'}<button type="button" className="secondary-button" onClick={() => void openPicker()}>Try again</button></div>}
     {state === 'ready' && items.length === 0 && !pages.hasMore && <div className="cz-empty">No {noun}s found on SteamGridDB for this game</div>}
     {state === 'ready' && items.length > 0 && <div className={'cz-grid ' + kind + (busy ? ' busy' : '')} aria-label={title + ' options'}>
-      {items.map(item => <button type="button" key={item.id} className="cz-tile" disabled={busy} onClick={() => void apply(item)} title={item.author ? 'By ' + item.author : undefined}>
-        <img src={coverUrl(item.thumb || item.url)} loading="lazy" alt={item.author ? title + ' option by ' + item.author : title + ' option ' + item.id} />
-      </button>)}
+      {items.map(item => <ArtTile key={item.id} item={item} label={item.author ? title + ' option by ' + item.author : title + ' option ' + item.id} animated={animated} disabled={busy} onApply={cover => void apply(cover)} />)}
     </div>}
     {state === 'ready' && (items.length > 0 || pages.hasMore) && <LoadMore shown={items.length} hasMore={pages.hasMore} loading={pages.loadingMore} onMore={() => void pages.loadMore()} noun={noun} />}
   </div>
@@ -107,10 +119,12 @@ function ArtSection({ kind, gameId, title, currentSrc, hasCustom, settingsKey }:
 
 type Tab = 'hero' | 'logo' | 'layout'
 
-export function CustomizePanel({ game, custom, heroSrc, logoSrc, layout, onLayout, onClose, sgdbSettingsKey = '' }: {
+export function CustomizePanel({ game, custom, heroSrc, logoSrc, layout, onLayout, onClose, sgdbSettingsKey = '', animated = false }: {
   game: { id: string; title: string }
   /** The SteamGridDB filters in effect (keys the session cache of picker pages). */
   sgdbSettingsKey?: string
+  /** The "Include animated covers" setting: whether video previews may play. */
+  animated?: boolean
   custom: GamePageCustom
   heroSrc?: string
   logoSrc?: string
@@ -151,8 +165,8 @@ export function CustomizePanel({ game, custom, heroSrc, logoSrc, layout, onLayou
       {tabs.map(([id, label]) => <button key={id} type="button" role="tab" id={'cz-tab-' + id} aria-selected={tab === id} aria-controls="cz-body" tabIndex={tab === id ? 0 : -1} className={tab === id ? 'active' : ''} onClick={() => setTab(id)}>{label}</button>)}
     </div>
     <div className="cz-body" id="cz-body" role="tabpanel" aria-labelledby={'cz-tab-' + tab}>
-      {tab === 'hero' && <ArtSection kind="hero" gameId={game.id} title="Hero" currentSrc={heroSrc} hasCustom={!!custom.hero} settingsKey={sgdbSettingsKey} />}
-      {tab === 'logo' && <ArtSection kind="logo" gameId={game.id} title="Logo" currentSrc={logoSrc} hasCustom={!!custom.logo} settingsKey={sgdbSettingsKey} />}
+      {tab === 'hero' && <ArtSection kind="hero" gameId={game.id} title="Hero" currentSrc={heroSrc} hasCustom={!!custom.hero} settingsKey={sgdbSettingsKey} animated={animated} />}
+      {tab === 'logo' && <ArtSection kind="logo" gameId={game.id} title="Logo" currentSrc={logoSrc} hasCustom={!!custom.logo} settingsKey={sgdbSettingsKey} animated={animated} />}
       {tab === 'layout' && <div className="cz-section">
         <p className="cz-hint">Changes preview live on the page and save automatically.{!logoSrc && ' This game has no logo, so the title text is positioned instead.'}</p>
         <div className="cz-label">Position</div>
