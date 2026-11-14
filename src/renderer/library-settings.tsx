@@ -61,7 +61,7 @@ function RootList({ title, kind, hint, roots, scanBusy, activeId, notNow, onChan
   const mine = roots.filter(root => root.kind === kind)
   const label = kind === 'emulators' ? 'Emulator folder path' : 'Game folder path'
   const browse = async () => {
-    try { const chosen = await window.lobby.roots.browse(); if (chosen) { setPath(chosen); setError('') } }
+    try { const chosen = await window.lobby.roots.browse(kind); if (chosen) { setPath(chosen); setError('') } }
     catch (caught) { setError(errorText(caught, 'Could not open the folder picker')) }
   }
   const add = async () => {

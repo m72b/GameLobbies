@@ -249,9 +249,8 @@ fn launch_identity(r: &GameRoute) -> [Option<&str>; 7] {
 /// A route the renderer may create or edit by itself: a store link that passes
 /// [`crate::launch::validate_launch_uri`], with no arguments, and not a ROM route (ROM routes
 /// run an emulator with their target as a file, picked by `system`). Its install folder
-/// (opened by "Open install folder") must be empty or one already stored for the game. A
-/// Steam link must be a plain `steam://run/<id>` or `steam://rungameid/<id>`: Steam passes
-/// anything after `//` to the game as launch options.
+/// (opened by "Open install folder") must be empty or one already stored for the game. The
+/// link must have one of the shapes in [`renderer_link_ok`].
 fn is_renderer_uri_route(stored: &[GameRoute], r: &GameRoute) -> bool {
     let text = |v: &Option<String>| v.as_deref().filter(|s| !s.is_empty()).map(str::to_owned);
     let folder_ok = text(&r.install_path).is_none_or(|path| {
@@ -265,14 +264,83 @@ fn is_renderer_uri_route(stored: &[GameRoute], r: &GameRoute) -> bool {
         && r.launch_args.as_deref().is_none_or(str::is_empty)
         && folder_ok
         && crate::launch::validate_launch_uri(&r.launch_target)
-            .is_ok_and(|uri| plain_steam_link(&uri))
+            .is_ok_and(|uri| renderer_link_ok(&uri))
 }
 
-/// `true` for links of other stores; for `steam:` only `run`/`rungameid` with a numeric id.
-pub fn plain_steam_link(uri: &str) -> bool {
-    static STEAM_RUN: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"^steam://(run|rungameid)/[0-9]{1,20}/?$").unwrap());
-    !uri.starts_with("steam:") || STEAM_RUN.is_match(uri)
+/// The store links the renderer may create (`library_add`, new store-link routes in
+/// `library_save`), one shape per store, so a link can't carry launch options or reach other
+/// actions of a store client. `uri` has passed [`crate::launch::validate_launch_uri`].
+///
+/// - `steam://run/<digits>` or `steam://rungameid/<digits>` (Steam passes anything after `//`
+///   to the game as launch options);
+/// - `com.epicgames.launcher://apps/<id>?action=launch|install[&silent=true|false]` (what the
+///   Epic importer writes);
+/// - `goggalaxy://openGameView/<id>` (GOG importer);
+/// - `uplay://launch/<digits>/0`;
+/// - `origin2://game/launch?offerIds=<ids>`;
+/// - `battlenet://<game code>`.
+///
+/// No other query keys, no fragments. `eaapp:`, `xbox:` and `ms-xbox-gamepass:` links have no
+/// documented game-launch shape and are not made by any importer, so the renderer can't create
+/// them (Rust-side routes using them still launch). Routes the renderer sends back unchanged
+/// are matched against the stored ones instead (see [`check_renderer_routes`]).
+pub fn renderer_link_ok(uri: &str) -> bool {
+    static ID: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^[A-Za-z0-9%._~!*'()-]{1,256}$").unwrap());
+    static OFFER_IDS: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^[A-Za-z0-9.:_,-]{1,256}$").unwrap());
+    static GAME_CODE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^[A-Za-z0-9]{1,16}$").unwrap());
+    let Ok(url) = url::Url::parse(uri) else {
+        return false;
+    };
+    if url.fragment().is_some() {
+        return false;
+    }
+    let host = url.host_str().unwrap_or_default();
+    let path = url.path();
+    let segments: Vec<&str> = path.strip_prefix('/').unwrap_or(path).split('/').collect();
+    let pairs: Vec<(String, String)> = url.query_pairs().into_owned().collect();
+    let no_query = url.query().is_none();
+    let digits = |s: &str| (1..=20).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_digit());
+    let host_is = |name: &str| host.eq_ignore_ascii_case(name);
+    match url.scheme() {
+        "steam" => {
+            no_query
+                && (host_is("run") || host_is("rungameid"))
+                && matches!(segments.as_slice(), [id] | [id, ""] if digits(id))
+        }
+        "com.epicgames.launcher" => {
+            let value = |key: &str| {
+                let mut found = pairs.iter().filter(|(k, _)| k == key);
+                match (found.next(), found.next()) {
+                    (Some((_, v)), None) => Some(v.as_str()),
+                    _ => None,
+                }
+            };
+            host_is("apps")
+                && matches!(segments.as_slice(), [id] if ID.is_match(id))
+                && pairs.iter().all(|(k, _)| k == "action" || k == "silent")
+                && matches!(value("action"), Some("launch" | "install"))
+                && (pairs.iter().all(|(k, _)| k != "silent")
+                    || matches!(value("silent"), Some("true" | "false")))
+        }
+        "goggalaxy" => {
+            no_query
+                && host_is("openGameView")
+                && matches!(segments.as_slice(), [id] if ID.is_match(id))
+        }
+        "uplay" => {
+            no_query && host_is("launch") && matches!(segments.as_slice(), [id, "0"] if digits(id))
+        }
+        "origin2" => {
+            host_is("game")
+                && segments == ["launch"]
+                && matches!(pairs.as_slice(), [(k, v)] if k == "offerIds" && OFFER_IDS.is_match(v))
+        }
+        "battlenet" => no_query && GAME_CODE.is_match(host) && (path.is_empty() || path == "/"),
+        _ => false,
+    }
 }
 
 /// Trust boundary for routes sent by the renderer (`library:save`).
@@ -936,6 +1004,11 @@ mod tests {
             json!({ "sourceId": "custom", "store": "Custom", "launchTarget": "steam://run/1", "emulatorId": "mgba" }),
             json!({ "sourceId": "custom", "store": "Custom", "launchTarget": "https://evil.example/x.exe" }),
             json!({ "sourceId": "custom", "store": "Custom", "launchTarget": "ms-settings:" }),
+            // Opaque links: Windows reads them as relative file paths.
+            json!({ "sourceId": "custom", "store": "Custom", "launchTarget": r"xbox:x\..\..\Windows\System32\calc.exe" }),
+            json!({ "sourceId": "custom", "store": "Custom", "launchTarget": r"xbox:\..\x.exe" }),
+            json!({ "sourceId": "custom", "store": "Custom", "launchTarget": "uplay:launch/1" }),
+            json!({ "sourceId": "custom", "store": "Custom", "launchTarget": "steam:run/1" }),
             // Steam passes text after `//` to the game as launch options.
             json!({ "sourceId": "custom", "store": "Custom", "launchTarget": "steam://run/570//-console +exec x" }),
             json!({ "sourceId": "custom", "store": "Custom", "launchTarget": "steam://run/570/-novid" }),
@@ -953,6 +1026,56 @@ mod tests {
                 .is_err(),
                 "{bad}"
             );
+        }
+    }
+
+    #[test]
+    fn renderer_links_have_one_shape_per_store() {
+        let ok = |raw: &str| {
+            crate::launch::validate_launch_uri(raw).is_ok_and(|uri| renderer_link_ok(&uri))
+        };
+        // What the importers write passes.
+        for good in [
+            "steam://run/570".to_string(),
+            "steam://rungameid/570/".into(),
+            crate::importers::epic::launch_uri("Fortnite Game", "launch"),
+            crate::importers::epic::launch_uri("ns:cat:app", "install"),
+            format!(
+                "goggalaxy://openGameView/{}",
+                crate::platform::encode_uri_component("1207658924")
+            ),
+            "com.epicgames.launcher://apps/Fortnite?action=launch".into(),
+            "uplay://launch/635/0".into(),
+            "origin2://game/launch?offerIds=OFB-EAST:109552677".into(),
+            "battlenet://WoW".into(),
+        ] {
+            assert!(ok(&good), "{good} should pass");
+        }
+        for bad in [
+            "steam://run/570//-console",
+            "steam://run/abc",
+            "steam://open/console",
+            "steam://run/570?x=1",
+            "steam://run/570#x",
+            "com.epicgames.launcher://apps/x?action=launch&silent=true&extra=1",
+            "com.epicgames.launcher://apps/x?action=uninstall",
+            "com.epicgames.launcher://apps/x?action=launch&action=install",
+            "com.epicgames.launcher://apps/x",
+            "com.epicgames.launcher://apps/x/y?action=launch",
+            "com.epicgames.launcher://store",
+            "goggalaxy://openGameView/1?x=1",
+            "goggalaxy://runGame/1",
+            "uplay://launch/635/1",
+            "uplay://launch/635/0/-x",
+            "origin2://game/launch?offerIds=1&autoDownload=1",
+            "origin2://game/download?offerIds=1",
+            "battlenet://WoW/x",
+            "battlenet://WoW?x=1",
+            "eaapp://launch/1",
+            "xbox://x",
+            "ms-xbox-gamepass://x",
+        ] {
+            assert!(!ok(bad), "{bad} should be refused");
         }
     }
 

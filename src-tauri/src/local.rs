@@ -703,6 +703,28 @@ fn item_text(item: &review::ReviewItem, key: &str) -> Option<String> {
         .map(String::from)
 }
 
+/// The text of the native confirmation dialog shown before a `shortcut` item is confirmed
+/// (`review_resolve`). It comes from the item as the scan stored it, which is exactly what
+/// [`check`] then requires the file to still say, so the renderer's own display of the item
+/// can't hide what will run.
+pub fn shortcut_confirmation_prompt(item: &review::ReviewItem) -> Result<String> {
+    if item.kind != SHORTCUT {
+        bail!("Only shortcuts can be confirmed.");
+    }
+    let shortcut =
+        item_text(item, "shortcut").ok_or_else(|| anyhow!("This item has no shortcut."))?;
+    let target = item_text(item, "target").unwrap_or_default();
+    let arguments = item_text(item, "arguments").unwrap_or_default();
+    let arguments = if arguments.is_empty() {
+        "(none)".to_string()
+    } else {
+        arguments
+    };
+    Ok(format!(
+        "Add this shortcut as a game?\n\nShortcut: {shortcut}\nRuns: {target}\nArguments: {arguments}\n\nOnly continue if you recognise this program and these arguments. Game Lobby will run them every time you play this game."
+    ))
+}
+
 /// Checks files and shortcuts for `choose-exe` and `confirm-shortcut` (reads the disk and,
 /// for `.lnk` files, COM).
 fn check(
@@ -1655,6 +1677,26 @@ mod tests {
             key_of(Path::new(item.details["target"].as_str().unwrap())),
             key_of(&tool)
         );
+        // The native confirmation shows the shortcut, its program and its arguments.
+        let prompt = shortcut_confirmation_prompt(item).unwrap();
+        assert!(
+            prompt.contains(&format!(
+                "Shortcut: {}\n",
+                item.details["shortcut"].as_str().unwrap()
+            )),
+            "{prompt}"
+        );
+        assert!(prompt.contains(r"Server\Join.lnk"), "{prompt}");
+        assert!(
+            prompt.contains(item.details["target"].as_str().unwrap()),
+            "{prompt}"
+        );
+        assert!(prompt.contains("Arguments: +connect 10.0.0.1"), "{prompt}");
+        let not_a_shortcut = review::ReviewItem {
+            kind: AMBIGUOUS_EXE.into(),
+            ..item.clone()
+        };
+        assert!(shortcut_confirmation_prompt(&not_a_shortcut).is_err());
         // Rescans keep one item, add nothing.
         assert_eq!(f.scan().review, 1);
         assert_eq!(f.games().len(), 1);

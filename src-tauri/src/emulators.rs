@@ -51,15 +51,20 @@ pub fn refresh_available(profiles: Vec<EmulatorProfile>) -> Vec<EmulatorProfile>
     profiles.into_iter().map(with_status).collect()
 }
 
-/// An absolute drive-letter path ending in `.exe` (syntax only).
-pub fn executable_path_ok(executable: &str) -> bool {
-    let bytes = executable.as_bytes();
+/// An absolute drive-letter path like `C:\Games\x` (syntax only; no UNC, device or relative
+/// paths).
+pub fn drive_path_ok(path: &str) -> bool {
+    let bytes = path.as_bytes();
     bytes.len() > 3
         && bytes[0].is_ascii_alphabetic()
         && bytes[1] == b':'
         && (bytes[2] == b'\\' || bytes[2] == b'/')
-        && executable.to_lowercase().ends_with(".exe")
-        && normalize_path(executable).is_some()
+        && normalize_path(path).is_some()
+}
+
+/// An absolute drive-letter path ending in `.exe` (syntax only).
+pub fn executable_path_ok(executable: &str) -> bool {
+    drive_path_ok(executable) && executable.to_lowercase().ends_with(".exe")
 }
 
 /// An absolute, existing `.exe` file.
@@ -329,9 +334,9 @@ pub fn profile_name(path: &Path, known: &KnownEmulator) -> String {
 ///   [`crate::picks`]). A save must send the stored executable unchanged (compared as a path:
 ///   case and `/` vs `\` don't matter) or one the user just picked; `picked` returns that
 ///   pick. The stored or picked text is kept, never the renderer's spelling of it.
-/// - Arguments: kept as stored when unchanged (profiles saved before these checks keep
-///   working); a new or changed template must pass [`crate::launch::check_template`] for the
-///   (final) executable.
+/// - Arguments: kept as stored when unchanged with the same executable (profiles saved
+///   before these checks keep working); a new or changed template, or any template when the
+///   executable changes, must pass [`crate::launch::check_template`] for the new executable.
 ///
 /// Returns the profile to store and whether the picked executable was used.
 pub fn accept_renderer_profile(
@@ -352,7 +357,7 @@ pub fn accept_renderer_profile(
             used_pick = true;
         }
     }
-    if stored.is_none_or(|s| s.args != incoming.args) {
+    if used_pick || stored.is_none_or(|s| s.args != incoming.args) {
         crate::launch::check_template(&incoming.args, &incoming.executable)?;
     }
     Ok((incoming, used_pick))
@@ -964,6 +969,17 @@ mod tests {
         let (saved, _) = accept_renderer_profile(Some(&legacy), toggled, none).unwrap();
         assert_eq!(saved.args, legacy.args);
         assert!(!saved.enabled);
+        // ...but a new executable re-checks them, even unchanged.
+        let repointed = EmulatorProfile {
+            executable: picked.into(),
+            ..legacy.clone()
+        };
+        assert!(accept_renderer_profile(Some(&legacy), repointed, pick).is_err());
+        let fine = EmulatorProfile {
+            executable: picked.into(),
+            ..stored.clone()
+        };
+        assert!(accept_renderer_profile(Some(&stored), fine, pick).is_ok());
     }
 
     #[test]

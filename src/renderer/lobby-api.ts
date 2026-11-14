@@ -74,7 +74,7 @@ const api: LobbyAPI = {
   roots: {
     list: () => call('roots_list'),
     add: (kind, path) => call('roots_add', { kind, path }),
-    browse: () => call('roots_browse'),
+    browse: kind => call('roots_browse', { kind }),
     setEnabled: (id, enabled) => call('roots_set_enabled', { id, enabled }),
     remove: id => call('roots_remove', { id }),
     rescan: (id, options) => call('roots_rescan', { id: id ?? null, full: options?.full ?? false }),
