@@ -248,12 +248,31 @@ fn launch_identity(r: &GameRoute) -> [Option<&str>; 7] {
 
 /// A route the renderer may create or edit by itself: a store link that passes
 /// [`crate::launch::validate_launch_uri`], with no arguments, and not a ROM route (ROM routes
-/// run an emulator with their target as a file).
-fn is_renderer_uri_route(r: &GameRoute) -> bool {
+/// run an emulator with their target as a file, picked by `system`). Its install folder
+/// (opened by "Open install folder") must be empty or one already stored for the game. A
+/// Steam link must be a plain `steam://run/<id>` or `steam://rungameid/<id>`: Steam passes
+/// anything after `//` to the game as launch options.
+fn is_renderer_uri_route(stored: &[GameRoute], r: &GameRoute) -> bool {
+    let text = |v: &Option<String>| v.as_deref().filter(|s| !s.is_empty()).map(str::to_owned);
+    let folder_ok = text(&r.install_path).is_none_or(|path| {
+        stored
+            .iter()
+            .any(|s| text(&s.install_path) == Some(path.clone()))
+    });
     r.source_id != crate::local::ROM_SOURCE
         && r.emulator_id.as_deref().is_none_or(str::is_empty)
+        && r.system.as_deref().is_none_or(str::is_empty)
         && r.launch_args.as_deref().is_none_or(str::is_empty)
-        && crate::launch::validate_launch_uri(&r.launch_target).is_ok()
+        && folder_ok
+        && crate::launch::validate_launch_uri(&r.launch_target)
+            .is_ok_and(|uri| plain_steam_link(&uri))
+}
+
+/// `true` for links of other stores; for `steam:` only `run`/`rungameid` with a numeric id.
+pub fn plain_steam_link(uri: &str) -> bool {
+    static STEAM_RUN: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^steam://(run|rungameid)/[0-9]{1,20}/?$").unwrap());
+    !uri.starts_with("steam:") || STEAM_RUN.is_match(uri)
 }
 
 /// Trust boundary for routes sent by the renderer (`library:save`).
@@ -266,7 +285,7 @@ fn is_renderer_uri_route(r: &GameRoute) -> bool {
 /// edit store-link routes ([`is_renderer_uri_route`]).
 pub fn check_renderer_routes(stored: &[GameRoute], incoming: &[GameRoute]) -> Result<()> {
     for route in incoming {
-        if is_renderer_uri_route(route) {
+        if is_renderer_uri_route(stored, route) {
             continue;
         }
         let identity = launch_identity(route);
@@ -904,6 +923,12 @@ mod tests {
             json!({ "sourceId": "custom", "store": "Custom", "launchTarget": "com.epicgames.launcher://apps/x?action=launch" })
         ))
         .is_ok());
+        // A store link may keep an install folder the game already has.
+        let with_folder = vec![exe_route()];
+        assert!(renderer_save(&with_folder, |g| g["routes"].as_array_mut().unwrap().push(
+            json!({ "sourceId": "custom", "store": "Custom", "launchTarget": "steam://rungameid/7/", "installPath": r"C:\Games\Cairn" })
+        ))
+        .is_ok());
         // ...but not with arguments, as a ROM route, or with a scheme outside the store list.
         for bad in [
             json!({ "sourceId": "custom", "store": "Custom", "launchTarget": "steam://run/1", "launchArgs": "-x" }),
@@ -911,6 +936,14 @@ mod tests {
             json!({ "sourceId": "custom", "store": "Custom", "launchTarget": "steam://run/1", "emulatorId": "mgba" }),
             json!({ "sourceId": "custom", "store": "Custom", "launchTarget": "https://evil.example/x.exe" }),
             json!({ "sourceId": "custom", "store": "Custom", "launchTarget": "ms-settings:" }),
+            // Steam passes text after `//` to the game as launch options.
+            json!({ "sourceId": "custom", "store": "Custom", "launchTarget": "steam://run/570//-console +exec x" }),
+            json!({ "sourceId": "custom", "store": "Custom", "launchTarget": "steam://run/570/-novid" }),
+            json!({ "sourceId": "custom", "store": "Custom", "launchTarget": "steam://uninstall/570" }),
+            // A system makes it a ROM route at launch; a folder of its own is opened by
+            // "Open install folder".
+            json!({ "sourceId": "custom", "store": "Custom", "launchTarget": "steam://run/1", "system": "gba" }),
+            json!({ "sourceId": "custom", "store": "Custom", "launchTarget": "steam://run/1", "installPath": r"\\attacker\share" }),
         ] {
             assert!(
                 renderer_save(&stored, |g| g["routes"]

@@ -233,11 +233,14 @@ fn custom_link_game(title: &str, target: &str) -> anyhow::Result<Game> {
     {
         anyhow::bail!("Enter a title and a store link.");
     }
-    let target = crate::launch::validate_launch_uri(&target).map_err(|_| {
-        anyhow::anyhow!(
-            "Enter a store link like steam://run/123. To add a program or ROM file on this PC, use \"Add local game\"."
-        )
-    })?;
+    let target = crate::launch::validate_launch_uri(&target)
+        .ok()
+        .filter(|uri| validation::plain_steam_link(uri))
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Enter a store link like steam://run/123. To add a program or ROM file on this PC, use \"Add local game\"."
+            )
+        })?;
     Ok(Game {
         id: format!("custom:{}", uuid::Uuid::new_v4()),
         title,
@@ -917,6 +920,9 @@ mod tests {
             "file:///C:/Windows/System32/calc.exe",
             "https://evil.example/x.exe",
             r"shell:AppsFolder\Evil!App",
+            "steam://run/570//-console +exec evil",
+            "steam://run/570/-novid",
+            "steam://uninstall/570",
             "",
         ] {
             assert!(custom_link_game("Game", bad).is_err(), "{bad}");
