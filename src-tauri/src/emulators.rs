@@ -51,15 +51,20 @@ pub fn refresh_available(profiles: Vec<EmulatorProfile>) -> Vec<EmulatorProfile>
     profiles.into_iter().map(with_status).collect()
 }
 
-/// An absolute drive-letter path ending in `.exe` (syntax only).
-pub fn executable_path_ok(executable: &str) -> bool {
-    let bytes = executable.as_bytes();
+/// An absolute drive-letter path like `C:\Games\x` (syntax only; no UNC, device or relative
+/// paths).
+pub fn drive_path_ok(path: &str) -> bool {
+    let bytes = path.as_bytes();
     bytes.len() > 3
         && bytes[0].is_ascii_alphabetic()
         && bytes[1] == b':'
         && (bytes[2] == b'\\' || bytes[2] == b'/')
-        && executable.to_lowercase().ends_with(".exe")
-        && normalize_path(executable).is_some()
+        && normalize_path(path).is_some()
+}
+
+/// An absolute drive-letter path ending in `.exe` (syntax only).
+pub fn executable_path_ok(executable: &str) -> bool {
+    drive_path_ok(executable) && executable.to_lowercase().ends_with(".exe")
 }
 
 /// An absolute, existing `.exe` file.

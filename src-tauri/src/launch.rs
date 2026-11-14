@@ -32,17 +32,46 @@ const LAUNCH_SCHEMES: [&str; 9] = [
 /// At most this many tokens in an emulator argument template.
 pub const MAX_TEMPLATE_TOKENS: usize = 128;
 
-/// Store launch links are limited to known store schemes without credentials or ports.
+/// Store launch links are limited to known store schemes in `<scheme>://<host>...` form,
+/// without credentials, ports, backslashes or control characters.
+///
+/// The `://` form is required: an opaque link such as `xbox:x\..\..\Windows\calc.exe` parses
+/// as a URL, but Windows would read the same text as a relative file path.
 pub fn validate_launch_uri(raw: &str) -> Result<String> {
+    if raw.chars().any(|c| c.is_control() || c == '\\') {
+        bail!("Launch links can't contain backslashes or control characters.");
+    }
     let url = url::Url::parse(raw).map_err(|_| anyhow!("Launch link is not a valid URL."))?;
-    if !LAUNCH_SCHEMES.contains(&url.scheme())
+    let scheme = url.scheme();
+    if !LAUNCH_SCHEMES.contains(&scheme) {
+        bail!("Launch links using {scheme}: are not allowed.");
+    }
+    let prefix = format!("{scheme}://");
+    if url.cannot_be_a_base()
+        || url.host_str().is_none_or(str::is_empty)
+        || !raw
+            .get(..prefix.len())
+            .is_some_and(|p| p.eq_ignore_ascii_case(&prefix))
         || !url.username().is_empty()
         || url.password().is_some()
         || url.port().is_some()
     {
-        bail!("Launch links using {}: are not allowed.", url.scheme());
+        bail!("Launch links must look like {scheme}://... with no user name or port.");
     }
     Ok(url.to_string())
+}
+
+/// A target that isn't a valid launch link must be an absolute drive path (`C:\Games\x.exe`)
+/// before it is resolved or started. `link` is the target's link check, used as the error
+/// for link-like text.
+fn require_drive_path(target: &str, link: Result<String>) -> Result<()> {
+    if emulators::drive_path_ok(target) {
+        return Ok(());
+    }
+    match link {
+        Err(e) if target.contains(':') => Err(e),
+        _ => bail!("The launch target is not a full path or a supported store link."),
+    }
 }
 
 /// Accepts a JSON string array, or (for older custom routes) whitespace-separated text.
@@ -350,9 +379,11 @@ pub fn local_launch(
     target: &str,
     confirmations: &HashMap<String, (String, String)>,
 ) -> Result<LocalLaunch> {
-    if target.contains("://") {
-        return Ok(LocalLaunch::Uri(validate_launch_uri(target)?));
+    let link = validate_launch_uri(target);
+    if let Ok(uri) = link {
+        return Ok(LocalLaunch::Uri(uri));
     }
+    require_drive_path(target, link)?;
     let lower = target.to_lowercase();
     if lower.ends_with(".exe") {
         if !emulators::executable_ok(target) {
@@ -374,6 +405,36 @@ pub fn local_launch(
         };
     }
     bail!("This game can only start an .exe, a confirmed shortcut or a store link. Add it again with \"Add local game\".")
+}
+
+/// How a store route (any source but `local` and ROM routes) starts.
+#[derive(Debug, PartialEq)]
+pub enum StoreLaunch {
+    /// A link that passed [`validate_launch_uri`].
+    Link(String),
+    /// `shell:AppsFolder\<AUMID>` (Xbox / Microsoft Store apps), opened through Explorer.
+    AppsFolder,
+    /// An existing file at an absolute drive path (resolved).
+    Path(PathBuf),
+}
+
+/// Decides a store route's launch: a valid link first (decided by parsing, never by looking
+/// for `://`), then an Apps folder entry, else an absolute drive path that exists. Anything
+/// else (relative paths, opaque `scheme:...` text, UNC paths) is refused before it is resolved.
+pub fn store_launch(target: &str) -> Result<StoreLaunch> {
+    let link = validate_launch_uri(target);
+    if let Ok(uri) = link {
+        return Ok(StoreLaunch::Link(uri));
+    }
+    if target.starts_with("shell:AppsFolder\\") {
+        return Ok(StoreLaunch::AppsFolder);
+    }
+    require_drive_path(target, link)?;
+    let path = resolve(target);
+    if !path.exists() {
+        bail!("Launch target was not found.");
+    }
+    Ok(StoreLaunch::Path(path))
 }
 
 fn is_rom_route(route: &GameRoute) -> bool {
@@ -428,30 +489,28 @@ pub async fn launch_game(app: &AppHandle, game: &Game, route_index: usize) -> Re
             LocalLaunch::Shortcut(lnk) => shell_open(lnk.to_string_lossy().into_owned()).await?,
             LocalLaunch::Uri(uri) => shell_open(uri).await?,
         }
-    } else if target.contains("://") {
-        shell_open(validate_launch_uri(target)?).await?;
-    } else if target.starts_with("shell:AppsFolder\\") {
-        let windows_dir = std::env::var_os("SystemRoot")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from(r"C:\Windows"));
-        spawn_detached(&windows_dir.join("explorer.exe"), &[target.to_string()])?;
-    } else if let Some(args) = non_empty(&route.launch_args) {
-        let executable = resolve(target);
-        if !executable.exists() {
-            bail!("Launch target was not found.");
-        }
-        if route.source_id == "epic" {
-            // Epic routes with arguments came from the removed Legendary import. They are never
-            // run; the cleanup in `db::migrate` turns them into launcher links on every start.
-            bail!("This Epic Games entry still uses Legendary, which is no longer supported. Restart Game Lobby to switch it to the Epic Games Launcher.");
-        }
-        spawn_detached(&executable, &parse_launch_arguments(Some(args)))?;
     } else {
-        let path = resolve(target);
-        if !path.exists() {
-            bail!("Launch target was not found.");
+        match store_launch(target)? {
+            StoreLaunch::Link(uri) => shell_open(uri).await?,
+            StoreLaunch::AppsFolder => {
+                let windows_dir = std::env::var_os("SystemRoot")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| PathBuf::from(r"C:\Windows"));
+                spawn_detached(&windows_dir.join("explorer.exe"), &[target.to_string()])?;
+            }
+            StoreLaunch::Path(path) => match non_empty(&route.launch_args) {
+                Some(args) => {
+                    if route.source_id == "epic" {
+                        // Epic routes with arguments came from the removed Legendary import.
+                        // They are never run; the cleanup in `db::migrate` turns them into
+                        // launcher links on every start.
+                        bail!("This Epic Games entry still uses Legendary, which is no longer supported. Restart Game Lobby to switch it to the Epic Games Launcher.");
+                    }
+                    spawn_detached(&path, &parse_launch_arguments(Some(args)))?;
+                }
+                None => shell_open(path.to_string_lossy().into_owned()).await?,
+            },
         }
-        shell_open(path.to_string_lossy().into_owned()).await?;
     }
     if route.installed != Some(false) {
         let settings = db::get_settings(&state.db.lock())?;
@@ -482,6 +541,64 @@ mod tests {
         assert!(validate_launch_uri("https://example.com").is_err());
         assert!(validate_launch_uri("steam://user:pass@host/run/570").is_err());
         assert!(validate_launch_uri("steam://host:99/run/570").is_err());
+        // Opaque links (no `//`) read as relative file paths on Windows; backslashes and
+        // control characters never belong in a link.
+        for bad in OPAQUE_LINKS.iter().copied().chain([
+            "steam://run/570\\..\\x",
+            "steam://run/5\n70",
+            "steam:///run/570",
+            "steam://",
+        ]) {
+            assert!(validate_launch_uri(bad).is_err(), "{bad}");
+        }
+        assert_eq!(
+            validate_launch_uri("Steam://run/570").unwrap(),
+            "steam://run/570"
+        );
+    }
+
+    /// Opaque store "links" that once passed the scheme check.
+    pub(crate) const OPAQUE_LINKS: [&str; 5] = [
+        r"xbox:x\..\..\Windows\System32\calc.exe",
+        r"xbox:x\..\..\..\..\..\..\Windows\System32\calc.exe",
+        r"xbox:\..\x.exe",
+        "uplay:launch/1",
+        "steam:run/1",
+    ];
+
+    #[test]
+    fn store_routes_launch_only_links_apps_or_absolute_paths() {
+        let dir = TempDir::new("launch-store");
+        let exe = dir.file("Game/game.exe");
+        assert_eq!(
+            store_launch("steam://run/570").unwrap(),
+            StoreLaunch::Link("steam://run/570".into())
+        );
+        assert_eq!(
+            store_launch(r"shell:AppsFolder\Pkg_123!App").unwrap(),
+            StoreLaunch::AppsFolder
+        );
+        assert_eq!(
+            store_launch(&exe.to_string_lossy()).unwrap(),
+            StoreLaunch::Path(exe.clone())
+        );
+        let missing = dir.path().join("Game/missing.exe");
+        for bad in OPAQUE_LINKS.iter().map(|s| s.to_string()).chain([
+            missing.to_string_lossy().into_owned(),
+            r"Windows\System32\calc.exe".into(),
+            r"\Windows\System32\calc.exe".into(),
+            r"..\..\Windows\System32\calc.exe".into(),
+            r"\\server\share\calc.exe".into(),
+            "C:calc.exe".into(),
+            "https://evil.example/x.exe".into(),
+        ]) {
+            assert!(store_launch(&bad).is_err(), "{bad}");
+        }
+        // Local routes take the same decision.
+        let none = HashMap::new();
+        for bad in OPAQUE_LINKS {
+            assert!(local_launch(bad, &none).is_err(), "{bad}");
+        }
     }
 
     #[test]

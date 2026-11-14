@@ -936,6 +936,11 @@ mod tests {
             json!({ "sourceId": "custom", "store": "Custom", "launchTarget": "steam://run/1", "emulatorId": "mgba" }),
             json!({ "sourceId": "custom", "store": "Custom", "launchTarget": "https://evil.example/x.exe" }),
             json!({ "sourceId": "custom", "store": "Custom", "launchTarget": "ms-settings:" }),
+            // Opaque links: Windows reads them as relative file paths.
+            json!({ "sourceId": "custom", "store": "Custom", "launchTarget": r"xbox:x\..\..\Windows\System32\calc.exe" }),
+            json!({ "sourceId": "custom", "store": "Custom", "launchTarget": r"xbox:\..\x.exe" }),
+            json!({ "sourceId": "custom", "store": "Custom", "launchTarget": "uplay:launch/1" }),
+            json!({ "sourceId": "custom", "store": "Custom", "launchTarget": "steam:run/1" }),
             // Steam passes text after `//` to the game as launch options.
             json!({ "sourceId": "custom", "store": "Custom", "launchTarget": "steam://run/570//-console +exec x" }),
             json!({ "sourceId": "custom", "store": "Custom", "launchTarget": "steam://run/570/-novid" }),

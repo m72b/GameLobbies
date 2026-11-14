@@ -923,6 +923,11 @@ mod tests {
             "steam://run/570//-console +exec evil",
             "steam://run/570/-novid",
             "steam://uninstall/570",
+            // Opaque links: Windows reads them as relative file paths.
+            r"xbox:x\..\..\Windows\System32\calc.exe",
+            r"xbox:\..\x.exe",
+            "uplay:launch/1",
+            "steam:run/1",
             "",
         ] {
             assert!(custom_link_game("Game", bad).is_err(), "{bad}");
