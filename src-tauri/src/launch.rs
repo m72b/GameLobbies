@@ -218,7 +218,8 @@ const SHELL_CHARACTERS: [char; 7] = ['&', '|', '<', '>', '^', '%', '`'];
 ///
 /// Each token is checked in parts split at `=` (`--core=cores\x.dll`). A part
 /// like `/fullscreen` (one leading `/`, no other separator) is an option, not a path. Control
-/// characters and [`SHELL_CHARACTERS`] are refused. A template without `{rom}` stays valid:
+/// characters, [`SHELL_CHARACTERS`] and non-ASCII characters other than letters and digits
+/// (look-alikes of `\ / : " .`) are refused. A template without `{rom}` stays valid:
 /// the ROM path is then appended as the last argument.
 pub fn check_template(template: &str, executable: &str) -> Result<()> {
     if template.chars().any(char::is_control) {
@@ -228,6 +229,19 @@ pub fn check_template(template: &str, executable: &str) -> Result<()> {
     }
     if let Some(c) = template.chars().find(|c| SHELL_CHARACTERS.contains(c)) {
         bail!("The emulator arguments can't contain \"{c}\". Arguments are passed to the emulator directly, without a command prompt.");
+    }
+    // Emulators with an ANSI command line get the arguments "best-fit" converted: look-alikes
+    // such as U+FF3C (fullwidth \), U+2215 (division slash) or U+FF1A (fullwidth :) turn into
+    // the real characters there and would slip past every path check below. Letters and digits
+    // of any script are fine; other non-ASCII characters are refused.
+    if let Some(c) = template
+        .chars()
+        .find(|c| !(c.is_ascii_graphic() || *c == ' ' || c.is_alphanumeric()))
+    {
+        bail!(
+            "The emulator arguments can't contain \"{c}\" (U+{:04X}). Use plain ASCII punctuation.",
+            c as u32
+        );
     }
     let folder = Path::new(executable)
         .parent()
@@ -718,6 +732,8 @@ mod tests {
             r"--cfg={romdir}\game.cfg",
             "-C Dolphin.Display.Fullscreen=True -b -e {rom}",
             "--set-volume=50",
+            // Letters and digits of any script are fine.
+            "--profile=Pokémon_ポケモン {rom}",
         ] {
             assert!(check_template(good, exe).is_ok(), "{good} should pass");
         }
@@ -750,6 +766,13 @@ mod tests {
             "`calc`",
             "{rom}\ncalc.exe",
             "{rom}\tx",
+            // Look-alikes that best-fit to \ / : " . on an ANSI command line.
+            "-L C\u{FF1A}\u{FF3C}Users\u{FF3C}Me\u{FF3C}evil.dll {rom}",
+            "-L \u{FF3C}\u{FF3C}attacker\u{FF3C}share\u{FF3C}evil.dll {rom}",
+            "-L \u{FF0F}Users\u{FF0F}evil.dll {rom}",
+            "-L \u{2215}Users\u{2215}evil.dll {rom}",
+            "-L \u{FF0E}\u{FF0E}\u{FF3C}evil.dll {rom}",
+            "\u{FF02}-L C:\\x.dll\u{FF02} {rom}",
             // Broken templates.
             "\"{rom}",
         ] {
