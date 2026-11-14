@@ -9,6 +9,10 @@ import { CoverLayer, useCover } from './poster'
 import { GenreBlock, IgdbAbout, IgdbPicker, IgdbRatings, useIgdb } from './igdb-details'
 import { isEmulatorRoute, routeLabel, routeTitle } from '../shared/routes'
 import { ImageWall, useScreenshots } from './image-wall'
+import { GameNotesSection, YourScore } from './game-notes'
+import { ControllerBadge, ControllerBlock, useGameInput } from './controller-info'
+import { SessionHistory } from './session-history'
+import { formatRange } from '../shared/sessions'
 import { elapsedSeconds, formatClock, formatDate, formatSession, formatTime, formatTotal, useNow } from './format'
 import type { EmulatorCatalog, EmulatorProfile, Game, GamePageArt, GameRoute, PlaySession, PlayStats, RunningGame, Settings } from '../shared/types'
 
@@ -41,8 +45,10 @@ export function GamePage({ game, index, settings, running, libraryVersion, actio
   const [emuError, setEmuError] = useState('')
   const [customizing, setCustomizing] = useState(false)
   const [igdbPicking, setIgdbPicking] = useState(false)
+  const [historyOpen, setHistoryOpen] = useState(false)
   const { view: igdb, setView: setIgdb } = useIgdb(game.id)
   const { shots, setShots } = useScreenshots(game.id)
+  const inputState = useGameInput(game.id)
   const { layout, change: changeLayout, flush: flushLayout } = useLogoLayout(game.id, art.custom)
   const now = useNow(!!running || sessions.some(session => !session.endedAt))
 
@@ -122,7 +128,7 @@ export function GamePage({ game, index, settings, running, libraryVersion, actio
     </div>
 
     {igdbPicking && <IgdbPicker game={game} view={igdb} onClose={closeIgdb} onChosen={next => { setIgdb(next); setIgdbPicking(false) }} />}
-    {customizing && <CustomizePanel game={game} custom={art.custom} heroSrc={heroSrc} logoSrc={logoSrc} layout={layout} onLayout={changeLayout} onClose={closeCustomize} sgdbSettingsKey={JSON.stringify([settings.steamGridDbAnimated, settings.steamGridDbNsfw, settings.steamGridDbHumor])} />}
+    {customizing && <CustomizePanel game={game} custom={art.custom} heroSrc={heroSrc} logoSrc={logoSrc} layout={layout} onLayout={changeLayout} onClose={closeCustomize} sgdbSettingsKey={JSON.stringify([settings.steamGridDbAnimated, settings.steamGridDbNsfw, settings.steamGridDbHumor])} animated={settings.steamGridDbAnimated} />}
 
     <div className="gp-bar">
       {launching
@@ -150,6 +156,7 @@ export function GamePage({ game, index, settings, running, libraryVersion, actio
         {settings.tracking && running && <span className="gp-live-dot" />}
         {!settings.tracking ? 'Tracking off' : running ? 'Tracking' : 'Not running'}
       </div>
+      <ControllerBadge input={inputState.input} />
       <button className={'gp-icon' + (game.favorite ? ' active' : '')} aria-pressed={game.favorite} title={game.favorite ? 'Remove from favorites' : 'Add to favorites'} onClick={() => actions.toggleFavorite(game)}><Heart size={18} fill={game.favorite ? 'currentColor' : 'none'} /></button>
       <div className="gp-more">
         <button className="gp-icon" title="More actions" aria-haspopup="menu" aria-expanded={menuOpen} onClick={() => setMenuOpen(value => !value)}><MoreHorizontal size={18} /></button>
@@ -164,7 +171,8 @@ export function GamePage({ game, index, settings, running, libraryVersion, actio
 
     <div className="gp-body">
       <section className="gp-activity">
-        <h2>Activity</h2>
+        <div className="gp-activity-head"><h2>Activity</h2><button type="button" className="secondary-button" onClick={() => setHistoryOpen(true)}>All sessions</button></div>
+        {historyOpen && <SessionHistory gameId={game.id} title={game.title} running={running ? [running] : []} onClose={() => setHistoryOpen(false)} />}
         {sessions.length === 0 && !isRunning
           ? <div className="gp-empty">No play sessions recorded yet. Sessions appear here once you play{settings.tracking ? '.' : ' (tracking is off in settings).'}</div>
           : <ul className="gp-sessions">
@@ -175,10 +183,12 @@ export function GamePage({ game, index, settings, running, libraryVersion, actio
             </li>}
             {sessions.map(session => {
               const inProgress = !session.endedAt
+              // Only a session the tracker is running now counts up; any other keeps its saved length.
+              const live = inProgress && isRunning
               return <li key={session.id} className={inProgress ? 'live' : ''}>
-                <div><b>{formatDate(session.startedAt)}</b><small>{formatTime(session.startedAt)}</small></div>
+                <div><b>{formatDate(session.startedAt)}</b><small>{formatRange(session.startedAt, session.endedAt, formatTime)}{session.interrupted ? ' · Interrupted' : ''}{session.edited ? ' · Edited' : ''}</small></div>
                 <span className="gp-tag">{sourceLabel(session.source)}</span>
-                <span className="gp-dur">{inProgress ? <><span className="gp-live-dot" /> {formatClock(elapsedSeconds(session.startedAt, now))}</> : formatSession(session.seconds)}</span>
+                <span className="gp-dur">{live ? <><span className="gp-live-dot" /> {formatClock(elapsedSeconds(session.startedAt, now))}</> : formatSession(session.seconds)}</span>
               </li>
             })}
           </ul>}
@@ -187,6 +197,7 @@ export function GamePage({ game, index, settings, running, libraryVersion, actio
           <div><span>First played</span><b>{formatDate(stats?.firstPlayed)}</b></div>
         </div>
         <IgdbAbout view={igdb} title={game.title} onSearch={() => setIgdbPicking(true)} />
+        <GameNotesSection gameId={game.id} shots={shots} />
       </section>
 
       <ImageWall game={game} igdb={igdb} shots={shots} onShots={setShots} />
@@ -220,7 +231,9 @@ export function GamePage({ game, index, settings, running, libraryVersion, actio
           {emuError && <div className="form-error" role="alert">{emuError}</div>}
         </div>
         <GenreBlock game={game} view={igdb} />
+        <YourScore gameId={game.id} />
         <IgdbRatings view={igdb} />
+        <ControllerBlock gameId={game.id} state={inputState} />
         <div className="gp-side-block"><div className="detail-label">INSTALL FOLDER</div>
           <div className="muted-text gp-path">{installFolder || 'Unknown'}</div>
           <button className="secondary-button gp-folder" onClick={() => actions.openFolder(game)}><FolderOpen size={14} /> Open folder</button>

@@ -7,7 +7,7 @@ use crate::state::AppState;
 use crate::steamgriddb::{self, CoverPage, FetchSummary, KeyStatus, KeyTest};
 use crate::tracker::RunningGame;
 use crate::types::*;
-use crate::{art, covercache, db, igdb, scan, secrets, theme, tracker, validation, windows};
+use crate::{art, covercache, db, igdb, notes, scan, secrets, theme, tracker, validation, windows};
 use base64::Engine;
 use regex::Regex;
 use serde_json::{json, Map, Value};
@@ -514,6 +514,12 @@ pub async fn backup_export(
             emulators: Some(db::emulator_profiles(&conn).map_err(err)?),
             game_page_custom: Some(db::all_page_custom(&conn).map_err(err)?)
                 .filter(|entries| !entries.is_empty()),
+            game_notes: Some(notes::export_backup(&conn).map_err(err)?)
+                .filter(|section| !section.is_empty()),
+            game_added: Some(crate::storage::all_added(&conn).map_err(err)?)
+                .filter(|entries| !entries.is_empty()),
+            play_sessions: Some(crate::sessions::export_all(&conn).map_err(err)?)
+                .filter(|sessions| !sessions.is_empty()),
         }
     };
     std::fs::write(&path, serde_json::to_string_pretty(&backup).map_err(err)?).map_err(err)?;

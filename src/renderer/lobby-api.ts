@@ -2,7 +2,7 @@
 // Replaces the Electron preload script; the API shape is unchanged.
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
-import type { ArtChangedEvent, IgdbBulkProgress, IgdbMetadataEvent, LobbyAPI, LocalScanProgress, LocalScanSummary, RunningGame, Settings, SettingsSection, SteamGridDbFetchSummary, UpdateProgress } from '../shared/types'
+import type { ArtChangedEvent, StorageProgress, IgdbBulkProgress, IgdbMetadataEvent, LobbyAPI, LocalScanProgress, LocalScanSummary, RunningGame, Settings, SettingsSection, SteamGridDbFetchSummary, UpdateProgress } from '../shared/types'
 
 async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   try {
@@ -88,6 +88,15 @@ const api: LobbyAPI = {
     unignore: path => call('review_unignore', { path }),
     onChanged: callback => subscribe('review:changed', () => callback())
   },
+  health: {
+    check: () => call('health_check'),
+    useFound: (id, index) => call('health_use_found', { id, index }),
+    locate: id => call('health_locate', { id }),
+    removeRoute: (id, confirmed) => call('health_remove_route', { id, confirmed }),
+    dismiss: id => call('health_dismiss', { id }),
+    merge: (id, targetGameId) => call('health_merge', { id, targetGameId: targetGameId ?? null }),
+    mergeRoutes: id => call('health_merge_routes', { id })
+  },
   backup: {
     export: () => call('backup_export'),
     import: () => call('backup_import')
@@ -131,6 +140,16 @@ const api: LobbyAPI = {
     setAsHero: id => call('screenshots_set_as_hero', { id }),
     onChanged: callback => subscribe<{ gameId: string }>('screenshots:changed', callback)
   },
+  notes: {
+    get: gameId => call('notes_get', { gameId }),
+    setRating: (gameId, rating) => call('notes_set_rating', { gameId, rating }),
+    setText: (gameId, notes) => call('notes_set_text', { gameId, notes }),
+    saveMemory: (gameId, memory) => call('notes_save_memory', { gameId, id: memory.id ?? null, date: memory.date, text: memory.text, screenshotId: memory.screenshotId ?? null }),
+    deleteMemory: (gameId, id) => call('notes_delete_memory', { gameId, id }),
+    getInput: gameId => call('input_get', { gameId }),
+    saveInput: (gameId, input) => call('input_save', { gameId, support: input.support, preferred: input.preferred, notes: input.notes }),
+    refreshInput: gameId => call('input_refresh', { gameId })
+  },
   igdb: {
     status: () => call('igdb_status'),
     saveCredentials: (clientId, clientSecret) => call('igdb_save_credentials', { clientId, clientSecret }),
@@ -154,7 +173,17 @@ const api: LobbyAPI = {
     onProgress: callback => subscribe<UpdateProgress>('updates:progress', callback),
     onReady: callback => subscribe('updates:ready', () => callback())
   },
-  app: { quit: () => call('app_quit') }
+  app: { quit: () => call('app_quit') },
+  storage: {
+    list: () => call('storage_list'),
+    rescan: () => call('storage_rescan'),
+    uninstall: (gameId, routeIndex) => call('storage_uninstall', { gameId, routeIndex }),
+    onProgress: callback => subscribe<StorageProgress>('storage:progress', callback)
+  },
+  recent: {
+    list: () => call('recent_list'),
+    dismiss: gameId => call('recent_dismiss', { gameId: gameId ?? null })
+  }
 }
 
 window.lobby = api

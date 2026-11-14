@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState } from 'react'
+import { previewKind } from '../shared/preview'
 import type { SteamGridDbCover, SteamGridDbCoverPage } from '../shared/types'
 
 export type SgdbPickerKind = 'grid' | 'hero' | 'logo'
@@ -88,13 +89,7 @@ export function LoadMore({ shown, hasMore, loading, onMore, noun }: { shown: num
   </div>
 }
 
-/** How a candidate's preview is shown: an image, a muted looping video (animated grids), or not at all. */
-export function previewKind(thumb: string, animated: boolean): 'image' | 'video' | null {
-  let path: string
-  try { path = new URL(thumb).pathname.toLowerCase() } catch { return null }
-  if (path.endsWith('.webm') || path.endsWith('.mp4')) return animated && path.endsWith('.webm') ? 'video' : null
-  return 'image'
-}
+export { previewKind }
 
 /** Candidates the picker can show with the user's animated setting (previews it can't play are left out). */
 export function pickerCovers(covers: SteamGridDbCover[], animated: boolean) {

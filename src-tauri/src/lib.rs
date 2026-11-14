@@ -5,13 +5,17 @@ mod catalog;
 mod commands;
 mod covercache;
 mod db;
+mod dbrepair;
 mod emulators;
+mod health;
+mod health_commands;
 mod igdb;
 mod importers;
 mod launch;
 mod local;
 mod local_commands;
 mod localscan;
+mod notes;
 mod picks;
 mod platform;
 mod review;
@@ -19,8 +23,10 @@ mod roots;
 mod scan;
 mod screenshots;
 mod secrets;
+mod sessions;
 mod state;
 mod steamgriddb;
+mod storage;
 mod theme;
 mod tracker;
 mod types;
@@ -127,7 +133,10 @@ pub fn run() {
                     data_dir
                 }
             };
-            let database = db::Db::open(&data_dir.join("library.sqlite"))?;
+            let (database, repair) = db::Db::open_checked(
+                &data_dir.join("library.sqlite"),
+                Some(&data_dir.join("screenshots")),
+            )?;
             let hours = db::get_settings(&database.lock())?.scan_interval_hours;
             app.manage(AppState {
                 db: database,
@@ -145,6 +154,22 @@ pub fn run() {
             scan::configure_schedule(app.handle(), hours);
             tracker::start(app.handle());
             windows::create(app.handle(), false)?;
+            if let Some(notice) = repair {
+                use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+                app.dialog()
+                    .message(notice.message())
+                    .title(if notice.replaced {
+                        "Library repaired"
+                    } else {
+                        "Library damaged"
+                    })
+                    .kind(if notice.replaced {
+                        MessageDialogKind::Info
+                    } else {
+                        MessageDialogKind::Warning
+                    })
+                    .show(|_| {});
+            }
             // Off the UI path: a few seconds after launch, cache remote covers locally.
             covercache::spawn_startup(app.handle());
             Ok(())
@@ -190,12 +215,27 @@ pub fn run() {
             local_commands::review_resolve,
             local_commands::review_ignored,
             local_commands::review_unignore,
+            health_commands::health_check,
+            health_commands::health_use_found,
+            health_commands::health_locate,
+            health_commands::health_remove_route,
+            health_commands::health_dismiss,
+            health_commands::health_merge,
+            health_commands::health_merge_routes,
             local_commands::library_set_emulator,
             local_commands::library_add_local_game,
             commands::plugins_list,
             commands::plugins_install,
             commands::backup_export,
             commands::backup_import,
+            notes::notes_get,
+            notes::notes_set_rating,
+            notes::notes_set_text,
+            notes::notes_save_memory,
+            notes::notes_delete_memory,
+            notes::input_get,
+            notes::input_save,
+            notes::input_refresh,
             commands::steamgriddb_status,
             commands::steamgriddb_save_key,
             commands::steamgriddb_test_key,
@@ -219,6 +259,12 @@ pub fn run() {
             screenshots::screenshots_import_steam,
             screenshots::screenshots_remove,
             screenshots::screenshots_set_as_hero,
+            sessions::sessions_page,
+            sessions::sessions_update,
+            sessions::sessions_delete,
+            sessions::sessions_set_journal,
+            sessions::sessions_share_text,
+            sessions::sessions_export,
             commands::igdb_status,
             commands::igdb_save_credentials,
             commands::igdb_clear_credentials,
@@ -230,6 +276,11 @@ pub fn run() {
             commands::igdb_fetch_all,
             commands::igdb_cancel_fetch_all,
             commands::igdb_progress,
+            storage::storage_list,
+            storage::storage_rescan,
+            storage::storage_uninstall,
+            storage::recent_list,
+            storage::recent_dismiss,
             updater::updates_check,
             updater::updates_auto_check,
             updater::updates_last,

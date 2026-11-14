@@ -8,7 +8,7 @@ use url::Url;
 pub const MAIN: &str = "main";
 pub const SETTINGS: &str = "settings";
 const PAGES: [&str; 3] = ["/", "/index.html", "/settings.html"];
-const EXTERNAL_HOSTS: [&str; 8] = [
+const EXTERNAL_HOSTS: [&str; 9] = [
     "playnite.link",
     "steamgriddb.com",
     "www.steamgriddb.com",
@@ -17,6 +17,7 @@ const EXTERNAL_HOSTS: [&str; 8] = [
     "igdb.com",
     "www.igdb.com",
     "howlongtobeat.com",
+    "backloggd.com",
 ];
 
 fn is_app_page(url: &Url) -> bool {

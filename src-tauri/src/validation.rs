@@ -100,7 +100,15 @@ const EMULATOR_KEYS: &[&str] = &[
     "addedAt",
 ];
 const PLUGIN_KEYS: &[&str] = &["id", "name", "version", "kind", "store", "manifestFolder"];
-const BACKUP_KEYS: &[&str] = &["games", "settings", "emulators", "gamePageCustom"];
+const BACKUP_KEYS: &[&str] = &[
+    "games",
+    "settings",
+    "emulators",
+    "gamePageCustom",
+    "gameNotes",
+    "gameAdded",
+    "playSessions",
+];
 /// Top-level backup keys of older versions (library connections and store accounts) that are
 /// ignored on import.
 const RETIRED_BACKUP_KEYS: &[&str] = &[
@@ -112,12 +120,12 @@ const RETIRED_BACKUP_KEYS: &[&str] = &[
 ];
 const PAGE_CUSTOM_KEYS: &[&str] = &["gameId", "hero", "logo", "logoPosition", "logoScale"];
 /// Image types accepted for custom heroes and logos (`lobby-cover://` files).
-pub const PAGE_IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "webp", "avif"];
+pub const PAGE_IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "webp", "avif", "gif"];
 pub const LOBBY_COVER_PREFIX: &str = "lobby-cover://";
 /// Bare covers-folder file names as Game Lobby creates them: ASCII letters, digits, `_.-`,
 /// not starting with a dot, ending in an image extension.
 static COVER_NAME: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)^[A-Za-z0-9_-][A-Za-z0-9_.-]{0,199}\.(png|jpe?g|webp|avif)$").unwrap()
+    Regex::new(r"(?i)^[A-Za-z0-9_-][A-Za-z0-9_.-]{0,199}\.(png|jpe?g|webp|avif|gif)$").unwrap()
 });
 
 fn object<'a>(value: &'a Value, what: &str) -> Result<&'a Map<String, Value>> {
@@ -803,11 +811,44 @@ pub fn backup(value: &Value) -> Result<Backup> {
         Some(_) => bail!("Backup game page customizations are invalid."),
         None => None,
     };
+    let game_notes = match clean.get("gameNotes") {
+        Some(v) => {
+            let parsed: crate::notes::NotesBackup = serde_json::from_value(v.clone())
+                .map_err(|e| anyhow!("Backup notes are invalid: {e}"))?;
+            crate::notes::validate_backup(&parsed)?;
+            Some(parsed)
+        }
+        None => None,
+    };
+    let game_added = match clean.get("gameAdded") {
+        Some(Value::Array(list)) if list.len() <= 100_000 => Some(
+            list.iter()
+                .map(|entry| {
+                    let entry: crate::storage::GameAddedEntry =
+                        serde_json::from_value(entry.clone())
+                            .map_err(|_| anyhow!("Backup recently-added entries are invalid."))?;
+                    if entry.game_id.is_empty() || entry.game_id.len() > 512 {
+                        bail!("Backup recently-added entries are invalid.");
+                    }
+                    Ok(entry)
+                })
+                .collect::<Result<Vec<_>>>()?,
+        ),
+        Some(_) => bail!("Backup recently-added entries are invalid."),
+        None => None,
+    };
+    let play_sessions = clean
+        .get("playSessions")
+        .map(|list| crate::sessions::validate_backup(list, now_ms()))
+        .transpose()?;
     Ok(Backup {
         games,
         settings,
         emulators,
         game_page_custom,
+        game_notes,
+        game_added,
+        play_sessions,
     })
 }
 
@@ -829,6 +870,28 @@ mod tests {
     fn with(mut v: Value, key: &str, extra: Value) -> Value {
         v.as_object_mut().unwrap().insert(key.into(), extra);
         v
+    }
+
+    #[test]
+    fn backup_game_notes_are_validated_on_import() {
+        let good = json!({ "games": [game_json()], "gameNotes": {
+            "notes": [{ "gameId": "steam:570", "rating": 4.5, "notes": "n" }],
+            "memories": [{ "gameId": "steam:570", "date": "2025-01-31", "text": "t" }],
+            "input": [{ "gameId": "steam:570", "support": "full", "supportSource": "steam" }] } });
+        assert!(backup(&good).unwrap().game_notes.is_some());
+        assert!(backup(&json!({ "games": [game_json()] }))
+            .unwrap()
+            .game_notes
+            .is_none());
+        for bad in [
+            json!({ "notes": [{ "gameId": "steam:570", "rating": 9 }] }),
+            json!({ "memories": [{ "gameId": "steam:570", "date": "2025-02-31", "text": "t" }] }),
+            json!({ "input": [{ "gameId": "steam:570", "support": "maybe" }] }),
+            json!({ "notes": [{ "gameId": "steam:570", "notes": "x".repeat(5001) }] }),
+            json!({ "input": [{ "gameId": "steam:570", "support": "full", "exe": "x" }] }),
+        ] {
+            assert!(backup(&with(json!({ "games": [game_json()] }), "gameNotes", bad)).is_err());
+        }
     }
 
     #[test]

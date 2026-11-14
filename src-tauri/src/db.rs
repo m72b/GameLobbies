@@ -17,15 +17,29 @@ pub struct Db {
 }
 
 impl Db {
+    #[cfg(test)]
     pub fn open(file: &Path) -> Result<Self> {
+        Ok(Self::open_checked(file, None)?.0)
+    }
+
+    /// Opens the library after a `PRAGMA quick_check`. A damaged library is repaired into a
+    /// new file and swapped in before the connection is kept ([`crate::dbrepair::open_or_repair`]);
+    /// the notice says what happened, for the user.
+    pub fn open_checked(
+        file: &Path,
+        screenshots_dir: Option<&Path>,
+    ) -> Result<(Self, Option<crate::dbrepair::RepairNotice>)> {
         if let Some(dir) = file.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        let conn = Connection::open(file).with_context(|| format!("opening {}", file.display()))?;
+        let (conn, notice) = crate::dbrepair::open_or_repair(file, screenshots_dir)?;
         migrate(&conn, Some(file))?;
-        Ok(Self {
-            conn: Mutex::new(conn),
-        })
+        Ok((
+            Self {
+                conn: Mutex::new(conn),
+            },
+            notice,
+        ))
     }
 
     #[cfg(test)]
@@ -42,6 +56,21 @@ impl Db {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
+}
+
+/// Creates the current schema in an empty database (the repair tool's target).
+pub(crate) fn create_schema(db: &Connection) -> Result<()> {
+    migrate(db, None)
+}
+
+/// A copy of the library made before a migration changes it, with the online backup API.
+fn migration_backup(db: &Connection, file: &Path, kind: &str) -> Result<()> {
+    let backup = file.with_file_name(format!(
+        "library.sqlite.pre-{kind}-migration-{}.bak",
+        now_ms()
+    ));
+    crate::dbrepair::backup_to(db, &backup)
+        .context("Could not back up the library before its database migration.")
 }
 
 fn migrate(db: &Connection, file: Option<&Path>) -> Result<()> {
@@ -69,7 +98,13 @@ fn migrate(db: &Connection, file: Option<&Path>) -> Result<()> {
         CREATE INDEX IF NOT EXISTS cover_cache_file ON cover_cache(file);
         CREATE TABLE IF NOT EXISTS game_metadata(gameId TEXT PRIMARY KEY,igdbId INTEGER,json TEXT,fetchedAt INTEGER NOT NULL,source TEXT NOT NULL DEFAULT 'auto');
         CREATE TABLE IF NOT EXISTS game_screenshots(id TEXT PRIMARY KEY,gameId TEXT NOT NULL,file TEXT NOT NULL,hash TEXT NOT NULL,width INTEGER NOT NULL,height INTEGER NOT NULL,addedAt INTEGER NOT NULL,source TEXT NOT NULL DEFAULT 'user',originalPath TEXT,UNIQUE(gameId,hash));
-        CREATE INDEX IF NOT EXISTS game_screenshots_game ON game_screenshots(gameId,addedAt);",
+        CREATE INDEX IF NOT EXISTS game_screenshots_game ON game_screenshots(gameId,addedAt);
+        CREATE TABLE IF NOT EXISTS game_notes(gameId TEXT PRIMARY KEY,rating REAL,notes TEXT NOT NULL DEFAULT '',updatedAt INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS game_memories(id INTEGER PRIMARY KEY,gameId TEXT NOT NULL,date TEXT NOT NULL,text TEXT NOT NULL,screenshotId TEXT,createdAt INTEGER NOT NULL);
+        CREATE INDEX IF NOT EXISTS game_memories_game ON game_memories(gameId,date);
+        CREATE TABLE IF NOT EXISTS game_input(gameId TEXT PRIMARY KEY,support TEXT NOT NULL DEFAULT 'unknown',supportSource TEXT NOT NULL DEFAULT '',preferred TEXT NOT NULL DEFAULT '',notes TEXT NOT NULL DEFAULT '',updatedAt INTEGER NOT NULL,steamCheckedAt INTEGER NOT NULL DEFAULT 0);
+        CREATE TABLE IF NOT EXISTS install_sizes(gameId TEXT NOT NULL,path TEXT NOT NULL,bytes INTEGER NOT NULL,measuredAt INTEGER NOT NULL,partial INTEGER NOT NULL DEFAULT 0,source TEXT NOT NULL DEFAULT 'scan',PRIMARY KEY(gameId,path));
+        CREATE TABLE IF NOT EXISTS game_added(gameId TEXT PRIMARY KEY,addedAt INTEGER NOT NULL,seen INTEGER NOT NULL DEFAULT 0);",
         GAMES_TABLE.replace("CREATE TABLE games", "CREATE TABLE IF NOT EXISTS games")
     ))?;
     let columns: HashSet<String> = db
@@ -111,15 +146,7 @@ fn migrate(db: &Connection, file: Option<&Path>) -> Result<()> {
         regex::Regex::new(r"(?i)title\s+TEXT\s+NOT\s+NULL\s+COLLATE\s+NOCASE\s+UNIQUE")?;
     if unique_title.is_match(&schema) {
         if let Some(file) = file {
-            let busy: i64 = db.query_row("PRAGMA wal_checkpoint(FULL)", [], |row| row.get(0))?;
-            if busy != 0 {
-                bail!("Could not safely checkpoint the library before its database migration.");
-            }
-            let backup = file.with_file_name(format!(
-                "library.sqlite.pre-title-migration-{}.bak",
-                now_ms()
-            ));
-            std::fs::copy(file, backup)?;
+            migration_backup(db, file, "title")?;
         }
         db.execute_batch(&format!(
             "BEGIN;
@@ -130,16 +157,15 @@ fn migrate(db: &Connection, file: Option<&Path>) -> Result<()> {
              COMMIT;"
         ))?;
     }
-    // Sessions still open belong to a previous run that ended without closing them (crash,
-    // power loss): they keep their last saved length and are closed at that point.
-    db.execute(
-        "UPDATE play_sessions SET endedAt=startedAt+seconds*1000 WHERE endedAt IS NULL",
-        [],
-    )?;
+    // Session history columns and tables. Sessions still open belong to a previous run that
+    // ended without closing them (crash, power loss): they keep their last saved length, are
+    // closed at that point and marked interrupted.
+    crate::sessions::migrate(db)?;
     db.execute(
         "INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)",
         params!["app", serde_json::to_string(&Settings::default())?],
     )?;
+    crate::storage::prepare(db)?;
     let version: i64 = db.query_row("PRAGMA user_version", [], |row| row.get(0))?;
     if version > SCHEMA_VERSION {
         // Written by a newer Game Lobby: open it as usual, but don't run cleanups that may
@@ -221,15 +247,7 @@ fn remove_store_accounts(db: &Connection, file: Option<&Path>, version: i64) -> 
         return Ok(());
     }
     if let Some(file) = file {
-        let busy: i64 = db.query_row("PRAGMA wal_checkpoint(FULL)", [], |row| row.get(0))?;
-        if busy != 0 {
-            bail!("Could not safely checkpoint the library before its database migration.");
-        }
-        let backup = file.with_file_name(format!(
-            "library.sqlite.pre-store-accounts-migration-{}.bak",
-            now_ms()
-        ));
-        std::fs::copy(file, backup)?;
+        migration_backup(db, file, "store-accounts")?;
     }
     let tx = db.unchecked_transaction()?;
     for name in &plan.secrets {
@@ -639,7 +657,7 @@ const LOCAL_ONLY_SOURCES: [&str; 6] = [
 /// Ids of games with a page customization (loaded once per reconcile).
 fn customized_game_ids(db: &Connection) -> Result<HashSet<String>> {
     let mut stmt = db
-        .prepare("SELECT gameId FROM game_page_custom UNION SELECT gameId FROM game_screenshots")?;
+        .prepare("SELECT gameId FROM game_page_custom UNION SELECT gameId FROM game_screenshots UNION SELECT gameId FROM game_notes UNION SELECT gameId FROM game_memories UNION SELECT gameId FROM game_input WHERE supportSource='user' OR preferred<>'' OR notes<>''")?;
     let ids = stmt
         .query_map([], |row| row.get(0))?
         .collect::<rusqlite::Result<_>>()?;
@@ -800,6 +818,9 @@ fn delete_game_rows(db: &Connection, id: &str) -> Result<()> {
         "DELETE FROM game_page_custom WHERE gameId=?",
         "DELETE FROM game_metadata WHERE gameId=?",
         "DELETE FROM game_screenshots WHERE gameId=?",
+        "DELETE FROM game_notes WHERE gameId=?",
+        "DELETE FROM game_memories WHERE gameId=?",
+        "DELETE FROM game_input WHERE gameId=?",
         "DELETE FROM games WHERE id=?",
     ] {
         db.execute(sql, [id])?;
@@ -887,6 +908,14 @@ pub fn merge_games(db: &mut Connection, target_id: &str, source_id: &str) -> Res
         "UPDATE OR IGNORE game_screenshots SET gameId=?1 WHERE gameId=?2",
         params![target_id, source_id],
     )?;
+    // Notes, memories and controller details: the target's win; memories all move over.
+    for sql in [
+        "UPDATE OR IGNORE game_notes SET gameId=?1 WHERE gameId=?2",
+        "UPDATE game_memories SET gameId=?1 WHERE gameId=?2",
+        "UPDATE OR IGNORE game_input SET gameId=?1 WHERE gameId=?2",
+    ] {
+        tx.execute(sql, params![target_id, source_id])?;
+    }
     delete_game_rows(&tx, source_id)?;
     tx.commit()?;
     all_games(db)
@@ -932,7 +961,7 @@ pub fn close_session(db: &Connection, id: i64, ended_at: i64, seconds: i64) -> R
 /// A game's sessions, newest first.
 pub fn play_sessions(db: &Connection, game_id: &str, limit: i64) -> Result<Vec<PlaySession>> {
     let mut stmt = db.prepare(
-        "SELECT id,startedAt,endedAt,seconds,source FROM play_sessions WHERE gameId=? ORDER BY startedAt DESC,id DESC LIMIT ?",
+        "SELECT id,startedAt,endedAt,seconds,source,edited,interrupted FROM play_sessions WHERE gameId=? ORDER BY startedAt DESC,id DESC LIMIT ?",
     )?;
     let rows = stmt
         .query_map(params![game_id, limit], |row| {
@@ -942,6 +971,8 @@ pub fn play_sessions(db: &Connection, game_id: &str, limit: i64) -> Result<Vec<P
                 ended_at: row.get(2)?,
                 seconds: row.get(3)?,
                 source: row.get(4)?,
+                edited: row.get::<_, i64>(5)? != 0,
+                interrupted: row.get::<_, i64>(6)? != 0,
             })
         })?
         .collect::<rusqlite::Result<_>>()?;
@@ -1661,6 +1692,14 @@ pub fn restore_backup(db: &mut Connection, backup: &Backup) -> Result<usize> {
     for entry in backup.game_page_custom.iter().flatten() {
         put_page_custom(&tx, &entry.game_id, &entry.custom())?;
     }
+    if let Some(notes) = &backup.game_notes {
+        crate::notes::restore_backup(&tx, notes)?;
+    }
+    let ids: Vec<&str> = backup.games.iter().map(|g| g.id.as_str()).collect();
+    crate::storage::restore_added(&tx, &ids, backup.game_added.as_deref())?;
+    if let Some(sessions) = &backup.play_sessions {
+        crate::sessions::restore(&tx, sessions, now_ms())?;
+    }
     tx.commit()?;
     Ok(backup.games.len())
 }
@@ -1675,17 +1714,25 @@ pub fn migrate_from_electron(data_dir: &Path) -> Result<bool> {
     let Some(appdata) = std::env::var_os("APPDATA").map(PathBuf::from) else {
         return Ok(false);
     };
-    let old_dir = appdata.join("game-lobby");
+    copy_library_from(&appdata.join("game-lobby"), data_dir)
+}
+
+/// Copies `old_dir/library.sqlite` (read through its WAL, with the online backup API) and the
+/// custom covers into `data_dir`. The `-wal` and `-shm` files are never copied: a WAL copied
+/// apart from its main file can be replayed onto the wrong database.
+pub(crate) fn copy_library_from(old_dir: &Path, data_dir: &Path) -> Result<bool> {
+    let target = data_dir.join("library.sqlite");
     let old = old_dir.join("library.sqlite");
-    if !old.exists() {
+    if target.exists() || !old.exists() {
         return Ok(false);
     }
     std::fs::create_dir_all(data_dir)?;
-    for suffix in ["", "-wal", "-shm"] {
-        let from = old_dir.join(format!("library.sqlite{suffix}"));
-        if from.exists() {
-            std::fs::copy(&from, data_dir.join(format!("library.sqlite{suffix}")))?;
-        }
+    let copied = crate::dbrepair::open_source(&old, false)
+        .and_then(|source| crate::dbrepair::backup_to(&source, &target));
+    if let Err(e) = copied {
+        // Only the file this call created; the next start tries again.
+        let _ = std::fs::remove_file(&target);
+        return Err(e);
     }
     let old_covers = old_dir.join("covers");
     if old_covers.is_dir() {
@@ -2485,6 +2532,9 @@ mod tests {
             settings: None,
             emulators: None,
             game_page_custom: Some(all_page_custom(&conn).unwrap()),
+            game_notes: None,
+            game_added: None,
+            play_sessions: None,
         };
         let text = serde_json::to_string(&backup).unwrap();
         let raw: Value = serde_json::from_str(&text).unwrap();
@@ -2517,6 +2567,7 @@ mod tests {
         assert_eq!(page_custom(&conn, "a").unwrap(), custom);
         let without = serde_json::to_value(Backup {
             game_page_custom: None,
+            game_notes: None,
             ..parsed
         })
         .unwrap();
@@ -2613,6 +2664,9 @@ mod tests {
             settings: None,
             emulators: Some(vec![p.clone()]),
             game_page_custom: None,
+            game_notes: None,
+            game_added: None,
+            play_sessions: None,
         })
         .unwrap();
         let parsed = crate::validation::backup(&text).unwrap();

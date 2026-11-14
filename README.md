@@ -136,9 +136,20 @@ Game Lobby ships with a built-in dark fallback theme. Additional themes can be l
 
 Theme JSON example: [`themes/example.json`](themes/example.json). CSS themes should define supported `--token-name` values inside a `:root` block.
 
+## Play session history
+
+Every tracked session (game, start, end, duration and whether it was launched from Game Lobby or detected running) is kept in the library. The game page lists recent sessions with their date and start and end times; **All sessions** on the game page, and **Play history** in the library bar or the side rail, open the full history for one game or for all games, loaded 50 at a time.
+
+- **Limits.** Sessions are only recorded while Game Lobby is running. A game that starts and ends while Game Lobby is closed isn't recorded, and detection relies on the game's process being seen with a game window.
+- **Crashes and shutdowns.** Playtime is saved every few seconds while a game runs. If Game Lobby closes unexpectedly, the next start ends the open session at the last time the game was seen running and marks it **Interrupted**; it is never counted up to the current time.
+- **Corrections.** You can correct a finished session's start and end (the end must be after the start, not in the future, and not overlap another session of the same game) or delete it after confirming. Corrected sessions are marked **Edited**, and the game's playtime changes by the same amount. Playtime imported from stores is kept.
+- **Journal.** Each session can have a short note (up to 2,000 characters) and screenshots you added to the game.
+- **Share.** **Share session** builds a plain-text or Markdown summary (game, date, start and end, duration, store or emulator and system, note) to copy or save through a Save dialog, and can open a Backloggd search for the game in your browser. Nothing leaves your PC unless you copy, save or open a link.
+- **Storage and backups.** History, notes and screenshot links are stored in the local library database in the app data folder (see below). Library backups include finished sessions and their notes; importing a backup restores them for games in the library and skips sessions you already have.
+
 ## Local data and privacy
 
-The SQLite database is managed by `src-tauri/src/db.rs` and is stored in `%APPDATA%\app.gamelobby.desktop`, together with cached cover art. On first launch, Game Lobby copies an existing library and custom covers from the earlier Electron build (`%APPDATA%\game-lobby`), leaving the original untouched; re-enter API keys once, because keys encrypted by the Electron build can't be read. It uses write-ahead logging and foreign-key checks. JSON backups include game metadata, launch routes, settings and emulator profiles, but never API keys.
+The SQLite database is managed by `src-tauri/src/db.rs` and is stored in `%APPDATA%\app.gamelobby.desktop`, together with cached cover art. On first launch, Game Lobby copies an existing library and custom covers from the earlier Electron build (`%APPDATA%\game-lobby`), leaving the original untouched; re-enter API keys once, because keys encrypted by the Electron build can't be read. It uses write-ahead logging and foreign-key checks. JSON backups include game metadata, launch routes, settings, emulator profiles and play session history with notes, but never API keys.
 
 Game Lobby has no telemetry and no account of its own. It contacts the internet only for the features you use: the services listed under [Data sources and terms](#data-sources-and-terms), remote themes you add, and update checks against GitHub.
 
