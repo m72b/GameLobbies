@@ -235,7 +235,7 @@ fn custom_link_game(title: &str, target: &str) -> anyhow::Result<Game> {
     }
     let target = crate::launch::validate_launch_uri(&target)
         .ok()
-        .filter(|uri| validation::plain_steam_link(uri))
+        .filter(|uri| validation::renderer_link_ok(uri))
         .ok_or_else(|| {
             anyhow::anyhow!(
                 "Enter a store link like steam://run/123. To add a program or ROM file on this PC, use \"Add local game\"."
