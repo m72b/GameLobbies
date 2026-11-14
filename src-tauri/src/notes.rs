@@ -529,16 +529,32 @@ pub fn parse_controller_support(body: &str, app_id: &str) -> Result<Option<&'sta
     if entry.get("success").and_then(|s| s.as_bool()) != Some(true) {
         return Ok(None);
     }
-    Ok(
-        match entry
-            .pointer("/data/controller_support")
-            .and_then(|s| s.as_str())
-        {
-            Some(s) if s.eq_ignore_ascii_case("full") => Some("full"),
-            Some(s) if s.eq_ignore_ascii_case("partial") => Some("partial"),
-            _ => None,
-        },
-    )
+    match entry
+        .pointer("/data/controller_support")
+        .and_then(|s| s.as_str())
+    {
+        Some(s) if s.eq_ignore_ascii_case("full") => return Ok(Some("full")),
+        Some(s) if s.eq_ignore_ascii_case("partial") => return Ok(Some("partial")),
+        _ => {}
+    }
+    // Many games (TEKKEN 8, for one) leave `controller_support` out and only list the store
+    // categories 28 "Full Controller Support" or 18 "Partial Controller Support".
+    let ids: Vec<i64> = entry
+        .pointer("/data/categories")
+        .and_then(|c| c.as_array())
+        .map(|list| {
+            list.iter()
+                .filter_map(|c| c.get("id").and_then(|id| id.as_i64()))
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(if ids.contains(&28) {
+        Some("full")
+    } else if ids.contains(&18) {
+        Some("partial")
+    } else {
+        None
+    })
 }
 
 /// Whether Steam should be asked again for this game.
@@ -1059,6 +1075,19 @@ mod tests {
         assert_eq!(parse_controller_support(odd, "570").unwrap(), None);
         assert!(parse_controller_support(full, "571").is_err());
         assert!(parse_controller_support("not json", "570").is_err());
+        // No controller_support field: fall back to the store categories.
+        let cat_partial = r#"{"1778820":{"success":true,"data":{"categories":[{"id":2},{"id":18,"description":"Partial Controller Support"}]}}}"#;
+        let cat_full = r#"{"7":{"success":true,"data":{"categories":[{"id":18},{"id":28}]}}}"#;
+        let cat_none = r#"{"7":{"success":true,"data":{"categories":[{"id":2},{"id":"28"}]}}}"#;
+        assert_eq!(
+            parse_controller_support(cat_partial, "1778820").unwrap(),
+            Some("partial")
+        );
+        assert_eq!(
+            parse_controller_support(cat_full, "7").unwrap(),
+            Some("full")
+        );
+        assert_eq!(parse_controller_support(cat_none, "7").unwrap(), None);
     }
 
     #[test]
