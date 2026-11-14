@@ -8,7 +8,16 @@ use url::Url;
 pub const MAIN: &str = "main";
 pub const SETTINGS: &str = "settings";
 const PAGES: [&str; 3] = ["/", "/index.html", "/settings.html"];
-const EXTERNAL_HOSTS: [&str; 3] = ["playnite.link", "steamgriddb.com", "www.steamgriddb.com"];
+const EXTERNAL_HOSTS: [&str; 8] = [
+    "playnite.link",
+    "steamgriddb.com",
+    "www.steamgriddb.com",
+    "dev.twitch.tv",
+    "api-docs.igdb.com",
+    "igdb.com",
+    "www.igdb.com",
+    "howlongtobeat.com",
+];
 
 fn is_app_page(url: &Url) -> bool {
     let local = match url.scheme() {
@@ -41,7 +50,7 @@ fn open_if_allowed_external(url: &Url) {
 }
 
 /// Settings pages that `settings_open` may jump to (`settings.html?section=<id>`).
-pub const SETTINGS_SECTIONS: [&str; 1] = ["updates"];
+pub const SETTINGS_SECTIONS: [&str; 3] = ["updates", "cover-art", "metadata"];
 
 pub fn create(app: &AppHandle, settings: bool) -> tauri::Result<()> {
     create_page(app, settings, None)

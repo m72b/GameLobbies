@@ -21,8 +21,14 @@ export interface GameRoute { sourceId: string; store: Store; appId?: string; lau
 export interface Game { id: string; title: string; cover?: string; defaultCover?: string; store: Store; genre?: string; playtimeMinutes: number; playtimeSeconds?: number; lastPlayed?: number; hidden: boolean; favorite: boolean; routes: GameRoute[] }
 /** `library.scan()` result. `local` is the library folder part, present when any folder was scanned (store scans and folder scans run side by side). */
 export interface LibraryStats { total: number; imported?: number; errors?: string[]; scannedAt?: number; local?: LocalScanSummary }
-export interface LibraryConnections { steamId: string; steamApiKeySet: boolean; legendaryPath: string; gogDatabasePath: string }
-export interface LibraryConnectionInput { steamId: string; steamApiKey?: string; legendaryPath: string; gogDatabasePath: string }
+/**
+ * A store or launcher Game Lobby scans automatically (`library.stores()`). `id` is what
+ * `Settings.disabledStores` holds; `found` is the number of installed games the last scan found
+ * (absent before the first scan); `error` is set when the last scan could not read it.
+ */
+export interface StoreStatus { id: StoreId; name: string; enabled: boolean; found?: number; error?: string; scannedAt?: number }
+export const storeIds = ['steam', 'epic', 'gog', 'ea', 'battlenet', 'ubisoft', 'amazon', 'itch', 'xbox'] as const
+export type StoreId = typeof storeIds[number]
 export interface ThemeTokens { name: string; bg: string; surface: string; surface2: string; accent: string; text: string; muted: string; radius: string; gap: string; font: string; hover: string; backgroundImage?: string }
 export interface Settings { scanIntervalHours: number; posterWidth: number; showBadges: boolean; animations: boolean; tracking: boolean; theme: ThemeTokens; themeUrl?: string; themeName?: string; /** Fetch missing covers from SteamGridDB after each library scan (needs a key). Default true. */ steamGridDbAutoFetch: boolean
   /** Library shows only games with an installed route. UI-only filter. Default true. */
@@ -48,7 +54,9 @@ export interface Settings { scanIntervalHours: number; posterWidth: number; show
    */
   trackingExcludedGameIds: string[]
   /** Check for a new release about 10 s after startup, at most once a day. Never installs without a click. Default true. */
-  autoCheckUpdates: boolean }
+  autoCheckUpdates: boolean
+  /** Stores that library scans skip (distinct `StoreId`s). Default []. */
+  disabledStores: StoreId[] }
 /** Grid styles accepted by `Settings.steamGridDbStyles` (the backend rejects anything else). */
 export const steamGridDbStyles = ['alternate', 'blurred', 'white_logo', 'material', 'no_logo'] as const
 export type SteamGridDbStyle = typeof steamGridDbStyles[number]
@@ -252,23 +260,27 @@ export interface SteamGridDbKeyTest { ok: boolean; message: string }
  * - testKey(): one authenticated request to check the saved key. `{ ok: true, message:
  *   "SteamGridDB key works." }`, or `ok: false` with a friendly reason ("No SteamGridDB key is
  *   saved.", key rejected, network/rate-limit errors). Never rejects; never includes the key.
- * - search(gameId): up to 30 poster candidates in 2:3 sizes, filtered by the saved settings
+ * - search(gameId, page?): one page of poster candidates in 2:3 sizes (`page` 0-based, 0 to 50;
+ *   SteamGridDB returns up to 50 per page), filtered by the saved settings
  *   (steamGridDbStyles/Animated/Nsfw/Humor; epilepsy-flagged grids are always dropped). Uses the
- *   game's Steam app ID when it has a Steam route, otherwise a title search. Empty array = no match.
+ *   game's Steam app ID when it has a Steam route, otherwise a title search. `hasMore` says
+ *   whether the next page exists; a page can be empty after filtering while `hasMore` is true.
  * - apply(gameId, url): sets a candidate's `url` as the game's custom cover; only SteamGridDB
  *   https URLs are accepted. Returns the updated library.
  * - fetchMissing(): fills `cover` and `defaultCover` for games that have neither, using the same
  *   settings-based filters as search(). Rejects if a
  *   run is already in progress or the key is rejected. Emits `library:changed` when covers change.
  * - onFetched(cb): fires after any successful bulk run, including the automatic one after a scan.
- * - searchHeroes(gameId) / searchLogos(gameId): up to 30 game page hero / logo candidates for the
- *   pickers, same shape and game matching as search(). Filtered by steamGridDbAnimated/Nsfw/Humor
+ * - searchHeroes(gameId, page?) / searchLogos(gameId, page?): one page of game page hero / logo
+ *   candidates for the pickers, same paging and game matching as search(). Filtered by steamGridDbAnimated/Nsfw/Humor
  *   (grid styles don't apply; epilepsy-flagged entries and videos are always dropped). Not cached:
  *   every call asks SteamGridDB. Empty array = no match. Rejects with a friendly message when no
  *   key is saved, the key is rejected, SteamGridDB rate-limits or can't be reached, or the game
  *   doesn't exist. Pass a candidate's `url` to `art.setHero` / `art.setLogo`.
  */
-export interface SteamGridDbAPI { status(): Promise<{ keySet: boolean }>; saveKey(key: string): Promise<{ keySet: boolean }>; testKey(): Promise<SteamGridDbKeyTest>; search(gameId: string): Promise<SteamGridDbCover[]>; searchHeroes(gameId: string): Promise<SteamGridDbCover[]>; searchLogos(gameId: string): Promise<SteamGridDbCover[]>; apply(gameId: string, url: string): Promise<Game[]>; fetchMissing(): Promise<SteamGridDbFetchSummary>; onFetched(callback: (summary: SteamGridDbFetchSummary) => void): () => void }
+/** One page of SteamGridDB picker results. */
+export interface SteamGridDbCoverPage { covers: SteamGridDbCover[]; page: number; hasMore: boolean }
+export interface SteamGridDbAPI { status(): Promise<{ keySet: boolean }>; saveKey(key: string): Promise<{ keySet: boolean }>; testKey(): Promise<SteamGridDbKeyTest>; search(gameId: string, page?: number): Promise<SteamGridDbCoverPage>; searchHeroes(gameId: string, page?: number): Promise<SteamGridDbCoverPage>; searchLogos(gameId: string, page?: number): Promise<SteamGridDbCoverPage>; apply(gameId: string, url: string): Promise<Game[]>; fetchMissing(): Promise<SteamGridDbFetchSummary>; onFetched(callback: (summary: SteamGridDbFetchSummary) => void): () => void }
 /** How a play session started: from Game Lobby (`launch`) or found running (`detected`). */
 export type PlaySource = 'launch' | 'detected'
 /**
@@ -375,7 +387,7 @@ export interface UpdateInfo { available: boolean; currentVersion: string; versio
 /** `updates.onProgress`: bytes downloaded so far; `total` when the server sent a size. Throttled. */
 export interface UpdateProgress { downloaded: number; total?: number }
 /** Settings pages `settings.open(section)` can show. */
-export type SettingsSection = 'updates'
+export type SettingsSection = 'updates' | 'cover-art' | 'metadata'
 /**
  * Signed updates (all work happens in the backend; one check or install at a time, a concurrent
  * call rejects).
@@ -397,9 +409,78 @@ export interface UpdatesAPI {
   onProgress(callback: (progress: UpdateProgress) => void): () => void
   onReady(callback: () => void): () => void
 }
+/**
+ * IGDB metadata (`window.lobby.igdb`). Credentials are a Twitch application's Client ID and
+ * Client Secret; they are stored encrypted in the backend and never returned (status() only
+ * reports whether each is set). All text is plain text (sanitized and length-capped in Rust):
+ * render it as React text, never as HTML.
+ * - `criticRating` is IGDB's aggregated_rating(_count), `userRating` its rating(_count); scores
+ *   are rounded 0–100 and each is omitted when IGDB has none.
+ * - get(gameId) answers from the local cache at once. When the cache is missing or older than 30
+ *   days and credentials are saved, a background fetch starts (`pending: true`) and
+ *   `onMetadata` fires `{ gameId, changed }` when it ends; call get() again when `changed`.
+ * - search(gameId, query?) searches IGDB for the game's cleaned title, or for `query` (plain
+ *   text). choose(gameId, igdbId) stores the user's pick, which always wins over automatic
+ *   matches; resetMatch(gameId) forgets it and matches automatically again.
+ * - fetchAll() starts a rate-limited background fetch for every game whose cache is missing or
+ *   stale and returns at once; progress arrives through onProgress (and progress()).
+ */
+export interface IgdbRating { score: number; count?: number }
+/** Seconds from IGDB's game_time_to_beats: hastily = main story, normally = main + extras, completely = completionist. */
+export interface IgdbTimeToBeatSeconds { hastily?: number; normally?: number; completely?: number; count?: number }
+export interface IgdbMetadata { igdbId: number; name: string; summary?: string; storyline?: string; genres: string[]; developers: string[]; publishers: string[]; criticRating?: IgdbRating; userRating?: IgdbRating; releaseDate?: number; url?: string; screenshots?: string[]; artworks?: string[]; timeToBeat?: IgdbTimeToBeatSeconds; shape?: number }
+/** A screenshot or artwork: `thumb`/`full` are a cached `lobby-cover://` value once downloaded, otherwise an https URL on images.igdb.com. */
+export interface IgdbImage { kind: 'screenshot' | 'artwork'; thumb: string; full: string }
+/** Time to beat formatted for display ("42½ h"); absent values are left out. */
+export interface IgdbTimeToBeat { mainStory?: string; mainExtras?: string; completionist?: string; count?: number }
+export interface IgdbMetadataView { configured: boolean; pending: boolean; checked: boolean; metadata?: IgdbMetadata; source?: 'auto' | 'user'; fetchedAt?: number; images?: IgdbImage[]; timeToBeat?: IgdbTimeToBeat }
+export interface IgdbSearchResult { igdbId: number; name: string; releaseDate?: number; platforms: string[]; mainGame: boolean }
+export interface IgdbCredentialStatus { clientIdSet: boolean; clientSecretSet: boolean }
+export interface IgdbTestResult { ok: boolean; message: string }
+export interface IgdbBulkProgress { running: boolean; done: number; total: number; updated: number; notFound: number; failed: number; message?: string }
+export interface IgdbMetadataEvent { gameId: string; changed: boolean }
+export interface IgdbAPI {
+  status(): Promise<IgdbCredentialStatus>
+  /** Saves the non-empty fields; an empty field keeps the stored value. */
+  saveCredentials(clientId: string, clientSecret: string): Promise<IgdbCredentialStatus>
+  clearCredentials(): Promise<IgdbCredentialStatus>
+  test(): Promise<IgdbTestResult>
+  get(gameId: string): Promise<IgdbMetadataView>
+  search(gameId: string, query?: string): Promise<IgdbSearchResult[]>
+  choose(gameId: string, igdbId: number): Promise<IgdbMetadataView>
+  resetMatch(gameId: string): Promise<IgdbMetadataView>
+  fetchAll(): Promise<IgdbBulkProgress>
+  cancelFetchAll(): Promise<void>
+  progress(): Promise<IgdbBulkProgress>
+  onMetadata(callback: (event: IgdbMetadataEvent) => void): () => void
+  onProgress(callback: (progress: IgdbBulkProgress) => void): () => void
+}
+/**
+ * The user's own screenshots of a game (`window.lobby.screenshots`). Files are copied into Game
+ * Lobby's data folder; the originals are never changed. `src` is `lobby-shot://<dir>/<file>`
+ * (show it through `coverUrl`). Lists are newest first.
+ * - add(gameId): opens the native file picker (PNG, JPEG, WebP, GIF, BMP up to 40 MB each; BMP
+ *   is stored as PNG) and copies the chosen files. The same picture is stored once per game.
+ * - importSteam(gameId): copies the game's screenshots from the local Steam client (needs a
+ *   Steam route; read only; newest 200). Rejects when none are found.
+ * - remove(id): deletes Game Lobby's copy only. setAsHero(id): uses a copy as the page hero.
+ * - onChanged fires `{ gameId }` after adds and removals.
+ */
+/** `missing`: the stored file is gone (the row is kept); adding the same picture again restores it. */
+export interface Screenshot { id: string; gameId: string; src: string; width: number; height: number; addedAt: number; source: 'user' | 'steam'; missing: boolean }
+/** `restored`: pictures already listed whose missing file was written back. */
+export interface AddScreenshotsResult { screenshots: Screenshot[]; added: number; duplicates: number; restored: number; errors: string[] }
+export interface ScreenshotsAPI {
+  list(gameId: string): Promise<Screenshot[]>
+  add(gameId: string): Promise<AddScreenshotsResult>
+  importSteam(gameId: string): Promise<AddScreenshotsResult>
+  remove(id: string): Promise<Screenshot[]>
+  setAsHero(id: string): Promise<GamePageCustom>
+  onChanged(callback: (event: { gameId: string }) => void): () => void
+}
 export interface LobbyAPI {
   window: { minimize(): Promise<void>; toggleMaximize(): Promise<void>; close(): Promise<void>; isMaximized(): Promise<boolean> }
-  library: { list(): Promise<Game[]>; scan(): Promise<LibraryStats>; launch(id: string, route?: number): Promise<void>; save(game: Partial<Game> & { id: string }): Promise<Game[]>; remove(id: string): Promise<Game[]>; merge(targetId: string, sourceId: string): Promise<Game[]>; resetPlaytime(): Promise<Game[]>; setCover(id: string, dataUrl: string | null): Promise<Game[]>; chooseCover(id: string): Promise<Game[]>; chooseInstallFolder(id: string): Promise<void>; add(title: string, target: string): Promise<Game[]>; connections(): Promise<LibraryConnections>; saveConnections(input: LibraryConnectionInput): Promise<LibraryConnections>; chooseLegendary(): Promise<string | null>; chooseGogDatabase(): Promise<string | null>; onChanged(callback: () => void): () => void
+  library: { list(): Promise<Game[]>; scan(): Promise<LibraryStats>; launch(id: string, route?: number): Promise<void>; save(game: Partial<Game> & { id: string }): Promise<Game[]>; remove(id: string): Promise<Game[]>; merge(targetId: string, sourceId: string): Promise<Game[]>; resetPlaytime(): Promise<Game[]>; setCover(id: string, dataUrl: string | null): Promise<Game[]>; chooseCover(id: string): Promise<Game[]>; chooseInstallFolder(id: string): Promise<void>; add(title: string, target: string): Promise<Game[]>; stores(): Promise<StoreStatus[]>; onChanged(callback: () => void): () => void
     /** Sets the emulator of a `rom` route (`routeIndex` into `game.routes`); `null` = automatic. The profile must exist; other route kinds are rejected. Returns the library. */
     setEmulator(gameId: string, routeIndex: number, emulatorId: string | null): Promise<Game[]>
     /**
@@ -427,6 +508,8 @@ export interface LobbyAPI {
   steamGridDb: SteamGridDbAPI
   tracking: TrackingAPI
   art: ArtAPI
+  igdb: IgdbAPI
+  screenshots: ScreenshotsAPI
   updates: UpdatesAPI
   app: { quit(): Promise<void> }
 }

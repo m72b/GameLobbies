@@ -6,6 +6,7 @@ mod commands;
 mod covercache;
 mod db;
 mod emulators;
+mod igdb;
 mod importers;
 mod launch;
 mod local;
@@ -15,6 +16,7 @@ mod platform;
 mod review;
 mod roots;
 mod scan;
+mod screenshots;
 mod secrets;
 mod state;
 mod steamgriddb;
@@ -104,6 +106,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(updater::Updates::default())
         .register_uri_scheme_protocol("lobby-cover", cover_protocol)
+        .register_uri_scheme_protocol("lobby-shot", screenshots::protocol)
         .setup(|app| {
             let data_dir = match data_dir_override() {
                 Some(dir) => {
@@ -135,6 +138,7 @@ pub fn run() {
                 cover_fetch_lock: tokio::sync::Mutex::new(()),
                 local_scan_lock: tokio::sync::Mutex::new(()),
                 covers: Default::default(),
+                igdb: Default::default(),
             });
             scan::configure_schedule(app.handle(), hours);
             tracker::start(app.handle());
@@ -151,10 +155,7 @@ pub fn run() {
             commands::app_quit,
             commands::library_list,
             commands::library_scan,
-            commands::library_connections,
-            commands::library_save_connections,
-            commands::library_choose_legendary,
-            commands::library_choose_gog_database,
+            commands::library_stores,
             commands::library_launch,
             commands::library_save,
             commands::library_merge,
@@ -211,6 +212,22 @@ pub fn run() {
             commands::art_set_logo_layout,
             commands::steamgriddb_search_heroes,
             commands::steamgriddb_search_logos,
+            screenshots::screenshots_list,
+            screenshots::screenshots_add,
+            screenshots::screenshots_import_steam,
+            screenshots::screenshots_remove,
+            screenshots::screenshots_set_as_hero,
+            commands::igdb_status,
+            commands::igdb_save_credentials,
+            commands::igdb_clear_credentials,
+            commands::igdb_test,
+            commands::igdb_get,
+            commands::igdb_search,
+            commands::igdb_choose,
+            commands::igdb_reset_match,
+            commands::igdb_fetch_all,
+            commands::igdb_cancel_fetch_all,
+            commands::igdb_progress,
             updater::updates_check,
             updater::updates_auto_check,
             updater::updates_last,

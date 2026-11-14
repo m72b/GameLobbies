@@ -3,11 +3,11 @@
 use crate::db;
 use crate::importers::{epic, gog, registry, steam, xbox};
 use crate::platform::on_thread;
-use crate::secrets::{get_steam_api_key, has_steam_api_key};
 use crate::state::AppState;
-use crate::types::{now_ms, Game, LibraryStats};
+use crate::types::{now_ms, Game, LibraryStats, StoreDetection, StoreStatus, STORE_SOURCES};
 use crate::{local, roots};
 use anyhow::Result;
+use std::collections::HashMap;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -15,33 +15,62 @@ struct Collected {
     discovered: Vec<Game>,
     errors: Vec<String>,
     installed: Vec<(&'static str, Vec<Game>)>,
-    owned: Vec<(&'static str, Vec<Game>)>,
+    /// Per store id (see [`STORE_SOURCES`]): what this scan found.
+    detected: HashMap<String, StoreDetection>,
 }
 
 impl Collected {
     fn record(
         &mut self,
+        store: &str,
         name: &str,
         result: Result<Vec<Game>>,
-        installed: Option<&'static str>,
-        owned: Option<&'static str>,
+        installed: &'static str,
     ) {
+        let now = now_ms();
+        let entry = self
+            .detected
+            .entry(store.to_string())
+            .or_insert(StoreDetection {
+                found: 0,
+                error: None,
+                scanned_at: now,
+            });
         match result {
             Ok(games) => {
+                entry.found += games.len();
                 self.discovered.extend(games.iter().cloned());
-                if let Some(id) = installed {
-                    self.installed.push((id, games.clone()));
-                }
-                if let Some(id) = owned {
-                    self.owned.push((id, games));
-                }
+                self.installed.push((installed, games));
             }
             Err(e) => {
                 eprintln!("Could not scan {name}: {e:#}");
+                let message: String = format!("{e:#}").chars().take(300).collect();
+                entry.error = Some(message);
                 self.errors.push(format!("{name}: {e:#}"));
             }
         }
     }
+}
+
+/// Every store with its on/off state and what the last scan found.
+pub fn store_statuses(state: &AppState) -> Result<Vec<StoreStatus>> {
+    let conn = state.db.lock();
+    let disabled = db::get_settings(&conn)?.disabled_stores;
+    let detected = db::store_detection(&conn)?;
+    Ok(STORE_SOURCES
+        .iter()
+        .map(|(id, name)| {
+            let last = detected.get(*id);
+            StoreStatus {
+                id: id.to_string(),
+                name: name.to_string(),
+                enabled: !disabled.iter().any(|d| d == id),
+                found: last.map(|d| d.found),
+                error: last.and_then(|d| d.error.clone()),
+                scanned_at: last.map(|d| d.scanned_at),
+            }
+        })
+        .collect())
 }
 
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T> + Send + 'static) -> Result<T> {
@@ -150,89 +179,81 @@ pub async fn scan_local(
 
 async fn perform_stores(app: &AppHandle) -> Result<LibraryStats> {
     let state = app.state::<AppState>();
-    let connections = db::get_connection_values(&state.db.lock())?;
+    let (connections, disabled) = {
+        let conn = state.db.lock();
+        (
+            db::get_connection_values(&conn)?,
+            db::get_settings(&conn)?.disabled_stores,
+        )
+    };
+    let on = |store: &str| !disabled.iter().any(|d| d == store);
     let mut c = Collected {
         discovered: Vec::new(),
         errors: Vec::new(),
         installed: Vec::new(),
-        owned: Vec::new(),
+        detected: HashMap::new(),
     };
 
-    c.record(
-        "Steam installed",
-        blocking(steam::scan_installed).await,
-        Some("steam-installed"),
-        None,
-    );
-    c.record(
-        "Epic Games installed",
-        blocking(epic::scan_installed).await,
-        Some("epic-installed"),
-        None,
-    );
-    // Registry sources share one read of the uninstall records.
-    let mut registry_results = blocking(|| {
-        let mut cache = registry::UninstallCache::default();
-        Ok(registry::SOURCES
-            .iter()
-            .map(|s| registry::scan_source(s, &mut cache))
-            .collect::<Vec<_>>())
-    })
-    .await?
-    .into_iter();
-    for source in &registry::SOURCES[..3] {
-        let label = format!("{} installed", source.name);
+    if on("steam") {
         c.record(
-            &label,
-            registry_results.next().unwrap(),
-            Some(source.id),
-            None,
+            "steam",
+            "Steam installed",
+            blocking(steam::scan_installed).await,
+            "steam-installed",
         );
     }
-    c.record(
-        "itch.io installed",
-        blocking(registry::scan_itch).await,
-        Some("itch-installed"),
-        None,
-    );
-    let amazon = &registry::SOURCES[3];
-    c.record(
-        &format!("{} installed", amazon.name),
-        registry_results.next().unwrap(),
-        Some(amazon.id),
-        None,
-    );
-    c.record(
-        "Xbox / Microsoft Store installed",
-        on_thread(xbox::scan).await.and_then(|r| r),
-        Some("xbox-appx"),
-        None,
-    );
-
-    if !connections.steam_id.is_empty() && has_steam_api_key(&state)? {
-        let result = match get_steam_api_key(&state) {
-            Ok(Some(key)) => steam::scan_owned(&connections.steam_id, &key).await,
-            Ok(None) => Ok(Vec::new()),
-            Err(e) => Err(e),
-        };
-        c.record("Steam owned games", result, None, Some("steam"));
-    }
-    if !connections.legendary_path.is_empty() {
-        let result = epic::scan_legendary(&connections.legendary_path).await;
+    if on("epic") {
         c.record(
-            "Epic Games via Legendary",
-            result,
-            Some("epic-legendary"),
-            Some("epic"),
+            "epic",
+            "Epic Games installed",
+            blocking(epic::scan_installed).await,
+            "epic-installed",
         );
     }
-    let gog_path = connections.gog_database_path.clone();
-    c.record(
-        "GOG Galaxy",
-        blocking(move || gog::scan(&gog_path)).await,
-        Some("gog-galaxy"),
-        None,
-    );
+    // Registry sources (EA, Battle.net, Ubisoft, Amazon) share one read of the uninstall records.
+    let registry_stores = ["ea", "battlenet", "ubisoft", "amazon"];
+    if registry_stores.iter().any(|s| on(s)) {
+        let results = blocking(|| {
+            let mut cache = registry::UninstallCache::default();
+            Ok(registry::SOURCES
+                .iter()
+                .map(|s| registry::scan_source(s, &mut cache))
+                .collect::<Vec<_>>())
+        })
+        .await?;
+        for ((source, result), store) in registry::SOURCES.iter().zip(results).zip(registry_stores)
+        {
+            if on(store) {
+                let label = format!("{} installed", source.name);
+                c.record(store, &label, result, source.id);
+            }
+        }
+    }
+    if on("itch") {
+        c.record(
+            "itch",
+            "itch.io installed",
+            blocking(registry::scan_itch).await,
+            "itch-installed",
+        );
+    }
+    if on("xbox") {
+        c.record(
+            "xbox",
+            "Xbox / Microsoft Store installed",
+            on_thread(xbox::scan).await.and_then(|r| r),
+            "xbox-appx",
+        );
+    }
+    if on("gog") {
+        let gog_path = connections.gog_database_path.clone();
+        c.record(
+            "gog",
+            "GOG Galaxy",
+            blocking(move || gog::scan(&gog_path)).await,
+            "gog-galaxy",
+        );
+    }
 
     let imported = c.discovered.len();
     let errors = c.errors.clone();
@@ -244,9 +265,7 @@ async fn perform_stores(app: &AppHandle) -> Result<LibraryStats> {
         for (id, games) in &c.installed {
             db::reconcile_installed_source(&mut conn, id, games)?;
         }
-        for (id, games) in &c.owned {
-            db::reconcile_owned_source(&mut conn, id, games)?;
-        }
+        db::put_store_detection(&conn, &c.detected)?;
         db::game_count(&conn)
     })
     .await?;

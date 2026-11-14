@@ -247,6 +247,9 @@ pub struct Settings {
     /// never installed without the user's click. Stored settings without it default to on.
     #[serde(default = "default_true")]
     pub auto_check_updates: bool,
+    /// Store ids from [`STORE_SOURCES`] that library scans skip. Default: none.
+    #[serde(default)]
+    pub disabled_stores: Vec<String>,
 }
 
 /// Grid styles accepted by the SteamGridDB API (`styles=` on `/grids`).
@@ -277,6 +280,7 @@ impl Default for Settings {
             detect_external_launches: true,
             tracking_excluded_game_ids: Vec::new(),
             auto_check_updates: true,
+            disabled_stores: Vec::new(),
         }
     }
 }
@@ -332,35 +336,56 @@ pub struct PluginManifest {
     pub manifest_folder: Option<String>,
 }
 
-/// Non-secret library connection values stored in `library_connections`.
+/// Non-secret library connection values stored in `library_connections` (key `main`).
+/// Older versions also stored `steamId` and `legendaryPath` here; those are ignored when
+/// read and removed by the database migration.
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ConnectionValues {
-    #[serde(default)]
-    pub steam_id: String,
-    #[serde(default)]
-    pub legendary_path: String,
+    /// A GOG Galaxy database chosen in an older version; empty = auto-detect.
     #[serde(default)]
     pub gog_database_path: String,
 }
 
-#[derive(Deserialize, Clone, Debug, Default)]
+/// Stores and launchers scanned automatically, by the ids used in `Settings.disabledStores`.
+pub const STORE_SOURCES: &[(&str, &str)] = &[
+    ("steam", "Steam"),
+    ("epic", "Epic Games"),
+    ("gog", "GOG"),
+    ("ea", "EA app"),
+    ("battlenet", "Battle.net"),
+    ("ubisoft", "Ubisoft Connect"),
+    ("amazon", "Amazon Games"),
+    ("itch", "itch.io"),
+    ("xbox", "Xbox / Microsoft Store"),
+];
+
+/// One store on the Libraries settings page (`library_stores`).
+#[derive(Serialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct LibraryConnectionInput {
-    pub steam_id: String,
-    #[serde(default)]
-    pub steam_api_key: Option<String>,
-    pub legendary_path: String,
-    pub gog_database_path: String,
+pub struct StoreStatus {
+    pub id: String,
+    pub name: String,
+    pub enabled: bool,
+    /// Games found by the last scan of this store; `None` before the first scan.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub found: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scanned_at: Option<i64>,
 }
 
-#[derive(Serialize, Clone, Debug)]
+/// What the last scan found per store (stored in `library_connections`, key `stores`).
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct LibraryConnections {
-    pub steam_id: String,
-    pub steam_api_key_set: bool,
-    pub legendary_path: String,
-    pub gog_database_path: String,
+pub struct StoreDetection {
+    #[serde(default)]
+    pub found: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(default)]
+    pub scanned_at: i64,
 }
 
 #[derive(Serialize, Clone, Debug, Default)]

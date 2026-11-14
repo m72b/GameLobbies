@@ -6,6 +6,9 @@ import { coverUrl } from './lobby-api'
 import { defaultGamePageCustom } from '../shared/defaults'
 import { coverLayerStyle, coverStyle } from './cover'
 import { CoverLayer, useCover } from './poster'
+import { GenreBlock, IgdbAbout, IgdbPicker, IgdbRatings, useIgdb } from './igdb-details'
+import { isEmulatorRoute } from '../shared/routes'
+import { ImageWall, useScreenshots } from './image-wall'
 import { elapsedSeconds, formatClock, formatDate, formatSession, formatTime, formatTotal, useNow } from './format'
 import type { EmulatorCatalog, EmulatorProfile, Game, GamePageArt, PlaySession, PlayStats, RunningGame, Settings } from '../shared/types'
 
@@ -37,11 +40,14 @@ export function GamePage({ game, index, settings, running, libraryVersion, actio
   const [catalog, setCatalog] = useState<EmulatorCatalog | null>(null)
   const [emuError, setEmuError] = useState('')
   const [customizing, setCustomizing] = useState(false)
+  const [igdbPicking, setIgdbPicking] = useState(false)
+  const { view: igdb, setView: setIgdb } = useIgdb(game.id)
+  const { shots, setShots } = useScreenshots(game.id)
   const { layout, change: changeLayout, flush: flushLayout } = useLogoLayout(game.id, art.custom)
   const now = useNow(!!running || sessions.some(session => !session.endedAt))
 
   const defaultRoute = useMemo(() => Math.max(0, game.routes.findIndex(route => route.installed)), [game.id]) // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { setRouteIdx(defaultRoute); setMenuOpen(false); setCustomizing(false) }, [game.id, defaultRoute])
+  useEffect(() => { setRouteIdx(defaultRoute); setMenuOpen(false); setCustomizing(false); setIgdbPicking(false) }, [game.id, defaultRoute])
 
   useEffect(() => {
     let live = true
@@ -51,7 +57,7 @@ export function GamePage({ game, index, settings, running, libraryVersion, actio
     const off = window.lobby.art.onChanged(event => { if (event.gameId === game.id) { setHeroIdx(0); setLogoIdx(0); void load() } })
     return () => { live = false; off() }
   }, [game.id])
-  const hasEmulatorRoute = game.routes.some(item => item.store === 'Emulator' || item.system)
+  const hasEmulatorRoute = game.routes.some(isEmulatorRoute)
   useEffect(() => {
     if (!hasEmulatorRoute) return
     let live = true
@@ -65,6 +71,7 @@ export function GamePage({ game, index, settings, running, libraryVersion, actio
     actions.setEmulator(game, index, value === '' ? null : value).catch(error => setEmuError(error instanceof Error ? error.message : 'Could not change the emulator'))
   }
   const closeCustomize = useCallback(() => { flushLayout(); setCustomizing(false) }, [flushLayout])
+  const closeIgdb = useCallback(() => setIgdbPicking(false), [])
 
   const runKey = running ? running.state + ':' + running.startedAt : 'idle'
   useEffect(() => {
@@ -91,6 +98,7 @@ export function GamePage({ game, index, settings, running, libraryVersion, actio
     ['Customize page', () => setCustomizing(true)],
     ['Set custom cover', () => actions.setCover(game)],
     ['Find cover on SteamGridDB', () => actions.findCover(game)],
+    ['Find details on IGDB', () => setIgdbPicking(true)],
     ['Link another game', () => actions.link(game)],
     [game.hidden ? 'Unhide' : 'Hide', () => actions.toggleHidden(game)],
     ['Open install folder', () => actions.openFolder(game)],
@@ -112,7 +120,8 @@ export function GamePage({ game, index, settings, running, libraryVersion, actio
       </div>
     </div>
 
-    {customizing && <CustomizePanel game={game} custom={art.custom} heroSrc={heroSrc} logoSrc={logoSrc} layout={layout} onLayout={changeLayout} onClose={closeCustomize} />}
+    {igdbPicking && <IgdbPicker game={game} view={igdb} onClose={closeIgdb} onChosen={next => { setIgdb(next); setIgdbPicking(false) }} />}
+    {customizing && <CustomizePanel game={game} custom={art.custom} heroSrc={heroSrc} logoSrc={logoSrc} layout={layout} onLayout={changeLayout} onClose={closeCustomize} sgdbSettingsKey={JSON.stringify([settings.steamGridDbAnimated, settings.steamGridDbNsfw, settings.steamGridDbHumor])} />}
 
     <div className="gp-bar">
       {launching
@@ -176,7 +185,10 @@ export function GamePage({ game, index, settings, running, libraryVersion, actio
           <div><span>Sessions</span><b>{stats?.sessionCount ?? 0}</b></div>
           <div><span>First played</span><b>{formatDate(stats?.firstPlayed)}</b></div>
         </div>
+        <IgdbAbout view={igdb} title={game.title} onSearch={() => setIgdbPicking(true)} />
       </section>
+
+      <ImageWall game={game} igdb={igdb} shots={shots} onShots={setShots} />
 
       <aside className="gp-side">
         <div className={'gp-poster cover-' + cover.status} style={coverStyle(game, index)}><CoverLayer src={cover.src} status={cover.status} />{cover.status !== 'loaded' && <span>{game.title}</span>}</div>
@@ -187,7 +199,7 @@ export function GamePage({ game, index, settings, running, libraryVersion, actio
             <span className="route-name">{item.store}<small>{item.installed ? 'Installed' : item.owned ? 'Owned · not installed' : 'Launch route'}</small></span>
           </div>)}
           {game.routes.map((item, i) => {
-            if (item.sourceId !== 'rom' && !item.system) return null
+            if (!isEmulatorRoute(item)) return null
             const systemName = item.system ? catalog?.systems.find(system => system.id === item.system)?.name ?? item.system : 'Unknown system'
             const candidates = emulators.filter(profile => profile.enabled !== false && !!item.system && (profile.systems ?? []).includes(item.system))
             const assigned = item.emulatorId ? emulators.find(profile => profile.id === item.emulatorId) : undefined
@@ -206,7 +218,8 @@ export function GamePage({ game, index, settings, running, libraryVersion, actio
           })}
           {emuError && <div className="form-error" role="alert">{emuError}</div>}
         </div>
-        <div className="gp-side-block"><div className="detail-label">GENRE</div><div className="muted-text">{game.genre || 'Not set'}</div></div>
+        <GenreBlock game={game} view={igdb} />
+        <IgdbRatings view={igdb} />
         <div className="gp-side-block"><div className="detail-label">INSTALL FOLDER</div>
           <div className="muted-text gp-path">{installFolder || 'Unknown'}</div>
           <button className="secondary-button gp-folder" onClick={() => actions.openFolder(game)}><FolderOpen size={14} /> Open folder</button>

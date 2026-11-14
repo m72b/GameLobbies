@@ -3,12 +3,11 @@
 
 use crate::launch::launch_game;
 use crate::platform::shell_open;
-use crate::secrets::{has_steam_api_key, set_steam_api_key};
 use crate::state::AppState;
-use crate::steamgriddb::{self, Cover, FetchSummary, KeyStatus, KeyTest};
+use crate::steamgriddb::{self, CoverPage, FetchSummary, KeyStatus, KeyTest};
 use crate::tracker::RunningGame;
 use crate::types::*;
-use crate::{art, covercache, db, scan, secrets, theme, tracker, validation, windows};
+use crate::{art, covercache, db, igdb, scan, secrets, theme, tracker, validation, windows};
 use base64::Engine;
 use regex::Regex;
 use serde_json::{json, Map, Value};
@@ -95,56 +94,10 @@ pub async fn library_scan(app: AppHandle) -> CmdResult<LibraryStats> {
     scan::scan_libraries(&app).await
 }
 
-fn connections(state: &AppState) -> anyhow::Result<LibraryConnections> {
-    let values = db::get_connection_values(&state.db.lock())?;
-    Ok(LibraryConnections {
-        steam_id: values.steam_id,
-        steam_api_key_set: has_steam_api_key(state)?,
-        legendary_path: values.legendary_path,
-        gog_database_path: values.gog_database_path,
-    })
-}
-
+/// The automatically scanned stores, whether each is on, and what the last scan found.
 #[tauri::command]
-pub async fn library_connections(state: State<'_, AppState>) -> CmdResult<LibraryConnections> {
-    connections(&state).map_err(err)
-}
-
-#[tauri::command]
-pub async fn library_save_connections(
-    state: State<'_, AppState>,
-    input: Value,
-) -> CmdResult<LibraryConnections> {
-    let input = validation::connections(&input).map_err(err)?;
-    db::put_connection_values(
-        &state.db.lock(),
-        &ConnectionValues {
-            steam_id: input.steam_id,
-            legendary_path: input.legendary_path,
-            gog_database_path: input.gog_database_path,
-        },
-    )
-    .map_err(err)?;
-    if let Some(key) = input.steam_api_key.filter(|k| !k.trim().is_empty()) {
-        set_steam_api_key(&state, &key).map_err(err)?;
-    }
-    connections(&state).map_err(err)
-}
-
-#[tauri::command]
-pub async fn library_choose_legendary(window: WebviewWindow) -> CmdResult<Option<String>> {
-    Ok(pick_file(&window, "Legendary executable", &["exe"])
-        .await
-        .map(|p| p.to_string_lossy().into_owned()))
-}
-
-#[tauri::command]
-pub async fn library_choose_gog_database(window: WebviewWindow) -> CmdResult<Option<String>> {
-    Ok(
-        pick_file(&window, "SQLite database", &["db", "sqlite", "sqlite3"])
-            .await
-            .map(|p| p.to_string_lossy().into_owned()),
-    )
+pub async fn library_stores(state: State<'_, AppState>) -> CmdResult<Vec<StoreStatus>> {
+    scan::store_statuses(&state).map_err(err)
 }
 
 #[tauri::command]
@@ -600,8 +553,11 @@ pub async fn steamgriddb_test_key(state: State<'_, AppState>) -> CmdResult<KeyTe
 pub async fn steamgriddb_search(
     state: State<'_, AppState>,
     game_id: String,
-) -> CmdResult<Vec<Cover>> {
-    steamgriddb::search(&state, &game_id).await.map_err(err)
+    page: Option<u32>,
+) -> CmdResult<CoverPage> {
+    steamgriddb::search(&state, &game_id, page)
+        .await
+        .map_err(err)
 }
 
 #[tauri::command]
@@ -817,8 +773,9 @@ pub async fn art_set_logo_layout(
 pub async fn steamgriddb_search_heroes(
     state: State<'_, AppState>,
     game_id: String,
-) -> CmdResult<Vec<Cover>> {
-    steamgriddb::search_art(&state, &game_id, steamgriddb::ArtKind::Hero)
+    page: Option<u32>,
+) -> CmdResult<CoverPage> {
+    steamgriddb::search_art(&state, &game_id, steamgriddb::ArtKind::Hero, page)
         .await
         .map_err(err)
 }
@@ -828,8 +785,91 @@ pub async fn steamgriddb_search_heroes(
 pub async fn steamgriddb_search_logos(
     state: State<'_, AppState>,
     game_id: String,
-) -> CmdResult<Vec<Cover>> {
-    steamgriddb::search_art(&state, &game_id, steamgriddb::ArtKind::Logo)
+    page: Option<u32>,
+) -> CmdResult<CoverPage> {
+    steamgriddb::search_art(&state, &game_id, steamgriddb::ArtKind::Logo, page)
         .await
         .map_err(err)
+}
+
+// ---------------------------------------------------------------------------
+// IGDB metadata. The Client Secret (and the access token) never reach the renderer; the
+// renderer can only look up its own games by id, or search plain text.
+
+#[tauri::command]
+pub async fn igdb_status(state: State<'_, AppState>) -> CmdResult<igdb::CredentialStatus> {
+    igdb::status(&state).map_err(err)
+}
+
+/// Saves the non-empty fields (empty keeps the stored value).
+#[tauri::command]
+pub async fn igdb_save_credentials(
+    state: State<'_, AppState>,
+    client_id: String,
+    client_secret: String,
+) -> CmdResult<igdb::CredentialStatus> {
+    igdb::save_credentials(&state, &client_id, &client_secret).map_err(err)
+}
+
+#[tauri::command]
+pub async fn igdb_clear_credentials(
+    state: State<'_, AppState>,
+) -> CmdResult<igdb::CredentialStatus> {
+    igdb::clear_credentials(&state).map_err(err)
+}
+
+#[tauri::command]
+pub async fn igdb_test(state: State<'_, AppState>) -> CmdResult<igdb::TestResult> {
+    Ok(igdb::test(&state).await)
+}
+
+/// Cached metadata at once; a background fetch follows when needed (`igdb:metadata`).
+#[tauri::command]
+pub async fn igdb_get(app: AppHandle, game_id: String) -> CmdResult<igdb::MetadataView> {
+    igdb::get(&app, &game_id).map_err(err)
+}
+
+#[tauri::command]
+pub async fn igdb_search(
+    state: State<'_, AppState>,
+    game_id: String,
+    query: Option<String>,
+) -> CmdResult<Vec<igdb::SearchResult>> {
+    if query.as_deref().is_some_and(|q| q.len() > 1024) {
+        return Err("The search text is too long.".into());
+    }
+    igdb::search(&state, &game_id, query.as_deref())
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn igdb_choose(
+    app: AppHandle,
+    game_id: String,
+    igdb_id: u64,
+) -> CmdResult<igdb::MetadataView> {
+    igdb::choose(&app, &game_id, igdb_id).await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn igdb_reset_match(app: AppHandle, game_id: String) -> CmdResult<igdb::MetadataView> {
+    igdb::reset_match(&app, &game_id).map_err(err)
+}
+
+/// Starts the background fetch for every game; returns at once (`igdb:progress`).
+#[tauri::command]
+pub async fn igdb_fetch_all(app: AppHandle) -> CmdResult<igdb::BulkProgress> {
+    igdb::fetch_all(&app).map_err(err)
+}
+
+#[tauri::command]
+pub async fn igdb_cancel_fetch_all(state: State<'_, AppState>) -> CmdResult<()> {
+    igdb::cancel_all(&state);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn igdb_progress(state: State<'_, AppState>) -> CmdResult<igdb::BulkProgress> {
+    Ok(igdb::progress(&state))
 }

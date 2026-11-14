@@ -1,14 +1,11 @@
-//! Epic Games: installed games from launcher `.item` manifests, owned games via Legendary.
+//! Epic Games: installed games from the Epic Games Launcher `.item` manifests.
 
 use super::{single_route_game, states};
-use crate::platform::{encode_uri_component, run_capture};
+use crate::platform::encode_uri_component;
 use crate::types::{Game, GameRoute};
-use anyhow::{anyhow, bail, Result};
-use serde::Deserialize;
+use anyhow::{bail, Result};
 use serde_json::Value;
-use std::collections::HashMap;
 use std::path::Path;
-use std::time::Duration;
 
 const MANIFEST_ROOTS: [&str; 2] = [
     r"C:\ProgramData\Epic\EpicGamesLauncher\Data\Manifests",
@@ -24,7 +21,7 @@ fn first_truthy(values: &[Option<&Value>]) -> Option<String> {
     })
 }
 
-fn launch_uri(app_name: &str, action: &str) -> String {
+pub fn launch_uri(app_name: &str, action: &str) -> String {
     format!(
         "com.epicgames.launcher://apps/{}?action={action}&silent=true",
         encode_uri_component(app_name)
@@ -91,86 +88,6 @@ pub fn scan_installed() -> Result<Vec<Game>> {
         }
     }
     Ok(games)
-}
-
-#[derive(Deserialize)]
-struct LegendaryGame {
-    app_name: Option<String>,
-    app_title: Option<String>,
-    title: Option<String>,
-    install_path: Option<String>,
-    #[serde(rename = "installPath")]
-    install_path_alt: Option<String>,
-}
-
-async fn legendary_list(executable: &Path, command: &str) -> Result<Vec<LegendaryGame>> {
-    let stdout = run_capture(
-        executable,
-        &[command, "--json"],
-        Duration::from_secs(120),
-        32 * 1024 * 1024,
-    )
-    .await?;
-    serde_json::from_str(stdout.trim())
-        .map_err(|_| anyhow!("Legendary returned an unexpected {command} result."))
-}
-
-pub async fn scan_legendary(executable: &str) -> Result<Vec<Game>> {
-    let exe = Path::new(executable);
-    if !exe.exists() {
-        bail!("The configured Legendary executable was not found.");
-    }
-    let owned = legendary_list(exe, "list").await?;
-    // Older Legendary versions may not support JSON for list-installed.
-    let installed: HashMap<String, LegendaryGame> = legendary_list(exe, "list-installed")
-        .await
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|g| Some((g.app_name.clone()?, g)))
-        .collect();
-    Ok(owned
-        .into_iter()
-        .filter_map(|game| {
-            let app_name = game.app_name?.trim().to_string();
-            let title = game
-                .app_title
-                .or(game.title)
-                .unwrap_or_default()
-                .trim()
-                .to_string();
-            if app_name.is_empty() || title.is_empty() {
-                return None;
-            }
-            let install_path = installed
-                .get(&app_name)
-                .and_then(|g| g.install_path.clone().or(g.install_path_alt.clone()))
-                .filter(|p| !p.is_empty());
-            let is_installed = install_path.is_some();
-            Some(single_route_game(
-                format!("epic:{app_name}"),
-                title,
-                "Epic Games",
-                None,
-                GameRoute {
-                    source_id: "epic".into(),
-                    store: "Epic Games".into(),
-                    launch_target: if is_installed {
-                        executable.to_string()
-                    } else {
-                        launch_uri(&app_name, "install")
-                    },
-                    launch_args: is_installed
-                        .then(|| serde_json::to_string(&["launch", &app_name]).unwrap()),
-                    app_id: Some(app_name),
-                    install_path,
-                    owned: Some(true),
-                    installed: Some(is_installed),
-                    install_states: states("epic-legendary", is_installed),
-                    ..Default::default()
-                },
-            ))
-        })
-        .collect())
 }
 
 #[cfg(test)]

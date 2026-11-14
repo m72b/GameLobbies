@@ -347,14 +347,9 @@ pub async fn launch_game(app: &AppHandle, game: &Game, route_index: usize) -> Re
             bail!("Launch target was not found.");
         }
         if route.source_id == "epic" {
-            let configured = db::get_connection_values(&state.db.lock())?.legendary_path;
-            if configured.is_empty()
-                || !executable
-                    .to_string_lossy()
-                    .eq_ignore_ascii_case(&resolve(&configured).to_string_lossy())
-            {
-                bail!("The configured Legendary executable changed. Update it in Library settings and scan again.");
-            }
+            // Epic routes with arguments came from the removed Legendary import. They are never
+            // run; the cleanup in `db::migrate` turns them into launcher links on every start.
+            bail!("This Epic Games entry still uses Legendary, which is no longer supported. Restart Game Lobby to switch it to the Epic Games Launcher.");
         }
         spawn_detached(&executable, &parse_launch_arguments(Some(args)))?;
     } else {

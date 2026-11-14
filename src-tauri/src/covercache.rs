@@ -46,14 +46,16 @@ use tauri::{AppHandle, Emitter, Manager};
 use url::Url;
 
 /// Hosts covers may be downloaded from (https, default port only). The Steam importer and the
-/// game page use `cdn.akamai.steamstatic.com`; SteamGridDB serves images from `cdn2`.
-pub const ALLOWED_HOSTS: [&str; 6] = [
+/// game page use `cdn.akamai.steamstatic.com`; SteamGridDB serves images from `cdn2`; IGDB
+/// screenshots and artworks come from `images.igdb.com`.
+pub const ALLOWED_HOSTS: [&str; 7] = [
     "cdn2.steamgriddb.com",
     "steamgriddb.com",
     "cdn.akamai.steamstatic.com",
     "cdn.cloudflare.steamstatic.com",
     "shared.akamai.steamstatic.com",
     "steamcdn-a.akamaihd.net",
+    crate::igdb::IMAGE_HOST,
 ];
 /// Downloads running at the same time in a background pass.
 pub const CONCURRENCY: usize = 4;
@@ -278,10 +280,45 @@ pub fn keep_original(bytes: &[u8], ext: &str) -> bool {
     }
 }
 
-/// A smaller re-encoding of a static PNG/JPEG/WebP when it is larger than
-/// [`MAX_WIDTH`]x[`MAX_HEIGHT`] or [`SHRINK_ABOVE_BYTES`]; `None` keeps the original (small
-/// enough, undecodable, or re-encoding would not help).
-pub fn shrink(bytes: &[u8], ext: &str) -> Option<(Vec<u8>, &'static str)> {
+/// The largest size a cached image is kept at: covers fit a poster card, game screenshots
+/// (from `images.igdb.com`) fit a 1080p viewer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Bounds {
+    pub width: u32,
+    pub height: u32,
+    pub shrink_above_bytes: usize,
+}
+
+pub const COVER_BOUNDS: Bounds = Bounds {
+    width: MAX_WIDTH,
+    height: MAX_HEIGHT,
+    shrink_above_bytes: SHRINK_ABOVE_BYTES,
+};
+pub const SCREENSHOT_BOUNDS: Bounds = Bounds {
+    width: 1920,
+    height: 1080,
+    shrink_above_bytes: 4_000_000,
+};
+
+/// Screenshot bounds for IGDB images, cover bounds for everything else.
+pub fn bounds_for(url: &str) -> Bounds {
+    let igdb = url::Url::parse(url)
+        .ok()
+        .and_then(|u| {
+            u.host_str()
+                .map(|h| h.eq_ignore_ascii_case("images.igdb.com"))
+        })
+        .unwrap_or(false);
+    if igdb {
+        SCREENSHOT_BOUNDS
+    } else {
+        COVER_BOUNDS
+    }
+}
+
+/// A smaller re-encoding of a static PNG/JPEG/WebP when it is larger than the bounds (size or
+/// bytes); `None` keeps the original (small enough, undecodable, or re-encoding would not help).
+pub fn shrink_to(bytes: &[u8], ext: &str, bounds: Bounds) -> Option<(Vec<u8>, &'static str)> {
     use image::{ImageFormat, ImageReader, Limits};
     use std::io::Cursor;
     let format = match ext {
@@ -300,15 +337,15 @@ pub fn shrink(bytes: &[u8], ext: &str) -> Option<(Vec<u8>, &'static str)> {
         reader
     };
     let (width, height) = reader().into_dimensions().ok()?;
-    let oversized = width > MAX_WIDTH || height > MAX_HEIGHT;
-    if !oversized && bytes.len() <= SHRINK_ABOVE_BYTES {
+    let oversized = width > bounds.width || height > bounds.height;
+    if !oversized && bytes.len() <= bounds.shrink_above_bytes {
         return None;
     }
     let mut img = reader().decode().ok()?;
     if oversized {
         img = img.resize(
-            MAX_WIDTH,
-            MAX_HEIGHT,
+            bounds.width,
+            bounds.height,
             image::imageops::FilterType::CatmullRom,
         );
     }
@@ -332,12 +369,18 @@ pub fn shrink(bytes: &[u8], ext: &str) -> Option<(Vec<u8>, &'static str)> {
 }
 
 /// Checks the content and shrinks it when worthwhile: the bytes to store and their extension.
+#[cfg(test)]
 pub fn prepare(bytes: Vec<u8>) -> Result<(Vec<u8>, &'static str), FetchError> {
+    prepare_with(bytes, COVER_BOUNDS)
+}
+
+/// [`prepare`] with explicit bounds.
+pub fn prepare_with(bytes: Vec<u8>, bounds: Bounds) -> Result<(Vec<u8>, &'static str), FetchError> {
     let ext = sniff(&bytes).ok_or(FetchError::NotImage)?;
     if keep_original(&bytes, ext) {
         return Ok((bytes, ext));
     }
-    Ok(shrink(&bytes, ext).unwrap_or((bytes, ext)))
+    Ok(shrink_to(&bytes, ext, bounds).unwrap_or((bytes, ext)))
 }
 
 // ---------------------------------------------------------------------------
@@ -406,7 +449,7 @@ pub async fn fetch_to_file(
     let covers_dir = covers_dir.to_path_buf();
     let url = url.to_string();
     tokio::task::spawn_blocking(move || {
-        let (bytes, ext) = prepare(bytes)?;
+        let (bytes, ext) = prepare_with(bytes, bounds_for(&url))?;
         let name = file_name(&url, &bytes, ext);
         write_file(&covers_dir, &name, &bytes)?;
         Ok(name)
@@ -529,13 +572,15 @@ fn referenced_files(conn: &Connection) -> Result<HashSet<String>> {
 /// recorded in the index with a cache file name are deleted. Returns how many were removed.
 pub fn sweep(conn: &Connection, covers_dir: &Path) -> Result<usize> {
     let referenced = referenced_files(conn)?;
+    // IGDB screenshots and artworks of cached game metadata stay too.
+    let referenced_urls = crate::igdb::referenced_image_urls(conn)?;
     let rows: Vec<(String, String)> = conn
         .prepare("SELECT url,file FROM cover_cache")?
         .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
         .collect::<rusqlite::Result<_>>()?;
     let mut removed = 0;
     for (url, file) in rows {
-        if referenced.contains(&file) {
+        if referenced.contains(&file) || referenced_urls.contains(&url) {
             continue;
         }
         conn.execute("DELETE FROM cover_cache WHERE url=?", [&url])?;
@@ -764,6 +809,8 @@ pub fn clean_up(state: &AppState) {
     if let Err(e) = sweep(&state.db.lock(), &state.covers_dir()) {
         eprintln!("Could not clean up the cover cache: {e:#}");
     }
+    // Games removed or merged may also leave screenshots behind (their own folder).
+    crate::screenshots::clean_up(state);
 }
 
 /// Starts a background pass after `delay`. If one is running, it runs once more when done.
@@ -789,6 +836,10 @@ pub fn spawn_startup(app: &AppHandle) {
             if let Err(e) = sweep_files(&conn, &covers_dir).and_then(|_| sweep(&conn, &covers_dir))
             {
                 eprintln!("Could not clean up the cover cache: {e:#}");
+            }
+            let shots = state.screenshots_dir();
+            if let Err(e) = crate::screenshots::sweep_files(&conn, &shots) {
+                eprintln!("Could not clean up screenshots: {e:#}");
             }
         }
         run_until_idle(&app).await;
@@ -1023,6 +1074,47 @@ mod tests {
     }
 
     #[test]
+    fn sweep_keeps_igdb_images_of_cached_metadata() {
+        let dir = TempDir::new();
+        let db = Db::memory().unwrap();
+        let conn = db.lock();
+        crate::db::save_game(
+            &conn,
+            &crate::types::GamePatch {
+                title: Some("G".into()),
+                store: Some("Steam".into()),
+                ..crate::types::GamePatch::new("g")
+            },
+        )
+        .unwrap();
+        let meta = serde_json::json!({"igdbId": 1, "name": "G", "screenshots": ["s1"], "shape": crate::igdb::CACHE_SHAPE});
+        crate::db::put_metadata(
+            &conn,
+            "g",
+            &crate::db::CachedMetadata {
+                igdb_id: Some(1),
+                json: Some(meta.to_string()),
+                fetched_at: 1,
+                source: "auto".into(),
+            },
+        )
+        .unwrap();
+        let kept = "https://images.igdb.com/igdb/image/upload/t_1080p/s1.jpg";
+        let dropped = "https://images.igdb.com/igdb/image/upload/t_1080p/old.jpg";
+        for (url, body) in [(kept, b"one".as_slice()), (dropped, b"two".as_slice())] {
+            let name = file_name(url, body, "jpg");
+            std::fs::write(dir.0.join(&name), body).unwrap();
+            commit(&conn, url, &name).unwrap();
+        }
+        assert_eq!(sweep(&conn, &dir.0).unwrap(), 1);
+        assert!(lookup(&conn, kept).unwrap().is_some());
+        assert!(lookup(&conn, dropped).unwrap().is_none());
+        // Once the metadata is gone, its images go too.
+        crate::db::delete_metadata(&conn, "g").unwrap();
+        assert_eq!(sweep(&conn, &dir.0).unwrap(), 1);
+    }
+
+    #[test]
     fn only_https_covers_on_allowed_hosts_are_cached() {
         for ok in [
             "https://cdn2.steamgriddb.com/grid/abc.png",
@@ -1031,6 +1123,7 @@ mod tests {
             "https://CDN.Cloudflare.SteamStatic.com/steam/apps/400/library_600x900.jpg",
             "https://shared.akamai.steamstatic.com/a.jpg",
             "https://steamcdn-a.akamaihd.net/steam/apps/400/header.jpg",
+            "https://images.igdb.com/igdb/image/upload/t_screenshot_big/sc6lrc.jpg",
         ] {
             assert!(cacheable(ok, is_allowed).is_some(), "{ok} should be cached");
         }
@@ -1044,6 +1137,9 @@ mod tests {
             "https://cdn2.steamgriddb.com.evil.example/x.png",
             "https://evil.example/?u=cdn2.steamgriddb.com",
             "https://cdn1.epicgames.com/x.jpg",
+            "http://images.igdb.com/igdb/image/upload/t_thumb/x.jpg",
+            "https://images.igdb.com.evil.example/x.jpg",
+            "https://img.igdb.com/x.jpg",
             "file:///C:/Windows/win.ini",
             "lobby-cover://cache-0123456789abcdef-0123456789ab.png",
             "C:\\covers\\a.png",
@@ -1246,6 +1342,25 @@ mod tests {
 
         let (bytes, ext) = prepare(png(1800, 900, false)).unwrap();
         assert_eq!((dims(&bytes), ext), ((600, 300), "jpg"));
+
+        // IGDB screenshots keep up to 1080p; covers from other hosts still fit a poster card.
+        let igdb = "https://images.igdb.com/igdb/image/upload/t_1080p/abc.jpg";
+        assert_eq!(bounds_for(igdb), SCREENSHOT_BOUNDS);
+        assert_eq!(
+            bounds_for("https://cdn2.steamgriddb.com/grid/a.png"),
+            COVER_BOUNDS
+        );
+        assert_eq!(
+            bounds_for("https://images.igdb.com.evil.example/x.jpg"),
+            COVER_BOUNDS
+        );
+        let wide = png(1280, 720, false);
+        assert_eq!(
+            dims(&prepare_with(wide.clone(), SCREENSHOT_BOUNDS).unwrap().0),
+            (1280, 720)
+        );
+        let (bytes, _) = prepare_with(png(3840, 2160, false), SCREENSHOT_BOUNDS).unwrap();
+        assert_eq!(dims(&bytes), (1920, 1080));
 
         // Within the box and small: stored as it is.
         let small = png(300, 450, false);

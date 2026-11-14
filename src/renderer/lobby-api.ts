@@ -2,7 +2,7 @@
 // Replaces the Electron preload script; the API shape is unchanged.
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
-import type { ArtChangedEvent, LobbyAPI, LocalScanProgress, LocalScanSummary, RunningGame, Settings, SettingsSection, SteamGridDbFetchSummary, UpdateProgress } from '../shared/types'
+import type { ArtChangedEvent, IgdbBulkProgress, IgdbMetadataEvent, LobbyAPI, LocalScanProgress, LocalScanSummary, RunningGame, Settings, SettingsSection, SteamGridDbFetchSummary, UpdateProgress } from '../shared/types'
 
 async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   try {
@@ -45,10 +45,7 @@ const api: LobbyAPI = {
     chooseCover: id => call('library_choose_cover', { id }),
     chooseInstallFolder: id => call('library_open_install_folder', { id }),
     add: (title, target) => call('library_add', { title, target }),
-    connections: () => call('library_connections'),
-    saveConnections: input => call('library_save_connections', { input }),
-    chooseLegendary: () => call('library_choose_legendary'),
-    chooseGogDatabase: () => call('library_choose_gog_database'),
+    stores: () => call('library_stores'),
     onChanged: callback => subscribe('library:changed', () => callback()),
     setEmulator: (gameId, routeIndex, emulatorId) => call('library_set_emulator', { gameId, routeIndex, emulatorId }),
     addLocalGame: () => call('library_add_local_game')
@@ -103,9 +100,9 @@ const api: LobbyAPI = {
     status: () => call('steamgriddb_status'),
     saveKey: key => call('steamgriddb_save_key', { key }),
     testKey: () => call('steamgriddb_test_key'),
-    search: gameId => call('steamgriddb_search', { gameId }),
-    searchHeroes: gameId => call('steamgriddb_search_heroes', { gameId }),
-    searchLogos: gameId => call('steamgriddb_search_logos', { gameId }),
+    search: (gameId, page) => call('steamgriddb_search', { gameId, page: page ?? 0 }),
+    searchHeroes: (gameId, page) => call('steamgriddb_search_heroes', { gameId, page: page ?? 0 }),
+    searchLogos: (gameId, page) => call('steamgriddb_search_logos', { gameId, page: page ?? 0 }),
     apply: (gameId, url) => call('steamgriddb_apply', { gameId, url }),
     fetchMissing: () => call('steamgriddb_fetch_missing'),
     onFetched: callback => subscribe<SteamGridDbFetchSummary>('steamgriddb:fetched', callback)
@@ -126,6 +123,29 @@ const api: LobbyAPI = {
     setLogoLayout: (gameId, position, scale) => call('art_set_logo_layout', { gameId, position, scale }),
     onChanged: callback => subscribe<ArtChangedEvent>('art:changed', callback)
   },
+  screenshots: {
+    list: gameId => call('screenshots_list', { gameId }),
+    add: gameId => call('screenshots_add', { gameId }),
+    importSteam: gameId => call('screenshots_import_steam', { gameId }),
+    remove: id => call('screenshots_remove', { id }),
+    setAsHero: id => call('screenshots_set_as_hero', { id }),
+    onChanged: callback => subscribe<{ gameId: string }>('screenshots:changed', callback)
+  },
+  igdb: {
+    status: () => call('igdb_status'),
+    saveCredentials: (clientId, clientSecret) => call('igdb_save_credentials', { clientId, clientSecret }),
+    clearCredentials: () => call('igdb_clear_credentials'),
+    test: () => call('igdb_test'),
+    get: gameId => call('igdb_get', { gameId }),
+    search: (gameId, query) => call('igdb_search', { gameId, query: query ?? null }),
+    choose: (gameId, igdbId) => call('igdb_choose', { gameId, igdbId }),
+    resetMatch: gameId => call('igdb_reset_match', { gameId }),
+    fetchAll: () => call('igdb_fetch_all'),
+    cancelFetchAll: () => call('igdb_cancel_fetch_all'),
+    progress: () => call('igdb_progress'),
+    onMetadata: callback => subscribe<IgdbMetadataEvent>('igdb:metadata', callback),
+    onProgress: callback => subscribe<IgdbBulkProgress>('igdb:progress', callback)
+  },
   updates: {
     check: () => call('updates_check'),
     autoCheck: () => call('updates_auto_check'),
@@ -139,7 +159,12 @@ const api: LobbyAPI = {
 
 window.lobby = api
 
-/** Custom covers are stored as `lobby-cover://name`; WebView2 serves them from this origin. */
+/**
+ * Custom covers are stored as `lobby-cover://name` and screenshots as `lobby-shot://dir/file`;
+ * WebView2 serves them from these origins.
+ */
 export function coverUrl(value: string) {
-  return value.startsWith('lobby-cover://') ? `http://lobby-cover.localhost/${value.slice('lobby-cover://'.length)}` : value
+  if (value.startsWith('lobby-cover://')) return `http://lobby-cover.localhost/${value.slice('lobby-cover://'.length)}`
+  if (value.startsWith('lobby-shot://')) return `http://lobby-shot.localhost/${value.slice('lobby-shot://'.length)}`
+  return value
 }

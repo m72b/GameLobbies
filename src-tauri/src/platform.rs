@@ -3,7 +3,6 @@
 
 use anyhow::{anyhow, bail, Result};
 use std::path::{Component, Path, PathBuf};
-use std::time::Duration;
 
 /// Runs `f` on a fresh OS thread and awaits it. Used for COM/WinRT and other blocking
 /// calls so no thread-pool thread is left in a particular COM apartment.
@@ -48,33 +47,6 @@ pub fn encode_uri_component(value: &str) -> String {
         .remove(b'(')
         .remove(b')');
     percent_encoding::utf8_percent_encode(value, SET).to_string()
-}
-
-/// Runs a console program without a window and returns its stdout.
-pub async fn run_capture(
-    program: &Path,
-    args: &[&str],
-    timeout: Duration,
-    max_bytes: usize,
-) -> Result<String> {
-    let mut command = tokio::process::Command::new(program);
-    command
-        .args(args)
-        .kill_on_drop(true)
-        .stdin(std::process::Stdio::null());
-    #[cfg(windows)]
-    command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-    let output = tokio::time::timeout(timeout, command.output())
-        .await
-        .map_err(|_| anyhow!("{} timed out.", program.display()))??;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("{} failed: {}", program.display(), stderr.trim());
-    }
-    if output.stdout.len() > max_bytes {
-        bail!("{} returned too much output.", program.display());
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 /// Starts a program detached from Game Lobby, so closing the launcher doesn't close the game.

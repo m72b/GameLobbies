@@ -47,6 +47,8 @@ impl Db {
 fn migrate(db: &Connection, file: Option<&Path>) -> Result<()> {
     db.pragma_update(None, "journal_mode", "WAL")?;
     db.pragma_update(None, "foreign_keys", "ON")?;
+    // Deleted rows (such as removed secrets) are overwritten, not left in free pages.
+    db.pragma_update(None, "secure_delete", "ON")?;
     db.execute_batch(&format!(
         "{};
         CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
@@ -64,7 +66,10 @@ fn migrate(db: &Connection, file: Option<&Path>) -> Result<()> {
         CREATE TABLE IF NOT EXISTS local_exe_choice(folderKey TEXT PRIMARY KEY,executable TEXT NOT NULL,chosenAt INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS local_shortcut_ok(shortcutKey TEXT PRIMARY KEY,target TEXT NOT NULL,arguments TEXT NOT NULL,confirmedAt INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS cover_cache(url TEXT PRIMARY KEY,file TEXT NOT NULL,fetchedAt INTEGER NOT NULL);
-        CREATE INDEX IF NOT EXISTS cover_cache_file ON cover_cache(file);",
+        CREATE INDEX IF NOT EXISTS cover_cache_file ON cover_cache(file);
+        CREATE TABLE IF NOT EXISTS game_metadata(gameId TEXT PRIMARY KEY,igdbId INTEGER,json TEXT,fetchedAt INTEGER NOT NULL,source TEXT NOT NULL DEFAULT 'auto');
+        CREATE TABLE IF NOT EXISTS game_screenshots(id TEXT PRIMARY KEY,gameId TEXT NOT NULL,file TEXT NOT NULL,hash TEXT NOT NULL,width INTEGER NOT NULL,height INTEGER NOT NULL,addedAt INTEGER NOT NULL,source TEXT NOT NULL DEFAULT 'user',originalPath TEXT,UNIQUE(gameId,hash));
+        CREATE INDEX IF NOT EXISTS game_screenshots_game ON game_screenshots(gameId,addedAt);",
         GAMES_TABLE.replace("CREATE TABLE games", "CREATE TABLE IF NOT EXISTS games")
     ))?;
     let columns: HashSet<String> = db
@@ -135,7 +140,155 @@ fn migrate(db: &Connection, file: Option<&Path>) -> Result<()> {
         "INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)",
         params!["app", serde_json::to_string(&Settings::default())?],
     )?;
+    let version: i64 = db.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    if version > SCHEMA_VERSION {
+        // Written by a newer Game Lobby: open it as usual, but don't run cleanups that may
+        // not suit its format.
+        eprintln!(
+            "The library was last used by a newer Game Lobby (schema {version}, this version knows {SCHEMA_VERSION}); skipping upgrade steps."
+        );
+        return Ok(());
+    }
+    remove_store_accounts(db, file, version)?;
     Ok(())
+}
+
+/// The `PRAGMA user_version` this build writes.
+pub const SCHEMA_VERSION: i64 = 1;
+
+/// What [`remove_store_accounts`] would change.
+struct StoreAccountCleanup {
+    secrets: Vec<&'static str>,
+    connections: Option<ConnectionValues>,
+    routes: Vec<(String, Vec<GameRoute>)>,
+}
+
+impl StoreAccountCleanup {
+    fn is_empty(&self) -> bool {
+        self.secrets.is_empty() && self.connections.is_none() && self.routes.is_empty()
+    }
+}
+
+fn plan_store_account_cleanup(db: &Connection) -> Result<StoreAccountCleanup> {
+    let mut secrets = Vec::new();
+    for name in crate::secrets::RETIRED_SECRETS {
+        if read_secret(db, name)?.is_some() {
+            secrets.push(*name);
+        }
+    }
+    let stored: Option<String> = db
+        .query_row(
+            "SELECT value FROM library_connections WHERE key='main'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let retired_keys = stored
+        .as_deref()
+        .and_then(|s| serde_json::from_str::<Map<String, Value>>(s).ok())
+        .is_some_and(|map| map.contains_key("steamId") || map.contains_key("legendaryPath"));
+    let connections = if retired_keys {
+        Some(get_connection_values(db)?)
+    } else {
+        None
+    };
+    let mut routes = Vec::new();
+    for row in all_rows(db)? {
+        let next: Vec<GameRoute> = row.routes.iter().map(without_legendary).collect();
+        if next != row.routes {
+            routes.push((row.id, next));
+        }
+    }
+    Ok(StoreAccountCleanup {
+        secrets,
+        connections,
+        routes,
+    })
+}
+
+/// Cleanup after the Steam Web API and Legendary imports were removed: deletes the stored
+/// Steam API key, the SteamID and the Legendary path, and turns Legendary launch routes into
+/// Epic Games Launcher links. It runs on every start and only writes when something is left
+/// (for example after an older version was run again), so it heals itself. Before the first
+/// change to a library file, a copy is kept next to it. The schema version is set in the same
+/// transaction as the changes.
+fn remove_store_accounts(db: &Connection, file: Option<&Path>, version: i64) -> Result<()> {
+    let plan = plan_store_account_cleanup(db)?;
+    if plan.is_empty() {
+        if version < SCHEMA_VERSION {
+            db.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        }
+        return Ok(());
+    }
+    if let Some(file) = file {
+        let busy: i64 = db.query_row("PRAGMA wal_checkpoint(FULL)", [], |row| row.get(0))?;
+        if busy != 0 {
+            bail!("Could not safely checkpoint the library before its database migration.");
+        }
+        let backup = file.with_file_name(format!(
+            "library.sqlite.pre-store-accounts-migration-{}.bak",
+            now_ms()
+        ));
+        std::fs::copy(file, backup)?;
+    }
+    let tx = db.unchecked_transaction()?;
+    for name in &plan.secrets {
+        tx.execute("DELETE FROM secrets WHERE key=?", [name])?;
+    }
+    if let Some(values) = &plan.connections {
+        put_connection_values(&tx, values)?;
+    }
+    for (id, routes) in &plan.routes {
+        tx.execute(
+            "UPDATE games SET routes=? WHERE id=?",
+            params![serde_json::to_string(routes)?, id],
+        )?;
+    }
+    if version < SCHEMA_VERSION {
+        tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+/// An Epic route as the removed Legendary import left it, made launchable through the Epic
+/// Games Launcher: Legendary's executable and arguments are replaced by the launcher link and
+/// its `epic-legendary` install state is dropped. Other routes are returned unchanged.
+pub fn without_legendary(route: &GameRoute) -> GameRoute {
+    let mut next = route.clone();
+    if route.source_id != "epic" {
+        return next;
+    }
+    let legendary_state = next
+        .install_states
+        .as_mut()
+        .and_then(|states| states.remove("epic-legendary"))
+        .is_some();
+    if legendary_state {
+        let states = next.install_states.clone().unwrap_or_default();
+        next.installed = Some(states.values().any(|v| *v));
+    }
+    if non_empty(&route.launch_args).is_some() {
+        next.launch_args = None;
+        if !legendary_state && next.install_states.as_ref().is_none_or(|s| s.is_empty()) {
+            next.installed = Some(false);
+        }
+        // Not installed: an install link, like owned-only Epic games, so later Epic scans keep
+        // the route as owned instead of treating it as a stale launcher entry.
+        let action = if next.installed == Some(true) {
+            "launch"
+        } else {
+            "install"
+        };
+        next.launch_target = match non_empty(&route.app_id) {
+            Some(app) => crate::importers::epic::launch_uri(app, action),
+            None => "com.epicgames.launcher://store".into(),
+        };
+    }
+    if next.installed == Some(false) {
+        next.install_path = None;
+    }
+    next
 }
 
 // ---------------------------------------------------------------------------
@@ -485,7 +638,8 @@ const LOCAL_ONLY_SOURCES: [&str; 6] = [
 
 /// Ids of games with a page customization (loaded once per reconcile).
 fn customized_game_ids(db: &Connection) -> Result<HashSet<String>> {
-    let mut stmt = db.prepare("SELECT gameId FROM game_page_custom")?;
+    let mut stmt = db
+        .prepare("SELECT gameId FROM game_page_custom UNION SELECT gameId FROM game_screenshots")?;
     let ids = stmt
         .query_map([], |row| row.get(0))?
         .collect::<rusqlite::Result<_>>()?;
@@ -544,11 +698,7 @@ pub fn reconcile_installed_source(
                 && route.source_id == "epic"
                 && non_empty(&route.launch_args).is_none()
                 && route.launch_target.contains("action=launch");
-            let epic_legendary_legacy = !has_state
-                && source_id == "epic-legendary"
-                && route.source_id == "epic"
-                && non_empty(&route.launch_args).is_some();
-            if !has_state && !inferred && !epic_installed_legacy && !epic_legendary_legacy {
+            if !has_state && !inferred && !epic_installed_legacy {
                 updated.push(route.clone());
                 continue;
             }
@@ -574,63 +724,6 @@ pub fn reconcile_installed_source(
                 continue;
             }
             updated.push(next);
-        }
-        if !changed {
-            continue;
-        }
-        if updated.is_empty() {
-            delete_game_rows(&tx, &row.id)?;
-        } else {
-            persist_game(
-                &tx,
-                &GamePatch {
-                    routes: Some(updated),
-                    ..GamePatch::new(row.id.clone())
-                },
-            )?;
-        }
-    }
-    tx.commit()?;
-    Ok(())
-}
-
-/// Applies an owned-games scan for one route source. Empty scans are ignored.
-pub fn reconcile_owned_source(
-    db: &mut Connection,
-    route_source_id: &str,
-    scanned: &[Game],
-) -> Result<()> {
-    if scanned.is_empty() {
-        return Ok(());
-    }
-    let owned: HashSet<String> = scanned
-        .iter()
-        .flat_map(|g| g.routes.iter())
-        .filter(|r| r.owned == Some(true))
-        .map(route_identity)
-        .collect();
-    let rows = all_rows(db)?;
-    let customized = customized_game_ids(db)?;
-    let tx = db.transaction()?;
-    for row in rows {
-        let mut changed = false;
-        let mut updated = Vec::with_capacity(row.routes.len());
-        for route in &row.routes {
-            if route.source_id != route_source_id
-                || route.owned != Some(true)
-                || owned.contains(&route_identity(route))
-            {
-                updated.push(route.clone());
-                continue;
-            }
-            changed = true;
-            if route.installed == Some(true) || has_user_data(&row, &customized) {
-                updated.push(GameRoute {
-                    owned: Some(false),
-                    installed: Some(route.installed == Some(true)),
-                    ..route.clone()
-                });
-            }
         }
         if !changed {
             continue;
@@ -705,6 +798,8 @@ fn delete_game_rows(db: &Connection, id: &str) -> Result<()> {
         "DELETE FROM play_sessions WHERE gameId=?",
         "DELETE FROM game_art WHERE gameId=?",
         "DELETE FROM game_page_custom WHERE gameId=?",
+        "DELETE FROM game_metadata WHERE gameId=?",
+        "DELETE FROM game_screenshots WHERE gameId=?",
         "DELETE FROM games WHERE id=?",
     ] {
         db.execute(sql, [id])?;
@@ -774,6 +869,22 @@ pub fn merge_games(db: &mut Connection, target_id: &str, source_id: &str) -> Res
     // Page customization: the target's wins; otherwise the source's moves over.
     tx.execute(
         "UPDATE OR IGNORE game_page_custom SET gameId=?1 WHERE gameId=?2",
+        params![target_id, source_id],
+    )?;
+    // IGDB metadata: an automatic match is redone (the routes changed); a match the user
+    // chose is kept, and the source's chosen match moves over when the target has none.
+    tx.execute(
+        "DELETE FROM game_metadata WHERE gameId=? AND source<>'user'",
+        [target_id],
+    )?;
+    tx.execute(
+        "UPDATE OR IGNORE game_metadata SET gameId=?1 WHERE gameId=?2 AND source='user'",
+        params![target_id, source_id],
+    )?;
+    // Screenshots move over; a picture both games have is kept once (the target's row). The
+    // files stay where they are; unreferenced ones go with `screenshots::sweep_files`.
+    tx.execute(
+        "UPDATE OR IGNORE game_screenshots SET gameId=?1 WHERE gameId=?2",
         params![target_id, source_id],
     )?;
     delete_game_rows(&tx, source_id)?;
@@ -941,6 +1052,61 @@ pub fn put_cached_art(db: &Connection, game_id: &str, art: &CachedArt) -> Result
 }
 
 // ---------------------------------------------------------------------------
+// IGDB metadata cache
+
+/// One `game_metadata` row. `igdb_id`/`json` are `None` for a cached "no match" result.
+/// `source` is `"auto"` (matched by Game Lobby) or `"user"` (chosen by the user; never
+/// replaced by an automatic match).
+#[derive(Clone, Debug, PartialEq)]
+pub struct CachedMetadata {
+    pub igdb_id: Option<i64>,
+    pub json: Option<String>,
+    pub fetched_at: i64,
+    pub source: String,
+}
+
+pub fn cached_metadata(db: &Connection, game_id: &str) -> Result<Option<CachedMetadata>> {
+    Ok(db
+        .query_row(
+            "SELECT igdbId,json,fetchedAt,source FROM game_metadata WHERE gameId=?",
+            [game_id],
+            |row| {
+                Ok(CachedMetadata {
+                    igdb_id: row.get(0)?,
+                    json: row.get(1)?,
+                    fetched_at: row.get(2)?,
+                    source: row.get(3)?,
+                })
+            },
+        )
+        .optional()?)
+}
+
+/// Stores metadata for a game that still exists. A user-chosen row is only replaced by
+/// another user choice, or refreshed by an automatic fetch of the same IGDB id (it stays
+/// `user`). Returns whether a row was written.
+pub fn put_metadata(db: &Connection, game_id: &str, entry: &CachedMetadata) -> Result<bool> {
+    let source = if entry.source == "user" {
+        "user"
+    } else {
+        "auto"
+    };
+    let changed = db.execute(
+        "INSERT INTO game_metadata(gameId,igdbId,json,fetchedAt,source) SELECT ?1,?2,?3,?4,?5 WHERE EXISTS(SELECT 1 FROM games WHERE id=?1)
+         ON CONFLICT(gameId) DO UPDATE SET igdbId=excluded.igdbId,json=excluded.json,fetchedAt=excluded.fetchedAt,
+           source=CASE WHEN game_metadata.source='user' THEN 'user' ELSE excluded.source END
+         WHERE game_metadata.source<>'user' OR excluded.source='user' OR game_metadata.igdbId IS excluded.igdbId",
+        params![game_id, entry.igdb_id, entry.json, entry.fetched_at, source],
+    )?;
+    Ok(changed > 0)
+}
+
+pub fn delete_metadata(db: &Connection, game_id: &str) -> Result<()> {
+    db.execute("DELETE FROM game_metadata WHERE gameId=?", [game_id])?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Game page customization
 
 fn read_page_custom(row: &Row) -> rusqlite::Result<GamePageCustom> {
@@ -1059,6 +1225,31 @@ pub fn put_settings(db: &Connection, patch: Map<String, Value>) -> Result<Settin
     Ok(settings)
 }
 
+/// What the last scan found per store id.
+pub fn store_detection(db: &Connection) -> Result<HashMap<String, StoreDetection>> {
+    let stored: Option<String> = db
+        .query_row(
+            "SELECT value FROM library_connections WHERE key='stores'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(stored
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default())
+}
+
+/// Merges new per-store results into the stored ones (stores not scanned keep theirs).
+pub fn put_store_detection(db: &Connection, found: &HashMap<String, StoreDetection>) -> Result<()> {
+    let mut all = store_detection(db)?;
+    all.extend(found.clone());
+    db.execute(
+        "INSERT INTO library_connections(key,value) VALUES('stores',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        [serde_json::to_string(&all)?],
+    )?;
+    Ok(())
+}
+
 pub fn get_connection_values(db: &Connection) -> Result<ConnectionValues> {
     let stored: Option<String> = db
         .query_row(
@@ -1077,8 +1268,6 @@ pub fn put_connection_values(
     input: &ConnectionValues,
 ) -> Result<ConnectionValues> {
     let clean = ConnectionValues {
-        steam_id: input.steam_id.trim().into(),
-        legendary_path: input.legendary_path.trim().into(),
         gog_database_path: input.gog_database_path.trim().into(),
     };
     db.execute(
@@ -1442,6 +1631,19 @@ pub fn save_plugin(db: &Connection, manifest: &PluginManifest) -> Result<Vec<Val
 }
 
 pub fn restore_backup(db: &mut Connection, backup: &Backup) -> Result<usize> {
+    // Games from older backups may still carry Legendary launch routes.
+    let games: Vec<Game> = backup
+        .games
+        .iter()
+        .map(|g| Game {
+            routes: g.routes.iter().map(without_legendary).collect(),
+            ..g.clone()
+        })
+        .collect();
+    let backup = &Backup {
+        games,
+        ..backup.clone()
+    };
     let tx = db.transaction()?;
     for game in &backup.games {
         persist_game(&tx, &GamePatch::from(game))?;
@@ -1662,6 +1864,359 @@ mod tests {
         let s = get_settings(&conn).unwrap();
         assert_eq!(s.steam_grid_db_styles, ["material"]);
         assert!(!s.steam_grid_db_nsfw && !s.steam_grid_db_humor);
+    }
+
+    fn legendary_route(app: &str, installed: bool, also_launcher: Option<bool>) -> GameRoute {
+        let mut states = std::collections::BTreeMap::new();
+        states.insert("epic-legendary".to_string(), installed);
+        if let Some(launcher) = also_launcher {
+            states.insert("epic-installed".to_string(), launcher);
+        }
+        GameRoute {
+            source_id: "epic".into(),
+            store: "Epic Games".into(),
+            app_id: Some(app.into()),
+            launch_target: if installed {
+                r"C:\Tools\legendary.exe".into()
+            } else {
+                format!("com.epicgames.launcher://apps/{app}?action=install&silent=true")
+            },
+            launch_args: installed.then(|| format!("[\"launch\",\"{app}\"]")),
+            install_path: installed.then(|| format!(r"D:\Games\{app}")),
+            owned: Some(true),
+            installed: Some(installed || also_launcher == Some(true)),
+            install_states: Some(states),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn upgrade_removes_store_accounts_and_legendary_routes_once() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn, None).unwrap();
+        // Simulate a library from before the removal.
+        conn.pragma_update(None, "user_version", 0).unwrap();
+        write_secret(&conn, "steam-api-key-dpapi", b"sealed").unwrap();
+        write_secret(&conn, "steamgriddb-api-key-dpapi", b"keep").unwrap();
+        conn.execute(
+            "INSERT INTO library_connections(key,value) VALUES('main',?)",
+            [serde_json::json!({
+                "steamId": "76561190000000000",
+                "legendaryPath": r"C:\Tools\legendary.exe",
+                "gogDatabasePath": r"D:\galaxy.db"
+            })
+            .to_string()],
+        )
+        .unwrap();
+        let steam = route("steam", "10", true);
+        save_game(
+            &conn,
+            &GamePatch::from(&game(
+                "epic:A",
+                "Both",
+                vec![legendary_route("A", true, Some(true)), steam.clone()],
+            )),
+        )
+        .unwrap();
+        save_game(
+            &conn,
+            &GamePatch::from(&game(
+                "epic:B",
+                "Legendary only",
+                vec![legendary_route("B", true, None)],
+            )),
+        )
+        .unwrap();
+        save_game(
+            &conn,
+            &GamePatch::from(&game(
+                "epic:C",
+                "Owned",
+                vec![legendary_route("C", false, None)],
+            )),
+        )
+        .unwrap();
+
+        migrate(&conn, None).unwrap();
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 1);
+        assert_eq!(read_secret(&conn, "steam-api-key-dpapi").unwrap(), None);
+        assert!(read_secret(&conn, "steamgriddb-api-key-dpapi")
+            .unwrap()
+            .is_some());
+        let raw: String = conn
+            .query_row(
+                "SELECT value FROM library_connections WHERE key='main'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            !raw.contains("steamId") && !raw.contains("legendary"),
+            "{raw}"
+        );
+        assert_eq!(
+            get_connection_values(&conn).unwrap().gog_database_path,
+            r"D:\galaxy.db"
+        );
+
+        let a = get_game(&conn, "epic:A").unwrap().unwrap();
+        let epic = &a.routes[0];
+        assert_eq!(
+            epic.launch_target,
+            "com.epicgames.launcher://apps/A?action=launch&silent=true"
+        );
+        assert_eq!(epic.launch_args, None);
+        assert_eq!(
+            epic.installed,
+            Some(true),
+            "still installed through the launcher"
+        );
+        assert!(!epic
+            .install_states
+            .as_ref()
+            .unwrap()
+            .contains_key("epic-legendary"));
+        assert_eq!(a.routes[1], steam, "other routes are untouched");
+        let b = get_game(&conn, "epic:B").unwrap().unwrap();
+        assert_eq!(
+            (b.routes[0].installed, b.routes[0].install_path.as_deref()),
+            (Some(false), None)
+        );
+        assert!(b.routes[0]
+            .launch_target
+            .ends_with("action=install&silent=true"));
+        let c = get_game(&conn, "epic:C").unwrap().unwrap();
+        assert!(c.routes[0]
+            .launch_target
+            .ends_with("action=install&silent=true"));
+        assert_eq!(c.routes[0].owned, Some(true));
+
+        // Self-healing: an older version run again re-adds the key and a Legendary route;
+        // the next start removes them again without changing anything else.
+        write_secret(&conn, "steam-api-key-dpapi", b"x").unwrap();
+        save_game(
+            &conn,
+            &GamePatch::from(&game(
+                "epic:D",
+                "Again",
+                vec![legendary_route("D", true, None)],
+            )),
+        )
+        .unwrap();
+        migrate(&conn, None).unwrap();
+        assert_eq!(read_secret(&conn, "steam-api-key-dpapi").unwrap(), None);
+        let d = get_game(&conn, "epic:D").unwrap().unwrap();
+        assert_eq!(d.routes[0].launch_args, None);
+        assert_eq!(get_game(&conn, "epic:A").unwrap().unwrap(), a);
+    }
+
+    #[test]
+    fn migrated_legendary_only_games_survive_the_next_epic_scan() {
+        let db = Db::memory().unwrap();
+        let mut conn = db.lock();
+        conn.pragma_update(None, "user_version", 0).unwrap();
+        save_game(
+            &conn,
+            &GamePatch::from(&game(
+                "epic:B",
+                "Legendary only",
+                vec![legendary_route("B", true, None)],
+            )),
+        )
+        .unwrap();
+        migrate(&conn, None).unwrap();
+        // An Epic scan that finds no installed games for it (one other game is installed, so
+        // the scan isn't ignored as empty).
+        let other = GameRoute {
+            source_id: "epic".into(),
+            store: "Epic Games".into(),
+            app_id: Some("Other".into()),
+            launch_target: crate::importers::epic::launch_uri("Other", "launch"),
+            installed: Some(true),
+            install_states: Some([("epic-installed".to_string(), true)].into()),
+            ..Default::default()
+        };
+        let scanned = vec![game("epic:Other", "Other", vec![other])];
+        upsert_imported_games(&mut conn, &scanned).unwrap();
+        reconcile_installed_source(&mut conn, "epic-installed", &scanned).unwrap();
+        let b = get_game(&conn, "epic:B").unwrap().expect("kept as owned");
+        assert_eq!(
+            (b.routes[0].owned, b.routes[0].installed),
+            (Some(true), Some(false))
+        );
+        assert!(b.routes[0]
+            .launch_target
+            .ends_with("action=install&silent=true"));
+    }
+
+    #[test]
+    fn the_schema_version_is_set_with_the_cleanup_and_a_backup_is_kept() {
+        let dir = std::env::temp_dir().join(format!("gl-db-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("library.sqlite");
+        {
+            let db = Db::open(&file).unwrap();
+            let conn = db.lock();
+            conn.pragma_update(None, "user_version", 0).unwrap();
+            write_secret(&conn, "steam-api-key-dpapi", b"sealed").unwrap();
+        }
+        {
+            let db = Db::open(&file).unwrap();
+            let conn = db.lock();
+            let version: i64 = conn
+                .query_row("PRAGMA user_version", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(version, SCHEMA_VERSION);
+            assert_eq!(read_secret(&conn, "steam-api-key-dpapi").unwrap(), None);
+        }
+        let backups: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| {
+                n.starts_with("library.sqlite.pre-store-accounts-migration-") && n.ends_with(".bak")
+            })
+            .collect();
+        assert_eq!(backups.len(), 1, "one backup before the change");
+        // The backup still holds the old data.
+        let old = Connection::open(dir.join(&backups[0])).unwrap();
+        assert!(read_secret(&old, "steam-api-key-dpapi").unwrap().is_some());
+        drop(old);
+        // Nothing left to clean: no further backups.
+        drop(Db::open(&file).unwrap());
+        let count = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".bak"))
+            .count();
+        assert_eq!(count, 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_failed_cleanup_leaves_the_version_unchanged() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn, None).unwrap();
+        conn.pragma_update(None, "user_version", 0).unwrap();
+        write_secret(&conn, "steam-api-key-dpapi", b"sealed").unwrap();
+        // Make the route update fail inside the transaction.
+        save_game(
+            &conn,
+            &GamePatch::from(&game("epic:X", "X", vec![legendary_route("X", true, None)])),
+        )
+        .unwrap();
+        conn.execute_batch(
+            "CREATE TRIGGER no_route_updates BEFORE UPDATE OF routes ON games BEGIN SELECT RAISE(ABORT,'blocked'); END;",
+        )
+        .unwrap();
+        assert!(migrate(&conn, None).is_err());
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 0, "rolled back together with the changes");
+        assert!(read_secret(&conn, "steam-api-key-dpapi").unwrap().is_some());
+    }
+
+    #[test]
+    fn newer_schemas_open_without_upgrade_steps_and_downgrades_heal() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn, None).unwrap();
+        // A newer Game Lobby wrote version 2: opens fine, nothing is cleaned or rewritten.
+        conn.pragma_update(None, "user_version", SCHEMA_VERSION + 1)
+            .unwrap();
+        write_secret(&conn, "steam-api-key-dpapi", b"sealed").unwrap();
+        migrate(&conn, None).unwrap();
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION + 1);
+        assert!(read_secret(&conn, "steam-api-key-dpapi").unwrap().is_some());
+        // Downgrade then upgrade: an older build (no user_version handling) leaves version 1
+        // and re-adds a Legendary route; this build repairs it on the next start.
+        conn.pragma_update(None, "user_version", SCHEMA_VERSION)
+            .unwrap();
+        save_game(
+            &conn,
+            &GamePatch::from(&game(
+                "epic:Y",
+                "Y",
+                vec![legendary_route("Y", true, Some(true))],
+            )),
+        )
+        .unwrap();
+        migrate(&conn, None).unwrap();
+        assert_eq!(read_secret(&conn, "steam-api-key-dpapi").unwrap(), None);
+        let y = get_game(&conn, "epic:Y").unwrap().unwrap();
+        assert_eq!(y.routes[0].launch_args, None);
+        assert!(y.routes[0]
+            .launch_target
+            .ends_with("action=launch&silent=true"));
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn old_backups_with_store_accounts_still_import() {
+        let raw = serde_json::json!({
+            "games": [{
+                "id": "epic:A", "title": "Legendary game", "store": "Epic Games", "playtimeMinutes": 0,
+                "hidden": false, "favorite": false,
+                "routes": [{
+                    "sourceId": "epic", "store": "Epic Games", "appId": "A",
+                    "launchTarget": "C:/Tools/legendary.exe", "launchArgs": "[\"launch\",\"A\"]",
+                    "installed": true, "installStates": {"epic-legendary": true}
+                }]
+            }],
+            "settings": {
+                "scanIntervalHours": 0, "posterWidth": 172, "showBadges": true, "animations": true,
+                "tracking": true, "steamId": "76561190000000000", "steamApiKey": "k", "legendaryPath": "C:/x.exe",
+                "theme": { "name": "Default", "bg": "#101113", "surface": "#181a1d", "surface2": "#22252a", "accent": "#75d18a", "text": "#f2f3f4", "muted": "#969ba3", "radius": "10px", "gap": "9px", "font": "Inter, Segoe UI, sans-serif", "hover": "lift" }
+            },
+            "connections": {"steamId": "76561190000000000", "legendaryPath": "C:/x.exe"}
+        });
+        let parsed = crate::validation::backup(&raw).unwrap();
+        let mut conn = Connection::open_in_memory().unwrap();
+        migrate(&conn, None).unwrap();
+        assert_eq!(restore_backup(&mut conn, &parsed).unwrap(), 1);
+        let g = get_game(&conn, "epic:A").unwrap().unwrap();
+        assert_eq!(g.routes[0].launch_args, None);
+        assert!(g.routes[0]
+            .launch_target
+            .starts_with("com.epicgames.launcher://apps/A"));
+        assert_eq!(read_secret(&conn, "steam-api-key-dpapi").unwrap(), None);
+        // Unknown keys that were never valid are still rejected.
+        let mut bad = raw.clone();
+        bad["surprise"] = serde_json::json!(1);
+        assert!(crate::validation::backup(&bad).is_err());
+    }
+
+    #[test]
+    fn store_detection_merges_per_store() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn, None).unwrap();
+        assert!(store_detection(&conn).unwrap().is_empty());
+        let entry = |found| StoreDetection {
+            found,
+            error: None,
+            scanned_at: 5,
+        };
+        put_store_detection(
+            &conn,
+            &[
+                ("steam".to_string(), entry(3)),
+                ("gog".to_string(), entry(0)),
+            ]
+            .into(),
+        )
+        .unwrap();
+        put_store_detection(&conn, &[("steam".to_string(), entry(4))].into()).unwrap();
+        let all = store_detection(&conn).unwrap();
+        assert_eq!((all["steam"].found, all["gog"].found), (4, 0));
     }
 
     #[test]
@@ -2001,43 +2556,6 @@ mod tests {
             "kept, marked not installed"
         );
         assert_eq!(page_custom(&conn, "steam:1").unwrap(), custom_hero("1"));
-
-        // Owned scans: a customized game that is no longer owned (and not installed) is kept.
-        let mut owned = route("steam", "4", false);
-        owned.owned = Some(true);
-        owned.install_states = None;
-        let mut owned2 = route("steam", "5", false);
-        owned2.owned = Some(true);
-        owned2.install_states = None;
-        let mut still = route("steam", "6", false);
-        still.owned = Some(true);
-        still.install_states = None;
-        let still_game = game("steam:6", "Still", vec![still]);
-        upsert_imported_games(
-            &mut conn,
-            &[
-                game("steam:4", "Custom", vec![owned]),
-                game("steam:5", "Gone", vec![owned2]),
-                still_game.clone(),
-            ],
-        )
-        .unwrap();
-        put_page_custom(
-            &conn,
-            "steam:4",
-            &GamePageCustom {
-                logo_position: LogoPosition::Center,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        reconcile_owned_source(&mut conn, "steam", &[still_game]).unwrap();
-        assert!(get_game(&conn, "steam:5").unwrap().is_none());
-        let g = get_game(&conn, "steam:4").unwrap().unwrap();
-        assert_eq!(
-            (g.routes[0].owned, g.routes[0].installed),
-            (Some(false), Some(false))
-        );
     }
 
     #[test]

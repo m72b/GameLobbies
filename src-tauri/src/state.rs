@@ -18,10 +18,17 @@ pub struct AppState {
     pub local_scan_lock: tokio::sync::Mutex<()>,
     /// Local cover cache (background downloads, retries).
     pub covers: crate::covercache::CacheState,
+    /// IGDB access token (memory only), rate limiter and fetch bookkeeping.
+    pub igdb: crate::igdb::IgdbState,
 }
 
 impl AppState {
     pub fn covers_dir(&self) -> PathBuf {
         self.data_dir.join("covers")
+    }
+
+    /// The user's screenshots (see `screenshots`); the cover cache never touches it.
+    pub fn screenshots_dir(&self) -> PathBuf {
+        self.data_dir.join("screenshots")
     }
 }
