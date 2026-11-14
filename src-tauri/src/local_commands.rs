@@ -344,10 +344,32 @@ pub async fn review_list(
     review::list(&state.db.lock(), include_resolved.unwrap_or(false)).map_err(err)
 }
 
-/// Resolves an item (see `local::Resolution`); returns the open items.
+/// A native warning dialog with `ok` and Cancel; `true` only when the user chose `ok`.
+async fn confirm_natively(window: &WebviewWindow, title: &str, message: &str, ok: &str) -> bool {
+    use tauri_plugin_dialog::{MessageDialogButtons, MessageDialogKind};
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    window
+        .dialog()
+        .message(message)
+        .title(title)
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            ok.to_string(),
+            "Cancel".to_string(),
+        ))
+        .parent(window)
+        .show(move |confirmed| {
+            let _ = tx.send(confirmed);
+        });
+    rx.await.unwrap_or(false)
+}
+
+/// Resolves an item (see `local::Resolution`); returns the open items. Confirming a shortcut
+/// first shows its program and arguments in a native dialog.
 #[tauri::command]
 pub async fn review_resolve(
     app: AppHandle,
+    window: WebviewWindow,
     state: State<'_, AppState>,
     id: String,
     resolution: Value,
@@ -358,6 +380,16 @@ pub async fn review_resolve(
     }
     let resolution: Resolution = serde_json::from_value(resolution)
         .map_err(|e| format!("Review resolution is invalid: {e}"))?;
+    if matches!(resolution, Resolution::ConfirmShortcut) {
+        // The renderer only asks; the user confirms what will run in a native dialog.
+        let item = review::get(&state.db.lock(), &id)
+            .map_err(err)?
+            .ok_or("That review item no longer exists.")?;
+        let prompt = local::shortcut_confirmation_prompt(&item).map_err(err)?;
+        if !confirm_natively(&window, "Confirm shortcut", &prompt, "Add game").await {
+            return Err("The shortcut was not confirmed.".into());
+        }
+    }
     // Off the async threads: resolving may read shortcuts through COM. The database is only
     // locked while the change is applied (`local::resolve`).
     let worker = app.clone();
