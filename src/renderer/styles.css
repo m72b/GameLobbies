@@ -292,3 +292,15 @@
 .sgdb-more .secondary-button{height:30px;font-size:11px;margin:0}
 .sgdb-more-end{font-style:italic}
 .gp-route-select select{max-width:280px;text-overflow:ellipsis}.route-name{min-width:0}.route-name .route-label{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:200px}
+.igdb-walkthrough{display:flex;flex-direction:column;gap:10px;margin:10px 0 0}
+.igdb-walkthrough li::marker{color:var(--accent);font-weight:700}
+.igdb-walkthrough b{color:var(--text);font-weight:600}
+.igdb-step-actions{margin-top:6px}
+.igdb-step-actions .secondary-button{display:inline-block;text-decoration:none;margin-top:0}
+.igdb-values{display:grid;grid-template-columns:max-content 1fr;gap:5px 12px;margin:6px 0;align-items:center}
+.igdb-values dt{color:var(--muted)}
+.igdb-values dd{margin:0;display:flex;align-items:center;flex-wrap:wrap;gap:6px}
+.igdb-copy{margin-top:0!important;padding:2px 8px;font-size:10px}
+.igdb-toggle{margin:0 0 6px}
+.igdb-doc-links{margin:8px 0 12px}
+.igdb-hint{font-size:10px;color:#ffb86b;margin:-8px 0 8px}
