@@ -20,7 +20,8 @@ use crate::types::now_ms;
 use anyhow::{anyhow, bail, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
-use std::sync::Mutex;
+use std::collections::{HashMap, HashSet};
+use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, State};
 
@@ -37,6 +38,9 @@ pub const SUPPORT_LEVELS: &[&str] = &["full", "partial", "none", "unknown"];
 /// How long a Steam answer (including "nothing declared") is reused.
 pub const STEAM_TTL_MS: i64 = 7 * 24 * 3_600_000;
 const MIN_GAP: Duration = Duration::from_millis(1500);
+/// After a failed Steam request (offline, rate limited) the same game is not asked again for
+/// this long.
+const STEAM_RETRY_AFTER_MS: i64 = 10 * 60_000;
 const STEAM_TIMEOUT: Duration = Duration::from_secs(10);
 const STEAM_MAX_BYTES: usize = 4 * 1024 * 1024;
 
@@ -542,6 +546,71 @@ pub fn steam_due(input: &GameInput, now: i64) -> bool {
     input.support_source != "user" && now - input.steam_checked_at >= STEAM_TTL_MS
 }
 
+/// Which games have a Steam request running and which failed recently, so that many calls
+/// for one game (a page opened repeatedly, several windows) make one request and a failing
+/// Steam is not hammered.
+#[derive(Default)]
+struct SteamGate {
+    in_flight: HashSet<String>,
+    failed_at: HashMap<String, i64>,
+}
+
+impl SteamGate {
+    /// `true` when this caller should fetch (and must call `finish` afterwards).
+    fn begin(&mut self, game_id: &str, now: i64) -> bool {
+        if self.in_flight.contains(game_id) {
+            return false;
+        }
+        if self
+            .failed_at
+            .get(game_id)
+            .is_some_and(|at| now - at < STEAM_RETRY_AFTER_MS)
+        {
+            return false;
+        }
+        self.failed_at.remove(game_id);
+        self.in_flight.insert(game_id.to_string());
+        true
+    }
+
+    fn finish(&mut self, game_id: &str, ok: bool, now: i64) {
+        self.in_flight.remove(game_id);
+        if !ok {
+            self.failed_at.insert(game_id.to_string(), now);
+        }
+    }
+}
+
+static STEAM_GATE: LazyLock<Mutex<SteamGate>> = LazyLock::new(Mutex::default);
+
+/// Holds a game's slot in `STEAM_GATE`; dropped (also when the command is cancelled) it frees
+/// the slot, and records a failure unless `succeeded` was called.
+struct SteamSlot {
+    game_id: String,
+    ok: bool,
+}
+
+impl SteamSlot {
+    fn take(game_id: &str) -> Option<Self> {
+        let mut gate = STEAM_GATE.lock().unwrap_or_else(|p| p.into_inner());
+        gate.begin(game_id, now_ms()).then(|| Self {
+            game_id: game_id.to_string(),
+            ok: false,
+        })
+    }
+
+    fn succeeded(&mut self) {
+        self.ok = true;
+    }
+}
+
+impl Drop for SteamSlot {
+    fn drop(&mut self) {
+        let mut gate = STEAM_GATE.lock().unwrap_or_else(|p| p.into_inner());
+        gate.finish(&self.game_id, self.ok, now_ms());
+    }
+}
+
 static LAST_REQUEST: Mutex<Option<Instant>> = Mutex::new(None);
 
 /// Waits so that Steam requests are at least [`MIN_GAP`] apart.
@@ -771,7 +840,8 @@ pub async fn input_save(
 
 /// Asks Steam about this game's controller support when it is a Steam game, the user has not
 /// chosen a level and the last answer is older than a week. Failures (offline, rate limited)
-/// are not remembered, so a later visit tries again. Returns the stored details either way.
+/// are remembered for ten minutes (that game is not asked again meanwhile), and a game already
+/// being asked is not asked twice. Returns the stored details either way.
 #[tauri::command]
 pub async fn input_refresh(
     app: AppHandle,
@@ -791,9 +861,14 @@ pub async fn input_refresh(
     if !steam_due(&input, now_ms()) {
         return Ok(input);
     }
+    // One request per game at a time, and none right after a failure.
+    let Some(mut slot) = SteamSlot::take(&game_id) else {
+        return Ok(input);
+    };
     let Ok(found) = fetch_steam(&app_id).await else {
         return Ok(input);
     };
+    slot.succeeded();
     let conn = state.db.lock();
     // The game may have been removed while waiting.
     if !game_exists(&conn, &game_id).map_err(err)? {
@@ -832,6 +907,41 @@ mod tests {
             }
         }
         db
+    }
+
+    #[test]
+    fn steam_requests_are_single_flight_and_back_off_after_failures() {
+        let mut gate = SteamGate::default();
+        let t0 = 1_000_000;
+        assert!(gate.begin("a", t0));
+        // A concurrent call for the same game does not fetch; another game does.
+        assert!(!gate.begin("a", t0));
+        assert!(gate.begin("b", t0));
+        gate.finish("b", true, t0);
+        assert!(gate.begin("b", t0 + 1));
+        gate.finish("b", true, t0 + 1);
+        // A failure blocks that game (only) until the backoff has passed.
+        gate.finish("a", false, t0 + 5);
+        assert!(!gate.begin("a", t0 + 6));
+        assert!(!gate.begin("a", t0 + 5 + STEAM_RETRY_AFTER_MS - 1));
+        assert!(gate.begin("a", t0 + 5 + STEAM_RETRY_AFTER_MS));
+        // Success clears the way at once.
+        gate.finish("a", true, t0 + 7 + STEAM_RETRY_AFTER_MS);
+        assert!(gate.begin("a", t0 + 8 + STEAM_RETRY_AFTER_MS));
+    }
+
+    #[test]
+    fn a_dropped_slot_frees_the_game_and_counts_as_a_failure_unless_it_succeeded() {
+        let mut ok = SteamSlot::take("slot-ok").unwrap();
+        assert!(SteamSlot::take("slot-ok").is_none());
+        ok.succeeded();
+        drop(ok);
+        let mut again = SteamSlot::take("slot-ok").unwrap();
+        again.succeeded();
+        drop(again);
+        let failed = SteamSlot::take("slot-failed").unwrap();
+        drop(failed);
+        assert!(SteamSlot::take("slot-failed").is_none());
     }
 
     #[test]
