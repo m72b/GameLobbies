@@ -10,7 +10,7 @@ import { GenreBlock, IgdbAbout, IgdbPicker, IgdbRatings, useIgdb } from './igdb-
 import { isEmulatorRoute, routeLabel, routeTitle } from '../shared/routes'
 import { ImageWall, useScreenshots } from './image-wall'
 import { elapsedSeconds, formatClock, formatDate, formatSession, formatTime, formatTotal, useNow } from './format'
-import type { EmulatorCatalog, EmulatorProfile, Game, GamePageArt, GameRoute,PlaySession, PlayStats, RunningGame, Settings } from '../shared/types'
+import type { EmulatorCatalog, EmulatorProfile, Game, GamePageArt, GameRoute, PlaySession, PlayStats, RunningGame, Settings } from '../shared/types'
 
 export interface GamePageActions {
   back(): void
