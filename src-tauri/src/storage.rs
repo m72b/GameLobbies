@@ -925,6 +925,7 @@ mod tests {
             game_page_custom: None,
             game_notes: None,
             game_added: Some(all_added(&conn).unwrap()),
+            play_sessions: None,
         };
         let text = serde_json::to_value(&backup).unwrap();
         assert!(text["gameAdded"].is_array());

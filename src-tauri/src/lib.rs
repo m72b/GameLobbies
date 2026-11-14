@@ -22,6 +22,7 @@ mod roots;
 mod scan;
 mod screenshots;
 mod secrets;
+mod sessions;
 mod state;
 mod steamgriddb;
 mod storage;
@@ -238,6 +239,12 @@ pub fn run() {
             screenshots::screenshots_import_steam,
             screenshots::screenshots_remove,
             screenshots::screenshots_set_as_hero,
+            sessions::sessions_page,
+            sessions::sessions_update,
+            sessions::sessions_delete,
+            sessions::sessions_set_journal,
+            sessions::sessions_share_text,
+            sessions::sessions_export,
             commands::igdb_status,
             commands::igdb_save_credentials,
             commands::igdb_clear_credentials,

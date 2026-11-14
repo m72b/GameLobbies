@@ -425,6 +425,13 @@ pub struct Backup {
     /// Optional: older backups don't have it.
     #[serde(default, rename = "gameAdded", skip_serializing_if = "Option::is_none")]
     pub game_added: Option<Vec<crate::storage::GameAddedEntry>>,
+    /// Finished play sessions with their journal. Optional: older backups don't have it.
+    #[serde(
+        default,
+        rename = "playSessions",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub play_sessions: Option<Vec<crate::sessions::SessionBackup>>,
 }
 
 /// One stored play session (`tracking_sessions`). `ended_at` is absent while it is in progress.
@@ -438,6 +445,12 @@ pub struct PlaySession {
     pub seconds: i64,
     /// `"launch"` or `"detected"`.
     pub source: String,
+    /// Start or end corrected by hand.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub edited: bool,
+    /// Ended by a crash or shutdown; the end is the last time the game was seen running.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub interrupted: bool,
 }
 
 /// Playtime summary for one game (`tracking_stats`).

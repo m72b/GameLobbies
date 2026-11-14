@@ -320,7 +320,11 @@ export interface RunningGame { gameId: string; state: 'launching' | 'running'; s
  * One stored play session. Times are ms epoch. `endedAt` is absent while the session is still
  * in progress. Sessions shorter than 10 s are never stored.
  */
-export interface PlaySession { id: number; startedAt: number; endedAt?: number; seconds: number; source: PlaySource }
+export interface PlaySession { id: number; startedAt: number; endedAt?: number; seconds: number; source: PlaySource
+  /** Start or end corrected by hand (see `SessionHistory`). */
+  edited?: boolean
+  /** Ended by a crash or shutdown; `endedAt` is the last time the game was seen running. */
+  interrupted?: boolean }
 /**
  * Playtime summary for a game page.
  * - `totalSeconds`: the library playtime (same as `Game.playtimeSeconds`; includes playtime

@@ -518,6 +518,8 @@ pub async fn backup_export(
                 .filter(|section| !section.is_empty()),
             game_added: Some(crate::storage::all_added(&conn).map_err(err)?)
                 .filter(|entries| !entries.is_empty()),
+            play_sessions: Some(crate::sessions::export_all(&conn).map_err(err)?)
+                .filter(|sessions| !sessions.is_empty()),
         }
     };
     std::fs::write(&path, serde_json::to_string_pretty(&backup).map_err(err)?).map_err(err)?;

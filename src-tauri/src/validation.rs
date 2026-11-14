@@ -107,6 +107,7 @@ const BACKUP_KEYS: &[&str] = &[
     "gamePageCustom",
     "gameNotes",
     "gameAdded",
+    "playSessions",
 ];
 /// Top-level backup keys of older versions (library connections and store accounts) that are
 /// ignored on import.
@@ -836,6 +837,10 @@ pub fn backup(value: &Value) -> Result<Backup> {
         Some(_) => bail!("Backup recently-added entries are invalid."),
         None => None,
     };
+    let play_sessions = clean
+        .get("playSessions")
+        .map(|list| crate::sessions::validate_backup(list, now_ms()))
+        .transpose()?;
     Ok(Backup {
         games,
         settings,
@@ -843,6 +848,7 @@ pub fn backup(value: &Value) -> Result<Backup> {
         game_page_custom,
         game_notes,
         game_added,
+        play_sessions,
     })
 }
 

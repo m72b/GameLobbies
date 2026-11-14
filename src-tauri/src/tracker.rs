@@ -852,9 +852,13 @@ pub fn apply(conn: &Connection, sessions: &mut Sessions, effects: Vec<Effect>) {
                 match session_id {
                     Some(id) => db::update_session(&tx, id, seconds)?,
                     None => {
-                        if let Some(id) =
-                            db::insert_session(&tx, &game_id, started_at, seconds, source.as_str())?
-                        {
+                        if let Some(id) = crate::sessions::start_session(
+                            &tx,
+                            &game_id,
+                            started_at,
+                            seconds,
+                            source.as_str(),
+                        )? {
                             sessions.set_session_id(&game_id, started_at, id);
                         }
                     }
