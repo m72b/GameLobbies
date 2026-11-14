@@ -334,6 +334,11 @@ fn relocated(
         if old.app_id.as_deref() == Some(key_of(Path::new(&subject.path)).as_str()) {
             route.app_id = Some(key_of(new));
         }
+        // An absolute launch target without an extension counts as a folder (`subject_of`);
+        // it moves with the folder, or the route would still launch the missing path.
+        if Path::new(old.launch_target.trim()) == Path::new(&subject.path) {
+            route.launch_target = new_text.clone();
+        }
         route.install_path = Some(new_text);
     } else {
         let old_path = Path::new(&subject.path);
@@ -1370,5 +1375,27 @@ mod tests {
         );
         assert_eq!(moved.app_id, Some(key_of(&game_dir)));
         assert_eq!(moved.launch_target, new.to_string_lossy());
+    }
+
+    #[test]
+    fn relocating_a_folder_target_moves_the_launch_target_too() {
+        let dir = TempDir::new("health-folder-target");
+        let old = dir.path().join("Old").join("GameDir");
+        let new = dir.dir("New/GameDir");
+        // Launches an extensionless absolute path, so the subject is a folder.
+        let mut route = pc(&old);
+        route.install_path = None;
+        let subject = subject_of(&route).unwrap();
+        assert!(subject.folder);
+        let moved = relocated(&route, &subject, &new, None, &[]);
+        assert_eq!(moved.launch_target, new.to_string_lossy());
+        assert_eq!(moved.install_path.as_deref(), Some(new.to_string_lossy().as_ref()));
+        // A link-launched route (target isn't the subject) keeps its target.
+        let mut link = pc(&old.join("g.exe"));
+        link.launch_target = "steam://run/1".into();
+        link.install_path = Some(old.to_string_lossy().into_owned());
+        let subject = subject_of(&link).unwrap();
+        let moved = relocated(&link, &subject, &new, None, &[]);
+        assert_eq!(moved.launch_target, "steam://run/1");
     }
 }
