@@ -2025,7 +2025,10 @@ mod tests {
             assert!(resolve(&f.db, &item.id, &Resolution::Ignore { path: path.clone() }).is_err());
         }
         // Nothing was ignored and every item is still open.
-        assert_eq!(review::list(&f.db.lock(), false).unwrap().len(), items.len());
+        assert_eq!(
+            review::list(&f.db.lock(), false).unwrap().len(),
+            items.len()
+        );
         assert!(db::ignores(&f.db.lock(), db::IGNORE_PATH)
             .unwrap()
             .is_empty());

@@ -345,7 +345,12 @@ pub async fn review_list(
 }
 
 /// A native warning dialog with `ok` and Cancel; `true` only when the user chose `ok`.
-pub(crate) async fn confirm_natively(window: &WebviewWindow, title: &str, message: &str, ok: &str) -> bool {
+pub(crate) async fn confirm_natively(
+    window: &WebviewWindow,
+    title: &str,
+    message: &str,
+    ok: &str,
+) -> bool {
     use tauri_plugin_dialog::{MessageDialogButtons, MessageDialogKind};
     let (tx, rx) = tokio::sync::oneshot::channel();
     window

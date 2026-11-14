@@ -834,6 +834,16 @@ pub fn suggested_path(ctx: &RepairContext, index: usize) -> Result<PathBuf> {
     Ok(PathBuf::from(candidate))
 }
 
+/// Fails unless `path` is still one of the item's candidates, checked against a context read
+/// after the user confirmed (the item may have been refreshed while the dialog was open).
+pub fn ensure_still_suggested(ctx: &RepairContext, path: &Path) -> Result<()> {
+    let key = path_key(&path.to_string_lossy());
+    if key.is_some() && ctx.target.candidates.iter().any(|c| path_key(c) == key) {
+        return Ok(());
+    }
+    bail!("That suggestion is no longer available. Check the library again.")
+}
+
 /// Resolves a missing-file item without touching the route ("Ignore"). It is remembered:
 /// the same missing path isn't reported again.
 pub fn ignore_missing(db: &Db, id: &str) -> Result<()> {
@@ -1134,6 +1144,11 @@ mod tests {
             .into_owned()];
         assert!(suggested_path(&ctx, 0).is_err(), "name must match");
         assert!(suggested_path(&ctx, 1).is_err());
+        let listed = dir.path().join("Library").join("a").join("foo.exe");
+        assert!(ensure_still_suggested(&ctx, &listed).is_err());
+        ctx.target.candidates = vec![listed.to_string_lossy().into_owned()];
+        assert!(ensure_still_suggested(&ctx, &listed).is_ok());
+        assert!(ensure_still_suggested(&ctx, &outside).is_err());
         // A disabled root no longer vouches for its files.
         roots::set_enabled(&db.lock(), &root.id, false).unwrap();
         let ctx = repair_context(&db, &id).unwrap();
@@ -1391,7 +1406,10 @@ mod tests {
         assert!(subject.folder);
         let moved = relocated(&route, &subject, &new, None, &[]);
         assert_eq!(moved.launch_target, new.to_string_lossy());
-        assert_eq!(moved.install_path.as_deref(), Some(new.to_string_lossy().as_ref()));
+        assert_eq!(
+            moved.install_path.as_deref(),
+            Some(new.to_string_lossy().as_ref())
+        );
         // A link-launched route (target isn't the subject) keeps its target.
         let mut link = pc(&old.join("g.exe"));
         link.launch_target = "steam://run/1".into();

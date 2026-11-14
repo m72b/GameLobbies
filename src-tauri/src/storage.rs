@@ -649,7 +649,10 @@ mod tests {
     #[test]
     fn the_confirmation_names_the_game_and_the_launcher() {
         let steam = handoff_prompt("Hades", &handoff(&route("steam", Some("1"))).unwrap());
-        assert!(steam.contains("Hades") && steam.contains("Steam"), "{steam}");
+        assert!(
+            steam.contains("Hades") && steam.contains("Steam"),
+            "{steam}"
+        );
         let epic = handoff_prompt("Hades", &handoff(&route("epic", Some("x"))).unwrap());
         assert!(epic.contains("Hades") && epic.contains("Epic Games Launcher"));
         let other = handoff_prompt("Hades", &handoff(&route("local", None)).unwrap());

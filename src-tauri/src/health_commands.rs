@@ -58,19 +58,54 @@ pub async fn health_check(app: AppHandle) -> CmdResult<HealthSummary> {
     run_check(&app, true).await
 }
 
-/// "Use this location": the suggestion at `index` of a missing-file item.
+/// "Use this location": the suggestion at `index` of a missing-file item. The renderer only
+/// names the item and the position; the old and new path are shown in a native dialog first,
+/// and the suggestion must still be one of the item's candidates when it is applied.
 #[tauri::command]
 pub async fn health_use_found(
     app: AppHandle,
+    window: WebviewWindow,
     id: String,
     index: usize,
 ) -> CmdResult<Vec<ReviewItem>> {
     let id = id_arg(&id)?;
+    let (old, path) = {
+        let worker = app.clone();
+        let id = id.clone();
+        tauri::async_runtime::spawn_blocking(move || -> anyhow::Result<_> {
+            let ctx = health::repair_context(&worker.state::<AppState>().db, &id)?;
+            let path = health::suggested_path(&ctx, index)?;
+            Ok((ctx.subject().path.clone(), path))
+        })
+        .await
+        .map_err(err)?
+        .map_err(err)?
+    };
+    let prompt = format!(
+        "Use this location for the missing file?
+
+Old path:
+{old}
+
+New path:
+{}",
+        path.display()
+    );
+    if !crate::local_commands::confirm_natively(&window, "Use this location", &prompt, "Use it")
+        .await
+    {
+        return open_items(&app.state::<AppState>());
+    }
     let worker = app.clone();
     tauri::async_runtime::spawn_blocking(move || -> anyhow::Result<()> {
         let state = worker.state::<AppState>();
+        // Read again: the item may have changed while the dialog was open.
         let ctx = health::repair_context(&state.db, &id)?;
-        let path = health::suggested_path(&ctx, index)?;
+        health::ensure_still_suggested(&ctx, &path)?;
+        let path = health::suggested_path(&ctx, index).and_then(|p| {
+            anyhow::ensure!(p == path, "That suggestion is no longer available.");
+            Ok(p)
+        })?;
         let fresh = health::prepare_relocation(&ctx, &path)?;
         health::apply_relocation(&state.db, &id, &ctx, &path, fresh)
     })
@@ -132,7 +167,10 @@ pub async fn health_locate(
     open_items(&state)
 }
 
-/// "Remove this route": the interface confirms first; `confirmed` must be true.
+/// "Remove this route": the interface confirms first; `confirmed` must be true. That flag is
+/// a guard against an accidental double click in the interface, not a security control: the
+/// renderer is trusted to send it, and the command can only remove a launch route (never a
+/// file, never a game's last route) of an item the user has open.
 #[tauri::command]
 pub async fn health_remove_route(
     app: AppHandle,
