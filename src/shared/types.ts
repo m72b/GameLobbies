@@ -197,7 +197,8 @@ export interface AddedLocalGame { gameId: string; games: Game[] }
 /**
  * Library folders. Calls reject with a user-facing message on invalid input.
  * - list(): all roots.
- * - add(kind, path): `path` must be a folder the user chose with browse() in the last hour (scans
+ * - add(kind, path): `path` must be the folder the user last chose with browse(kind) for the same
+ *   kind, within 10 minutes (scans
  *   make the programs and ROMs in it launchable, so a typed path is refused). It must be an
  *   existing absolute local folder like `D:\Roms` (no network,
  *   `\\?\` or relative paths, no `.`/`..`, at most 1024 characters; not on a mapped network
@@ -212,7 +213,7 @@ export interface AddedLocalGame { gameId: string; games: Game[] }
  *   nested in it (enabled or not), and a first-level folder of a game folder that only leads to
  *   such a folder (e.g. `Launcher` holding `Launcher\Emulators`) is skipped without a review item.
  *   Compared case-insensitively in long (non-8.3) form. Returns the updated list; does not scan.
- * - browse(): native folder picker; the chosen path (not added yet; add() accepts it), or null.
+ * - browse(kind): native folder picker; the chosen path (not added yet; add(kind, path) accepts it), or null.
  * - setEnabled(id, enabled): turned-off roots are skipped by scans; their games stay as they are.
  * - remove(id): games found only under it become not installed (removed when they have no user
  *   data); emulator profiles found in it stay. Waits for a running folder scan to finish.
@@ -223,13 +224,13 @@ export interface AddedLocalGame { gameId: string; games: Game[] }
  * - onProgress(cb) / onFinished(cb): folder scan events, also during `library.scan()` and
  *   `emulators.scan()`. Return an unsubscribe function.
  */
-export interface RootsAPI { list(): Promise<LibraryRoot[]>; add(kind: LibraryRootKind, path: string): Promise<LibraryRoot[]>; browse(): Promise<string | null>; setEnabled(id: string, enabled: boolean): Promise<LibraryRoot[]>; remove(id: string): Promise<LibraryRoot[]>; rescan(id?: string, options?: { full?: boolean }): Promise<LocalScanSummary>; onProgress(callback: (progress: LocalScanProgress) => void): () => void; onFinished(callback: (summary: LocalScanSummary) => void): () => void }
+export interface RootsAPI { list(): Promise<LibraryRoot[]>; add(kind: LibraryRootKind, path: string): Promise<LibraryRoot[]>; browse(kind: LibraryRootKind): Promise<string | null>; setEnabled(id: string, enabled: boolean): Promise<LibraryRoot[]>; remove(id: string): Promise<LibraryRoot[]>; rescan(id?: string, options?: { full?: boolean }): Promise<LocalScanSummary>; onProgress(callback: (progress: LocalScanProgress) => void): () => void; onFinished(callback: (summary: LocalScanSummary) => void): () => void }
 /**
  * Emulator profiles.
  * - list(): every profile with `available` / `needsConfiguration` computed.
  * - save(profile): creates or updates (see `EmulatorProfile` for kept fields). New profiles are
  *   `manual` and recognised by executable name. `systems` must be catalog ids. `executable` must be
- *   the stored one or one the user chose with browseExecutable() in the last hour (never typed).
+ *   the stored one or the one the user last chose with browseExecutable(), within 10 minutes (never typed).
  *   New or changed `args` must have balanced quotes, no control characters or `& | < > ^ %` or a
  *   backtick, and every file path in them must be inside the executable's folder (`cores\x.dll`;
  *   no `..`, network or other absolute paths); text starting with a placeholder is about the game

@@ -61,12 +61,16 @@ pub async fn roots_list(state: State<'_, AppState>) -> CmdResult<Vec<LibraryRoot
     list_roots(&state)
 }
 
-/// The folder a `roots_add` may add: one the user just chose in `roots_browse`. Scans turn
-/// the executables and ROMs in a root into launchable games, so the renderer can't name a
-/// folder by itself.
-fn picked_root(picks: &crate::picks::PickedPaths, path: &str) -> CmdResult<String> {
+fn root_pick_kind(kind: &str) -> CmdResult<PickKind> {
+    PickKind::for_root(kind).ok_or_else(|| "Library folder kind is invalid.".into())
+}
+
+/// The folder a `roots_add` may add: the one the user just chose in `roots_browse` for the
+/// same kind. Scans turn the executables and ROMs in a root into launchable games, so the
+/// renderer can't name a folder by itself.
+fn picked_root(picks: &crate::picks::PickedPaths, kind: &str, path: &str) -> CmdResult<String> {
     picks
-        .find(PickKind::LibraryFolder, path)
+        .find(root_pick_kind(kind)?, path)
         .ok_or_else(|| "Choose the folder with Browse… (it can't be typed in).".into())
 }
 
@@ -78,23 +82,25 @@ pub async fn roots_add(
     kind: String,
     path: String,
 ) -> CmdResult<Vec<LibraryRoot>> {
-    let picked = picked_root(&state.picks, &path)?;
+    let picked = picked_root(&state.picks, &kind, &path)?;
     let guard = RootGuard::from_environment(&state.data_dir);
     // Every filesystem check first, without the database lock.
     let (display, key) = roots::prepare(&kind, &picked, &guard).map_err(err)?;
     roots::insert(&state.db.lock(), &kind, &display, &key).map_err(err)?;
-    state.picks.forget(PickKind::LibraryFolder, &picked);
+    state.picks.forget(root_pick_kind(&kind)?, &picked);
     state.tracker.library_changed();
     list_roots(&state)
 }
 
-/// Native folder picker; the chosen path (not yet added; `roots_add` accepts it for a while)
-/// or `null` when cancelled.
+/// Native folder picker for a root of `kind`; the chosen path (not yet added; `roots_add`
+/// with the same kind accepts it for a while) or `null` when cancelled.
 #[tauri::command]
 pub async fn roots_browse(
     window: WebviewWindow,
     state: State<'_, AppState>,
+    kind: String,
 ) -> CmdResult<Option<String>> {
+    let pick_kind = root_pick_kind(&kind)?;
     let (tx, rx) = tokio::sync::oneshot::channel();
     window
         .dialog()
@@ -110,7 +116,7 @@ pub async fn roots_browse(
         .and_then(|p| p.into_path().ok())
         .map(|p| p.to_string_lossy().into_owned());
     if let Some(path) = &chosen {
-        state.picks.remember(PickKind::LibraryFolder, path);
+        state.picks.remember(pick_kind, path);
     }
     Ok(chosen)
 }
@@ -483,14 +489,17 @@ mod tests {
     use crate::picks::PickedPaths;
 
     #[test]
-    fn roots_are_added_only_from_a_recent_pick() {
+    fn roots_are_added_only_from_a_recent_pick_of_the_same_kind() {
         let picks = PickedPaths::default();
-        assert!(picked_root(&picks, r"C:\Program Files\Vendor").is_err());
-        picks.remember(PickKind::LibraryFolder, r"D:\Roms");
-        assert_eq!(picked_root(&picks, "d:/roms").unwrap(), r"D:\Roms");
-        assert!(picked_root(&picks, r"D:\Roms\..\Other").is_err());
+        assert!(picked_root(&picks, "games", r"C:\Program Files\Vendor").is_err());
+        picks.remember(PickKind::GamesFolder, r"D:\Roms");
+        assert_eq!(picked_root(&picks, "games", "d:/roms").unwrap(), r"D:\Roms");
+        assert!(picked_root(&picks, "games", r"D:\Roms\..\Other").is_err());
+        // A games-folder pick can't become an emulator folder; unknown kinds are refused.
+        assert!(picked_root(&picks, "emulators", r"D:\Roms").is_err());
+        assert!(picked_root(&picks, "other", r"D:\Roms").is_err());
         // An emulator pick is not a folder pick.
         picks.remember(PickKind::EmulatorExecutable, r"D:\Tools");
-        assert!(picked_root(&picks, r"D:\Tools").is_err());
+        assert!(picked_root(&picks, "emulators", r"D:\Tools").is_err());
     }
 }

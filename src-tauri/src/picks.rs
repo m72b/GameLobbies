@@ -2,25 +2,38 @@
 //!
 //! Some pickers only fill in a form (an emulator's executable, a library folder) that the
 //! renderer then saves. The renderer can't be trusted to name executables or scan folders by
-//! itself, so the save accepts such a path only when it matches a recent pick of the same
-//! kind ([`PickedPaths::find`]). A pick is forgotten once used ([`PickedPaths::forget`]),
-//! after [`PICK_LIFETIME`], or when more than [`MAX_PICKS`] newer picks of its kind exist.
+//! itself, so the save accepts such a path only when it matches the latest pick of the same
+//! kind ([`PickedPaths::find`]). Only the latest pick per kind is kept; it is forgotten once
+//! used ([`PickedPaths::forget`]) or after [`PICK_LIFETIME`]. Library folder picks are bound
+//! to the folder kind they were picked for, so a games-folder pick can't become an emulator
+//! folder.
 
 use crate::tracker::normalize_path;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 /// How long a pick stays usable (long enough to finish filling in the form).
-pub const PICK_LIFETIME: Duration = Duration::from_secs(60 * 60);
-/// Picks kept per kind.
-pub const MAX_PICKS: usize = 8;
+pub const PICK_LIFETIME: Duration = Duration::from_secs(10 * 60);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PickKind {
     /// `emulators_browse_executable`.
     EmulatorExecutable,
-    /// `roots_browse`.
-    LibraryFolder,
+    /// `roots_browse` for a `games` root.
+    GamesFolder,
+    /// `roots_browse` for an `emulators` root.
+    EmulatorsFolder,
+}
+
+impl PickKind {
+    /// The folder pick for a root kind (`games` | `emulators`).
+    pub fn for_root(kind: &str) -> Option<Self> {
+        match kind {
+            "games" => Some(Self::GamesFolder),
+            "emulators" => Some(Self::EmulatorsFolder),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -41,38 +54,27 @@ impl PickedPaths {
         self.picks.lock().unwrap_or_else(|p| p.into_inner())
     }
 
-    /// Remembers a path the user picked (paths that can't be normalized are ignored).
+    /// Remembers a path the user picked, replacing the previous pick of that kind. A path
+    /// that can't be normalized only clears the previous pick.
     pub fn remember(&self, kind: PickKind, path: &str) {
         self.remember_at(kind, path, Instant::now());
     }
 
     fn remember_at(&self, kind: PickKind, path: &str, at: Instant) {
-        let Some(key) = normalize_path(path) else {
-            return;
-        };
         let mut picks = self.lock();
-        picks.retain(|p| !(p.kind == kind && p.key == key));
-        picks.push(Pick {
-            kind,
-            key,
-            path: path.to_string(),
-            at,
-        });
-        let count = picks.iter().filter(|p| p.kind == kind).count();
-        if count > MAX_PICKS {
-            let mut extra = count - MAX_PICKS;
-            picks.retain(|p| {
-                let drop = extra > 0 && p.kind == kind;
-                if drop {
-                    extra -= 1;
-                }
-                !drop
+        picks.retain(|p| p.kind != kind);
+        if let Some(key) = normalize_path(path) {
+            picks.push(Pick {
+                kind,
+                key,
+                path: path.to_string(),
+                at,
             });
         }
     }
 
-    /// The picked path (as the picker returned it) that `raw` names, when it was picked
-    /// recently. Comparison is case-insensitive and ignores `/` vs `\`.
+    /// The picked path (as the picker returned it) that `raw` names, when it is the latest
+    /// pick of `kind` and recent. Comparison is case-insensitive and ignores `/` vs `\`.
     pub fn find(&self, kind: PickKind, raw: &str) -> Option<String> {
         self.find_at(kind, raw, Instant::now())
     }
@@ -100,7 +102,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_recent_picks_of_the_same_kind_match() {
+    fn only_the_latest_pick_of_the_same_kind_matches() {
         let picks = PickedPaths::default();
         let exe = r"D:\Emulators\mGBA\mGBA.exe";
         assert_eq!(picks.find(PickKind::EmulatorExecutable, exe), None);
@@ -109,7 +111,7 @@ mod tests {
             picks.find(PickKind::EmulatorExecutable, "d:/emulators/mgba/MGBA.EXE"),
             Some(exe.to_string())
         );
-        assert_eq!(picks.find(PickKind::LibraryFolder, exe), None);
+        assert_eq!(picks.find(PickKind::GamesFolder, exe), None);
         assert_eq!(
             picks.find(PickKind::EmulatorExecutable, r"C:\Windows\System32\cmd.exe"),
             None
@@ -122,42 +124,47 @@ mod tests {
             ),
             None
         );
-        picks.forget(PickKind::EmulatorExecutable, exe);
+        // A newer pick replaces the older one.
+        let other = r"D:\Emulators\Dolphin\Dolphin.exe";
+        picks.remember(PickKind::EmulatorExecutable, other);
         assert_eq!(picks.find(PickKind::EmulatorExecutable, exe), None);
+        assert!(picks.find(PickKind::EmulatorExecutable, other).is_some());
+        picks.forget(PickKind::EmulatorExecutable, other);
+        assert_eq!(picks.find(PickKind::EmulatorExecutable, other), None);
     }
 
     #[test]
-    fn picks_expire_and_are_capped() {
+    fn folder_picks_are_bound_to_their_root_kind() {
+        let picks = PickedPaths::default();
+        assert_eq!(PickKind::for_root("games"), Some(PickKind::GamesFolder));
+        assert_eq!(
+            PickKind::for_root("emulators"),
+            Some(PickKind::EmulatorsFolder)
+        );
+        assert_eq!(PickKind::for_root("other"), None);
+        picks.remember(PickKind::GamesFolder, r"D:\Roms");
+        assert!(picks.find(PickKind::GamesFolder, r"D:\Roms").is_some());
+        assert!(picks.find(PickKind::EmulatorsFolder, r"D:\Roms").is_none());
+        // Picks of other kinds are kept.
+        picks.remember(PickKind::EmulatorsFolder, r"D:\Emulators");
+        assert!(picks.find(PickKind::GamesFolder, r"D:\Roms").is_some());
+    }
+
+    #[test]
+    fn picks_expire() {
         let picks = PickedPaths::default();
         let start = Instant::now();
-        picks.remember_at(PickKind::LibraryFolder, r"D:\Roms", start);
+        picks.remember_at(PickKind::GamesFolder, r"D:\Roms", start);
         assert!(picks
-            .find_at(
-                PickKind::LibraryFolder,
-                r"D:\Roms",
-                start + PICK_LIFETIME / 2
-            )
+            .find_at(PickKind::GamesFolder, r"D:\Roms", start + PICK_LIFETIME / 2)
             .is_some());
         assert!(picks
-            .find_at(PickKind::LibraryFolder, r"D:\Roms", start + PICK_LIFETIME)
+            .find_at(PickKind::GamesFolder, r"D:\Roms", start + PICK_LIFETIME)
             .is_none());
-
-        for i in 0..=MAX_PICKS {
-            picks.remember(PickKind::EmulatorExecutable, &format!(r"D:\E{i}\e.exe"));
-        }
-        picks.remember(PickKind::LibraryFolder, r"D:\Games");
-        assert!(picks
-            .find(PickKind::EmulatorExecutable, r"D:\E0\e.exe")
-            .is_none());
-        assert!(picks
-            .find(
-                PickKind::EmulatorExecutable,
-                &format!(r"D:\E{MAX_PICKS}\e.exe")
-            )
-            .is_some());
-        assert!(picks.find(PickKind::LibraryFolder, r"D:\Games").is_some());
-        // Unusable paths are never remembered.
-        picks.remember(PickKind::LibraryFolder, "relative");
-        assert!(picks.find(PickKind::LibraryFolder, "relative").is_none());
+        // An unusable path is never remembered, and clears the previous pick.
+        picks.remember(PickKind::GamesFolder, r"D:\Games");
+        picks.remember(PickKind::GamesFolder, "relative");
+        assert!(picks.find(PickKind::GamesFolder, "relative").is_none());
+        assert!(picks.find(PickKind::GamesFolder, r"D:\Games").is_none());
     }
 }
