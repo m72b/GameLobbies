@@ -197,7 +197,9 @@ export interface AddedLocalGame { gameId: string; games: Game[] }
 /**
  * Library folders. Calls reject with a user-facing message on invalid input.
  * - list(): all roots.
- * - add(kind, path): `path` must be an existing absolute local folder like `D:\Roms` (no network,
+ * - add(kind, path): `path` must be a folder the user chose with browse() in the last hour (scans
+ *   make the programs and ROMs in it launchable, so a typed path is refused). It must be an
+ *   existing absolute local folder like `D:\Roms` (no network,
  *   `\\?\` or relative paths, no `.`/`..`, at most 1024 characters; not on a mapped network
  *   drive; not itself a link/junction; links in parent folders are resolved and the real location
  *   is checked and stored). Refused: the Windows folder, Roaming AppData and Game Lobby's data
@@ -210,7 +212,7 @@ export interface AddedLocalGame { gameId: string; games: Game[] }
  *   nested in it (enabled or not), and a first-level folder of a game folder that only leads to
  *   such a folder (e.g. `Launcher` holding `Launcher\Emulators`) is skipped without a review item.
  *   Compared case-insensitively in long (non-8.3) form. Returns the updated list; does not scan.
- * - browse(): native folder picker; the chosen path (not added yet), or null when cancelled.
+ * - browse(): native folder picker; the chosen path (not added yet; add() accepts it), or null.
  * - setEnabled(id, enabled): turned-off roots are skipped by scans; their games stay as they are.
  * - remove(id): games found only under it become not installed (removed when they have no user
  *   data); emulator profiles found in it stay. Waits for a running folder scan to finish.
@@ -226,14 +228,18 @@ export interface RootsAPI { list(): Promise<LibraryRoot[]>; add(kind: LibraryRoo
  * Emulator profiles.
  * - list(): every profile with `available` / `needsConfiguration` computed.
  * - save(profile): creates or updates (see `EmulatorProfile` for kept fields). New profiles are
- *   `manual` and recognised by executable name. `systems` must be catalog ids; `executable` must be
- *   an absolute `.exe` path; `args` must have balanced quotes.
+ *   `manual` and recognised by executable name. `systems` must be catalog ids. `executable` must be
+ *   the stored one or one the user chose with browseExecutable() in the last hour (never typed).
+ *   New or changed `args` must have balanced quotes, no control characters or `& | < > ^ %` or a
+ *   backtick, and every file path in them must be inside the executable's folder (`cores\x.dll`;
+ *   no `..`, network or other absolute paths); text starting with a placeholder is about the game
+ *   file. Unchanged `args` saved by older versions are kept as they are.
  * - remove(id): deletes it; scans never re-add its executable (see ignored/unignore). Games that
  *   used it go back to automatic.
  * - scan(): searches the enabled emulator folders only (rejects while a folder scan runs).
  * - catalog(): built-in systems and known emulators.
  * - ignored() / unignore(path): executables of removed profiles.
- * - browseExecutable(): native .exe picker; the path, or null when cancelled.
+ * - browseExecutable(): native .exe picker; the path (save() accepts it), or null when cancelled.
  */
 export interface EmulatorsAPI { list(): Promise<EmulatorProfile[]>; save(profile: EmulatorProfile): Promise<EmulatorProfile[]>; remove(id: string): Promise<EmulatorProfile[]>; scan(): Promise<LocalScanSummary>; catalog(): Promise<EmulatorCatalog>; ignored(): Promise<IgnoredPath[]>; unignore(path: string): Promise<IgnoredPath[]>; browseExecutable(): Promise<string | null> }
 /**

@@ -78,7 +78,7 @@ function RootList({ title, kind, hint, roots, scanBusy, activeId, notNow, onChan
     <h3>{title}</h3>
     <p className="muted-text">{hint}</p>
     <form className="root-add" onSubmit={event => { event.preventDefault(); void add() }}>
-      <input aria-label={label} value={path} onChange={event => { setPath(event.target.value); setError('') }} placeholder={kind === 'emulators' ? 'D:\\Emulators' : 'D:\\Roms'} spellCheck={false} aria-invalid={!!error} />
+      <input aria-label={label} value={path} readOnly onClick={() => void browse()} placeholder="Choose a folder with Browse…" title="Folders are chosen with Browse…, so only folders you picked are scanned" spellCheck={false} aria-invalid={!!error} />
       <button type="button" className="secondary-button" onClick={() => void browse()}>Browse…</button>
       <button type="submit" className="primary-button" disabled={adding || !path.trim()}>Add</button>
     </form>
@@ -174,9 +174,9 @@ function EmulatorEditor({ initial, isNew, systems, onSaved, onCancel }: { initia
   return <form className="emulator-editor" onSubmit={event => { event.preventDefault(); void submit() }}>
     <h4>{isNew ? 'Add emulator' : 'Edit ' + initial.name}</h4>
     <label className="field-label">Name<input value={profile.name} onChange={event => setProfile({ ...profile, name: event.target.value })} required /></label>
-    <label className="field-label">Executable<span className="inline-field"><input value={profile.executable} onChange={event => setProfile({ ...profile, executable: event.target.value })} placeholder="C:\Emulators\pcsx2\pcsx2.exe" spellCheck={false} required /><button type="button" className="secondary-button" onClick={() => void browse()}>Browse…</button></span></label>
+    <label className="field-label">Executable<span className="inline-field"><input value={profile.executable} readOnly onClick={() => void browse()} placeholder="Choose the emulator’s .exe with Browse…" title="The executable is chosen with Browse…, so only programs you picked are run" spellCheck={false} required /><button type="button" className="secondary-button" onClick={() => void browse()}>Browse…</button></span></label>
     <label className="field-label">Arguments<input value={profile.args} onChange={event => setProfile({ ...profile, args: event.target.value })} placeholder="{rom}" spellCheck={false} />
-      <small className="chip-hint">Placeholders: <code>{'{rom}'}</code> ROM path, <code>{'{romdir}'}</code> its folder, <code>{'{romname}'}</code> file name without extension. Use quotes to group text with spaces, e.g. <code>{'-batch "{rom}"'}</code>; a path with spaces stays a single argument. No shell is used. Without <code>{'{rom}'}</code> the ROM path is appended last.</small></label>
+      <small className="chip-hint">Placeholders: <code>{'{rom}'}</code> ROM path, <code>{'{romdir}'}</code> its folder, <code>{'{romname}'}</code> file name without extension. Use quotes to group text with spaces, e.g. <code>{'-batch "{rom}"'}</code>; a path with spaces stays a single argument. No shell is used. Without <code>{'{rom}'}</code> the ROM path is appended last. Files named in the arguments must be inside the emulator’s folder, e.g. <code>{'-L cores\\snes9x_libretro.dll {rom}'}</code>.</small></label>
     <div className="field-label">Systems
       <div className="chip-group" role="group" aria-label="Systems this emulator runs">{systems.map(system => <button key={system.id} type="button" className={'chip ' + (selected.includes(system.id) ? 'active' : '')} aria-pressed={selected.includes(system.id)} onClick={() => toggleSystem(system.id)}>{system.name}</button>)}</div>
       {systems.length === 0 && <small className="chip-hint">System list unavailable.</small>}</div>

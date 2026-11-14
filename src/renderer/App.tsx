@@ -28,6 +28,9 @@ function rememberSort(value: SortBy) {
 }
 type MenuAction = 'Play' | 'Edit metadata' | 'Set custom cover' | 'Find cover on SteamGridDB' | 'Hide' | 'Unhide' | 'Add to collection' | 'Link another game' | 'Open install folder' | 'Remove'
 
+// Saves from the UI leave launch routes alone: program and file routes can only be changed by
+// scans and the native pickers, and a stale copy would be refused.
+const withoutRoutes = ({ routes: _routes, ...game }: Game): Omit<Game, 'routes'> => game
 const isInstalled = (game: Game) => game.routes.some(route => route.installed === true)
 const stores: StoreName[] = ['Steam', 'Epic Games', 'GOG', 'EA app', 'Battle.net', 'Xbox', 'Ubisoft', 'Emulator', 'itch.io', 'Amazon Games', 'Custom']
 
@@ -103,7 +106,7 @@ export default function App() {
     event.preventDefault()
     if (!editingGame || !editTitle.trim()) return
     try {
-      await window.lobby.library.save({ ...editingGame, title: editTitle.trim(), genre: editGenre.trim() || undefined, favorite: editFavorite })
+      await window.lobby.library.save({ ...withoutRoutes(editingGame), title: editTitle.trim(), genre: editGenre.trim() || undefined, favorite: editFavorite })
       const nextGames = await window.lobby.library.list()
       setGames(nextGames)
       setEditingGame(null)
@@ -166,7 +169,7 @@ export default function App() {
     if (action === 'Find cover on SteamGridDB') return findCover(game)
     if (action === 'Link another game') return linkAnotherGame(game)
     if (action === 'Hide' || action === 'Unhide') {
-      const nextGames = await window.lobby.library.save({ ...game, hidden: action === 'Hide' })
+      const nextGames = await window.lobby.library.save({ ...withoutRoutes(game), hidden: action === 'Hide' })
       setGames(nextGames)
       return
     }
@@ -207,10 +210,14 @@ export default function App() {
   const addGame = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     const data = new FormData(event.currentTarget)
-    await window.lobby.library.add(String(data.get('title')), String(data.get('target')))
-    setAdding(false)
-    await refresh()
-    notice('Game added')
+    try {
+      await window.lobby.library.add(String(data.get('title')), String(data.get('target')))
+      setAdding(false)
+      await refresh()
+      notice('Game added')
+    } catch (error) {
+      notice(error instanceof Error ? error.message : 'Could not add the game')
+    }
   }
 
   useEffect(() => {
@@ -370,7 +377,7 @@ export default function App() {
     findCover: game => void findCover(game),
     link: linkAnotherGame,
     toggleHidden: game => void menuAction(game.hidden ? 'Unhide' : 'Hide', game),
-    toggleFavorite: game => void window.lobby.library.save({ ...game, favorite: !game.favorite }).then(setGames).catch(error => notice(error instanceof Error ? error.message : 'Could not update favorite')),
+    toggleFavorite: game => void window.lobby.library.save({ ...withoutRoutes(game), favorite: !game.favorite }).then(setGames).catch(error => notice(error instanceof Error ? error.message : 'Could not update favorite')),
     openFolder: game => void window.lobby.library.chooseInstallFolder(game.id).catch(error => notice(error instanceof Error ? error.message : 'Could not open install folder')),
     remove: game => void menuAction('Remove', game),
     setEmulator: async (game, routeIndex, emulatorId) => { setGames(await window.lobby.library.setEmulator(game.id, routeIndex, emulatorId)) }
@@ -458,7 +465,8 @@ export default function App() {
     {adding && <div className="modal-scrim"><form className="modal" onSubmit={addGame}>
       <div className="modal-head"><h2>Add a game</h2><button type="button" onClick={() => setAdding(false)}><X size={17} /></button></div>
       <label>Title<input required name="title" placeholder="Game title" autoFocus /></label>
-      <label>Executable or launch URI<input required name="target" placeholder="C:\\Games\\game.exe or steam://run/123" /></label>
+      <label>Store link<input required name="target" placeholder="steam://run/123" /></label>
+      <p className="muted-text">For a program, shortcut or ROM file on this PC, use Add local game.</p>
       <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setAdding(false)}>Cancel</button><button className="primary-button">Add game</button></div>
     </form></div>}
     {editingGame && <div className="modal-scrim"><form className="modal edit-modal" onSubmit={saveEdit}>
