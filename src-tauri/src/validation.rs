@@ -848,6 +848,28 @@ mod tests {
     }
 
     #[test]
+    fn backup_game_notes_are_validated_on_import() {
+        let good = json!({ "games": [game_json()], "gameNotes": {
+            "notes": [{ "gameId": "steam:570", "rating": 4.5, "notes": "n" }],
+            "memories": [{ "gameId": "steam:570", "date": "2025-01-31", "text": "t" }],
+            "input": [{ "gameId": "steam:570", "support": "full", "supportSource": "steam" }] } });
+        assert!(backup(&good).unwrap().game_notes.is_some());
+        assert!(backup(&json!({ "games": [game_json()] }))
+            .unwrap()
+            .game_notes
+            .is_none());
+        for bad in [
+            json!({ "notes": [{ "gameId": "steam:570", "rating": 9 }] }),
+            json!({ "memories": [{ "gameId": "steam:570", "date": "2025-02-31", "text": "t" }] }),
+            json!({ "input": [{ "gameId": "steam:570", "support": "maybe" }] }),
+            json!({ "notes": [{ "gameId": "steam:570", "notes": "x".repeat(5001) }] }),
+            json!({ "input": [{ "gameId": "steam:570", "support": "full", "exe": "x" }] }),
+        ] {
+            assert!(backup(&with(json!({ "games": [game_json()] }), "gameNotes", bad)).is_err());
+        }
+    }
+
+    #[test]
     fn library_and_backup_accept_app_data_and_reject_unexpected_fields() {
         assert_eq!(
             game_patch(&with(game_json(), "favorite", json!(true)))

@@ -131,6 +131,16 @@ const api: LobbyAPI = {
     setAsHero: id => call('screenshots_set_as_hero', { id }),
     onChanged: callback => subscribe<{ gameId: string }>('screenshots:changed', callback)
   },
+  notes: {
+    get: gameId => call('notes_get', { gameId }),
+    setRating: (gameId, rating) => call('notes_set_rating', { gameId, rating }),
+    setText: (gameId, notes) => call('notes_set_text', { gameId, notes }),
+    saveMemory: (gameId, memory) => call('notes_save_memory', { gameId, id: memory.id ?? null, date: memory.date, text: memory.text, screenshotId: memory.screenshotId ?? null }),
+    deleteMemory: (gameId, id) => call('notes_delete_memory', { gameId, id }),
+    getInput: gameId => call('input_get', { gameId }),
+    saveInput: (gameId, input) => call('input_save', { gameId, support: input.support, preferred: input.preferred, notes: input.notes }),
+    refreshInput: gameId => call('input_refresh', { gameId })
+  },
   igdb: {
     status: () => call('igdb_status'),
     saveCredentials: (clientId, clientSecret) => call('igdb_save_credentials', { clientId, clientSecret }),
