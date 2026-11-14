@@ -69,7 +69,9 @@ fn migrate(db: &Connection, file: Option<&Path>) -> Result<()> {
         CREATE INDEX IF NOT EXISTS cover_cache_file ON cover_cache(file);
         CREATE TABLE IF NOT EXISTS game_metadata(gameId TEXT PRIMARY KEY,igdbId INTEGER,json TEXT,fetchedAt INTEGER NOT NULL,source TEXT NOT NULL DEFAULT 'auto');
         CREATE TABLE IF NOT EXISTS game_screenshots(id TEXT PRIMARY KEY,gameId TEXT NOT NULL,file TEXT NOT NULL,hash TEXT NOT NULL,width INTEGER NOT NULL,height INTEGER NOT NULL,addedAt INTEGER NOT NULL,source TEXT NOT NULL DEFAULT 'user',originalPath TEXT,UNIQUE(gameId,hash));
-        CREATE INDEX IF NOT EXISTS game_screenshots_game ON game_screenshots(gameId,addedAt);",
+        CREATE INDEX IF NOT EXISTS game_screenshots_game ON game_screenshots(gameId,addedAt);
+        CREATE TABLE IF NOT EXISTS install_sizes(gameId TEXT NOT NULL,path TEXT NOT NULL,bytes INTEGER NOT NULL,measuredAt INTEGER NOT NULL,partial INTEGER NOT NULL DEFAULT 0,source TEXT NOT NULL DEFAULT 'scan',PRIMARY KEY(gameId,path));
+        CREATE TABLE IF NOT EXISTS game_added(gameId TEXT PRIMARY KEY,addedAt INTEGER NOT NULL,seen INTEGER NOT NULL DEFAULT 0);",
         GAMES_TABLE.replace("CREATE TABLE games", "CREATE TABLE IF NOT EXISTS games")
     ))?;
     let columns: HashSet<String> = db
@@ -140,6 +142,7 @@ fn migrate(db: &Connection, file: Option<&Path>) -> Result<()> {
         "INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)",
         params!["app", serde_json::to_string(&Settings::default())?],
     )?;
+    crate::storage::prepare(db)?;
     let version: i64 = db.query_row("PRAGMA user_version", [], |row| row.get(0))?;
     if version > SCHEMA_VERSION {
         // Written by a newer Game Lobby: open it as usual, but don't run cleanups that may
@@ -1661,6 +1664,8 @@ pub fn restore_backup(db: &mut Connection, backup: &Backup) -> Result<usize> {
     for entry in backup.game_page_custom.iter().flatten() {
         put_page_custom(&tx, &entry.game_id, &entry.custom())?;
     }
+    let ids: Vec<&str> = backup.games.iter().map(|g| g.id.as_str()).collect();
+    crate::storage::restore_added(&tx, &ids, backup.game_added.as_deref())?;
     tx.commit()?;
     Ok(backup.games.len())
 }
@@ -2485,6 +2490,7 @@ mod tests {
             settings: None,
             emulators: None,
             game_page_custom: Some(all_page_custom(&conn).unwrap()),
+            game_added: None,
         };
         let text = serde_json::to_string(&backup).unwrap();
         let raw: Value = serde_json::from_str(&text).unwrap();
@@ -2613,6 +2619,7 @@ mod tests {
             settings: None,
             emulators: Some(vec![p.clone()]),
             game_page_custom: None,
+            game_added: None,
         })
         .unwrap();
         let parsed = crate::validation::backup(&text).unwrap();

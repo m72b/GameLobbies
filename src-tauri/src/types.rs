@@ -417,6 +417,10 @@ pub struct Backup {
         skip_serializing_if = "Option::is_none"
     )]
     pub game_page_custom: Option<Vec<GamePageCustomEntry>>,
+    /// "Recently added" flags (when each game was first discovered, and whether it was seen).
+    /// Optional: older backups don't have it.
+    #[serde(default, rename = "gameAdded", skip_serializing_if = "Option::is_none")]
+    pub game_added: Option<Vec<crate::storage::GameAddedEntry>>,
 }
 
 /// One stored play session (`tracking_sessions`). `ended_at` is absent while it is in progress.

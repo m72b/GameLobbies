@@ -21,6 +21,7 @@ mod screenshots;
 mod secrets;
 mod state;
 mod steamgriddb;
+mod storage;
 mod theme;
 mod tracker;
 mod types;
@@ -230,6 +231,11 @@ pub fn run() {
             commands::igdb_fetch_all,
             commands::igdb_cancel_fetch_all,
             commands::igdb_progress,
+            storage::storage_list,
+            storage::storage_rescan,
+            storage::storage_uninstall,
+            storage::recent_list,
+            storage::recent_dismiss,
             updater::updates_check,
             updater::updates_auto_check,
             updater::updates_last,
