@@ -7,10 +7,10 @@ import { defaultGamePageCustom } from '../shared/defaults'
 import { coverLayerStyle, coverStyle } from './cover'
 import { CoverLayer, useCover } from './poster'
 import { GenreBlock, IgdbAbout, IgdbPicker, IgdbRatings, useIgdb } from './igdb-details'
-import { isEmulatorRoute } from '../shared/routes'
+import { isEmulatorRoute, routeLabel, routeTitle } from '../shared/routes'
 import { ImageWall, useScreenshots } from './image-wall'
 import { elapsedSeconds, formatClock, formatDate, formatSession, formatTime, formatTotal, useNow } from './format'
-import type { EmulatorCatalog, EmulatorProfile, Game, GamePageArt, PlaySession, PlayStats, RunningGame, Settings } from '../shared/types'
+import type { EmulatorCatalog, EmulatorProfile, Game, GamePageArt, GameRoute,PlaySession, PlayStats, RunningGame, Settings } from '../shared/types'
 
 export interface GamePageActions {
   back(): void
@@ -86,6 +86,7 @@ export function GamePage({ game, index, settings, running, libraryVersion, actio
   const logoSrc = art.logo[logoIdx] ? coverUrl(art.logo[logoIdx]) : undefined
   const cover = useCover(game)
   const route = game.routes[routeIdx]
+  const systemLabel = (item: GameRoute) => item.system ? catalog?.systems.find(system => system.id === item.system)?.name ?? item.system : undefined
   const launching = running?.state === 'launching'
   const isRunning = running?.state === 'running'
   const totalSeconds = stats?.totalSeconds ?? game.playtimeSeconds ?? game.playtimeMinutes * 60
@@ -134,7 +135,7 @@ export function GamePage({ game, index, settings, running, libraryVersion, actio
         <span className="gp-route-select">
           {route && <StoreIcon store={route.store} size={14} />}
           <select value={routeIdx} onChange={event => setRouteIdx(Number(event.target.value))} aria-label="Play from">
-            {game.routes.map((item, i) => <option key={item.sourceId + '-' + i} value={i}>{item.store}{item.installed ? '' : ' (not installed)'}</option>)}
+            {game.routes.map((item, i) => <option key={item.sourceId + '-' + i} value={i} title={routeTitle(item, game.routes, systemLabel(item))}>{routeLabel(item, game.routes)}{item.installed ? '' : ' (not installed)'}</option>)}
           </select>
           <ChevronDown size={13} />
         </span>
@@ -196,7 +197,7 @@ export function GamePage({ game, index, settings, running, libraryVersion, actio
           {game.routes.length === 0 && <div className="muted-text">No launch routes</div>}
           {game.routes.map((item, i) => <div className="gp-route-row" key={item.sourceId + '-' + i}>
             <span className="store-badge small"><StoreIcon store={item.store} /></span>
-            <span className="route-name">{item.store}<small>{item.installed ? 'Installed' : item.owned ? 'Owned · not installed' : 'Launch route'}</small></span>
+            <span className="route-name"><span className="route-label" title={routeTitle(item, game.routes, systemLabel(item))}>{routeLabel(item, game.routes)}</span><small>{item.installed ? 'Installed' : item.owned ? 'Owned · not installed' : 'Launch route'}</small></span>
           </div>)}
           {game.routes.map((item, i) => {
             if (!isEmulatorRoute(item)) return null
