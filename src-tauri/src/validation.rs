@@ -106,6 +106,7 @@ const BACKUP_KEYS: &[&str] = &[
     "emulators",
     "gamePageCustom",
     "gameNotes",
+    "gameAdded",
 ];
 /// Top-level backup keys of older versions (library connections and store accounts) that are
 /// ignored on import.
@@ -818,12 +819,30 @@ pub fn backup(value: &Value) -> Result<Backup> {
         }
         None => None,
     };
+    let game_added = match clean.get("gameAdded") {
+        Some(Value::Array(list)) if list.len() <= 100_000 => Some(
+            list.iter()
+                .map(|entry| {
+                    let entry: crate::storage::GameAddedEntry =
+                        serde_json::from_value(entry.clone())
+                            .map_err(|_| anyhow!("Backup recently-added entries are invalid."))?;
+                    if entry.game_id.is_empty() || entry.game_id.len() > 512 {
+                        bail!("Backup recently-added entries are invalid.");
+                    }
+                    Ok(entry)
+                })
+                .collect::<Result<Vec<_>>>()?,
+        ),
+        Some(_) => bail!("Backup recently-added entries are invalid."),
+        None => None,
+    };
     Ok(Backup {
         games,
         settings,
         emulators,
         game_page_custom,
         game_notes,
+        game_added,
     })
 }
 

@@ -73,7 +73,9 @@ fn migrate(db: &Connection, file: Option<&Path>) -> Result<()> {
         CREATE TABLE IF NOT EXISTS game_notes(gameId TEXT PRIMARY KEY,rating REAL,notes TEXT NOT NULL DEFAULT '',updatedAt INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS game_memories(id INTEGER PRIMARY KEY,gameId TEXT NOT NULL,date TEXT NOT NULL,text TEXT NOT NULL,screenshotId TEXT,createdAt INTEGER NOT NULL);
         CREATE INDEX IF NOT EXISTS game_memories_game ON game_memories(gameId,date);
-        CREATE TABLE IF NOT EXISTS game_input(gameId TEXT PRIMARY KEY,support TEXT NOT NULL DEFAULT 'unknown',supportSource TEXT NOT NULL DEFAULT '',preferred TEXT NOT NULL DEFAULT '',notes TEXT NOT NULL DEFAULT '',updatedAt INTEGER NOT NULL,steamCheckedAt INTEGER NOT NULL DEFAULT 0);",
+        CREATE TABLE IF NOT EXISTS game_input(gameId TEXT PRIMARY KEY,support TEXT NOT NULL DEFAULT 'unknown',supportSource TEXT NOT NULL DEFAULT '',preferred TEXT NOT NULL DEFAULT '',notes TEXT NOT NULL DEFAULT '',updatedAt INTEGER NOT NULL,steamCheckedAt INTEGER NOT NULL DEFAULT 0);
+        CREATE TABLE IF NOT EXISTS install_sizes(gameId TEXT NOT NULL,path TEXT NOT NULL,bytes INTEGER NOT NULL,measuredAt INTEGER NOT NULL,partial INTEGER NOT NULL DEFAULT 0,source TEXT NOT NULL DEFAULT 'scan',PRIMARY KEY(gameId,path));
+        CREATE TABLE IF NOT EXISTS game_added(gameId TEXT PRIMARY KEY,addedAt INTEGER NOT NULL,seen INTEGER NOT NULL DEFAULT 0);",
         GAMES_TABLE.replace("CREATE TABLE games", "CREATE TABLE IF NOT EXISTS games")
     ))?;
     let columns: HashSet<String> = db
@@ -144,6 +146,7 @@ fn migrate(db: &Connection, file: Option<&Path>) -> Result<()> {
         "INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)",
         params!["app", serde_json::to_string(&Settings::default())?],
     )?;
+    crate::storage::prepare(db)?;
     let version: i64 = db.query_row("PRAGMA user_version", [], |row| row.get(0))?;
     if version > SCHEMA_VERSION {
         // Written by a newer Game Lobby: open it as usual, but don't run cleanups that may
@@ -1679,6 +1682,8 @@ pub fn restore_backup(db: &mut Connection, backup: &Backup) -> Result<usize> {
     if let Some(notes) = &backup.game_notes {
         crate::notes::restore_backup(&tx, notes)?;
     }
+    let ids: Vec<&str> = backup.games.iter().map(|g| g.id.as_str()).collect();
+    crate::storage::restore_added(&tx, &ids, backup.game_added.as_deref())?;
     tx.commit()?;
     Ok(backup.games.len())
 }
@@ -2504,6 +2509,7 @@ mod tests {
             emulators: None,
             game_page_custom: Some(all_page_custom(&conn).unwrap()),
             game_notes: None,
+            game_added: None,
         };
         let text = serde_json::to_string(&backup).unwrap();
         let raw: Value = serde_json::from_str(&text).unwrap();
@@ -2634,6 +2640,7 @@ mod tests {
             emulators: Some(vec![p.clone()]),
             game_page_custom: None,
             game_notes: None,
+            game_added: None,
         })
         .unwrap();
         let parsed = crate::validation::backup(&text).unwrap();

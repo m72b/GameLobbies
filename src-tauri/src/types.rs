@@ -421,6 +421,10 @@ pub struct Backup {
     /// don't have it.
     #[serde(default, rename = "gameNotes", skip_serializing_if = "Option::is_none")]
     pub game_notes: Option<crate::notes::NotesBackup>,
+    /// "Recently added" flags (when each game was first discovered, and whether it was seen).
+    /// Optional: older backups don't have it.
+    #[serde(default, rename = "gameAdded", skip_serializing_if = "Option::is_none")]
+    pub game_added: Option<Vec<crate::storage::GameAddedEntry>>,
 }
 
 /// One stored play session (`tracking_sessions`). `ended_at` is absent while it is in progress.

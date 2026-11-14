@@ -2,7 +2,7 @@
 // Replaces the Electron preload script; the API shape is unchanged.
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
-import type { ArtChangedEvent, IgdbBulkProgress, IgdbMetadataEvent, LobbyAPI, LocalScanProgress, LocalScanSummary, RunningGame, Settings, SettingsSection, SteamGridDbFetchSummary, UpdateProgress } from '../shared/types'
+import type { ArtChangedEvent, StorageProgress, IgdbBulkProgress, IgdbMetadataEvent, LobbyAPI, LocalScanProgress, LocalScanSummary, RunningGame, Settings, SettingsSection, SteamGridDbFetchSummary, UpdateProgress } from '../shared/types'
 
 async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   try {
@@ -164,7 +164,17 @@ const api: LobbyAPI = {
     onProgress: callback => subscribe<UpdateProgress>('updates:progress', callback),
     onReady: callback => subscribe('updates:ready', () => callback())
   },
-  app: { quit: () => call('app_quit') }
+  app: { quit: () => call('app_quit') },
+  storage: {
+    list: () => call('storage_list'),
+    rescan: () => call('storage_rescan'),
+    uninstall: (gameId, routeIndex) => call('storage_uninstall', { gameId, routeIndex }),
+    onProgress: callback => subscribe<StorageProgress>('storage:progress', callback)
+  },
+  recent: {
+    list: () => call('recent_list'),
+    dismiss: gameId => call('recent_dismiss', { gameId: gameId ?? null })
+  }
 }
 
 window.lobby = api

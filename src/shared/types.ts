@@ -486,6 +486,12 @@ export interface ScreenshotsAPI {
   onChanged(callback: (event: { gameId: string }) => void): () => void
 }
 import type { NotesAPI } from './notes-types'
+/** One installed game in the storage view. `bytes` absent = unknown (no install path, or not measured yet). */
+export interface StorageEntry { gameId: string; title: string; store: Store; lastPlayed?: number; bytes?: number; installPath?: string; measuredAt?: number; /** The size is a lower bound. */ partial: boolean; /** `manifest` = Steam's own figure. */ source?: 'manifest' | 'scan'; /** What "Uninstall..." hands off to; absent = no hand-off for this game. */ uninstall?: { routeIndex: number; launcher: string; kind: 'uninstall' | 'library' | 'apps' } }
+export interface StorageReport { entries: StorageEntry[]; totalBytes: number }
+export interface StorageProgress { done: number; total: number; title: string }
+/** A game first discovered recently and not yet dismissed from the "Recently added" shelf. */
+export interface RecentGame { gameId: string; addedAt: number }
 export interface LobbyAPI {
   window: { minimize(): Promise<void>; toggleMaximize(): Promise<void>; close(): Promise<void>; isMaximized(): Promise<boolean> }
   library: { list(): Promise<Game[]>; scan(): Promise<LibraryStats>; launch(id: string, route?: number): Promise<void>; save(game: Partial<Game> & { id: string }): Promise<Game[]>; remove(id: string): Promise<Game[]>; merge(targetId: string, sourceId: string): Promise<Game[]>; resetPlaytime(): Promise<Game[]>; setCover(id: string, dataUrl: string | null): Promise<Game[]>; chooseCover(id: string): Promise<Game[]>; chooseInstallFolder(id: string): Promise<void>; add(title: string, target: string): Promise<Game[]>; stores(): Promise<StoreStatus[]>; onChanged(callback: () => void): () => void
@@ -521,5 +527,9 @@ export interface LobbyAPI {
   notes: NotesAPI
   updates: UpdatesAPI
   app: { quit(): Promise<void> }
+  /** Cached install sizes. `rescan` measures in the background (progress events) and rejects if one is running. `uninstall` only hands off to the game's launcher (never deletes files): the backend builds the link from the stored route. */
+  storage: { list(): Promise<StorageReport>; rescan(): Promise<StorageReport>; uninstall(gameId: string, routeIndex: number): Promise<void>; onProgress(callback: (progress: StorageProgress) => void): () => void }
+  /** The "Recently added" shelf. `dismiss()` without an id clears it. Both return the remaining shelf. */
+  recent: { list(): Promise<RecentGame[]>; dismiss(gameId?: string): Promise<RecentGame[]> }
 }
 declare global { interface Window { lobby: LobbyAPI } }
