@@ -5,6 +5,7 @@ use crate::catalog;
 use crate::commands::pick_file;
 use crate::emulators;
 use crate::local::{self, Resolution};
+use crate::picks::PickKind;
 use crate::review::{self, ReviewItem};
 use crate::roots::{self, LibraryRoot, RootGuard};
 use crate::scan::{self, LocalScope};
@@ -60,24 +61,46 @@ pub async fn roots_list(state: State<'_, AppState>) -> CmdResult<Vec<LibraryRoot
     list_roots(&state)
 }
 
-/// Adds a root (`kind` = `emulators` | `games`) after validating the path; returns the list.
+fn root_pick_kind(kind: &str) -> CmdResult<PickKind> {
+    PickKind::for_root(kind).ok_or_else(|| "Library folder kind is invalid.".into())
+}
+
+/// The folder a `roots_add` may add: the one the user just chose in `roots_browse` for the
+/// same kind. Scans turn the executables and ROMs in a root into launchable games, so the
+/// renderer can't name a folder by itself.
+fn picked_root(picks: &crate::picks::PickedPaths, kind: &str, path: &str) -> CmdResult<String> {
+    picks
+        .find(root_pick_kind(kind)?, path)
+        .ok_or_else(|| "Choose the folder with Browse… (it can't be typed in).".into())
+}
+
+/// Adds a root (`kind` = `emulators` | `games`) chosen with `roots_browse`, after validating
+/// the path; returns the list.
 #[tauri::command]
 pub async fn roots_add(
     state: State<'_, AppState>,
     kind: String,
     path: String,
 ) -> CmdResult<Vec<LibraryRoot>> {
+    let picked = picked_root(&state.picks, &kind, &path)?;
     let guard = RootGuard::from_environment(&state.data_dir);
     // Every filesystem check first, without the database lock.
-    let (display, key) = roots::prepare(&kind, &path, &guard).map_err(err)?;
+    let (display, key) = roots::prepare(&kind, &picked, &guard).map_err(err)?;
     roots::insert(&state.db.lock(), &kind, &display, &key).map_err(err)?;
+    state.picks.forget(root_pick_kind(&kind)?, &picked);
     state.tracker.library_changed();
     list_roots(&state)
 }
 
-/// Native folder picker; the chosen path (not yet added) or `null` when cancelled.
+/// Native folder picker for a root of `kind`; the chosen path (not yet added; `roots_add`
+/// with the same kind accepts it for a while) or `null` when cancelled.
 #[tauri::command]
-pub async fn roots_browse(window: WebviewWindow) -> CmdResult<Option<String>> {
+pub async fn roots_browse(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    kind: String,
+) -> CmdResult<Option<String>> {
+    let pick_kind = root_pick_kind(&kind)?;
     let (tx, rx) = tokio::sync::oneshot::channel();
     window
         .dialog()
@@ -86,12 +109,16 @@ pub async fn roots_browse(window: WebviewWindow) -> CmdResult<Option<String>> {
         .pick_folder(move |path| {
             let _ = tx.send(path);
         });
-    Ok(rx
+    let chosen = rx
         .await
         .ok()
         .flatten()
         .and_then(|p| p.into_path().ok())
-        .map(|p| p.to_string_lossy().into_owned()))
+        .map(|p| p.to_string_lossy().into_owned());
+    if let Some(path) = &chosen {
+        state.picks.remember(pick_kind, path);
+    }
+    Ok(chosen)
 }
 
 #[tauri::command]
@@ -162,17 +189,24 @@ pub async fn emulators_list(state: State<'_, AppState>) -> CmdResult<Vec<Emulato
 
 /// Creates or updates a profile. Fields left out keep their stored value (`systems`,
 /// `enabled`); `source`, `detectedAs`, `available` and `needsConfiguration` are managed by
-/// Game Lobby and ignored here.
+/// Game Lobby and ignored here. The executable must be the stored one or one just chosen
+/// with `emulators_browse_executable`, and new or changed arguments must pass
+/// `launch::check_template` (see `emulators::accept_renderer_profile`).
 #[tauri::command]
 pub async fn emulators_save(
     state: State<'_, AppState>,
     profile: Value,
 ) -> CmdResult<Vec<EmulatorProfile>> {
-    let mut p = validation::emulator(&profile).map_err(err)?;
+    let p = validation::emulator(&profile).map_err(err)?;
     launch::tokenize_template(&p.args).map_err(err)?;
     let has = |key: &str| profile.get(key).is_some_and(|v| !v.is_null());
     let conn = state.db.lock();
-    match db::emulator_profile(&conn, &p.id).map_err(err)? {
+    let stored = db::emulator_profile(&conn, &p.id).map_err(err)?;
+    let (mut p, used_pick) = emulators::accept_renderer_profile(stored.as_ref(), p, |path| {
+        state.picks.find(PickKind::EmulatorExecutable, path)
+    })
+    .map_err(err)?;
+    match stored {
         Some(stored) => {
             if !has("systems") {
                 p.systems = stored.systems;
@@ -194,6 +228,11 @@ pub async fn emulators_save(
     }
     db::save_emulator(&conn, &p).map_err(err)?;
     drop(conn);
+    if used_pick {
+        state
+            .picks
+            .forget(PickKind::EmulatorExecutable, &p.executable);
+    }
     state.tracker.library_changed();
     list_emulators(&state)
 }
@@ -277,12 +316,20 @@ pub async fn emulators_unignore(
     ignored(&state, db::IGNORE_EMULATOR)
 }
 
-/// Native file picker for an emulator `.exe`; the chosen path or `null`.
+/// Native file picker for an emulator `.exe`; the chosen path or `null`. `emulators_save`
+/// accepts the chosen path for a while (see `picks`).
 #[tauri::command]
-pub async fn emulators_browse_executable(window: WebviewWindow) -> CmdResult<Option<String>> {
-    Ok(pick_file(&window, "Emulator executable", &["exe"])
+pub async fn emulators_browse_executable(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+) -> CmdResult<Option<String>> {
+    let chosen = pick_file(&window, "Emulator executable", &["exe"])
         .await
-        .map(|p| p.to_string_lossy().into_owned()))
+        .map(|p| p.to_string_lossy().into_owned());
+    if let Some(path) = &chosen {
+        state.picks.remember(PickKind::EmulatorExecutable, path);
+    }
+    Ok(chosen)
 }
 
 // ---------------------------------------------------------------------------
@@ -297,10 +344,32 @@ pub async fn review_list(
     review::list(&state.db.lock(), include_resolved.unwrap_or(false)).map_err(err)
 }
 
-/// Resolves an item (see `local::Resolution`); returns the open items.
+/// A native warning dialog with `ok` and Cancel; `true` only when the user chose `ok`.
+async fn confirm_natively(window: &WebviewWindow, title: &str, message: &str, ok: &str) -> bool {
+    use tauri_plugin_dialog::{MessageDialogButtons, MessageDialogKind};
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    window
+        .dialog()
+        .message(message)
+        .title(title)
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            ok.to_string(),
+            "Cancel".to_string(),
+        ))
+        .parent(window)
+        .show(move |confirmed| {
+            let _ = tx.send(confirmed);
+        });
+    rx.await.unwrap_or(false)
+}
+
+/// Resolves an item (see `local::Resolution`); returns the open items. Confirming a shortcut
+/// first shows its program and arguments in a native dialog.
 #[tauri::command]
 pub async fn review_resolve(
     app: AppHandle,
+    window: WebviewWindow,
     state: State<'_, AppState>,
     id: String,
     resolution: Value,
@@ -311,6 +380,16 @@ pub async fn review_resolve(
     }
     let resolution: Resolution = serde_json::from_value(resolution)
         .map_err(|e| format!("Review resolution is invalid: {e}"))?;
+    if matches!(resolution, Resolution::ConfirmShortcut) {
+        // The renderer only asks; the user confirms what will run in a native dialog.
+        let item = review::get(&state.db.lock(), &id)
+            .map_err(err)?
+            .ok_or("That review item no longer exists.")?;
+        let prompt = local::shortcut_confirmation_prompt(&item).map_err(err)?;
+        if !confirm_natively(&window, "Confirm shortcut", &prompt, "Add game").await {
+            return Err("The shortcut was not confirmed.".into());
+        }
+    }
     // Off the async threads: resolving may read shortcuts through COM. The database is only
     // locked while the change is applied (`local::resolve`).
     let worker = app.clone();
@@ -434,4 +513,25 @@ pub async fn library_add_local_game(
     };
     notify_library(&app, &state);
     Ok(Some(AddedLocalGame { game_id, games }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::picks::PickedPaths;
+
+    #[test]
+    fn roots_are_added_only_from_a_recent_pick_of_the_same_kind() {
+        let picks = PickedPaths::default();
+        assert!(picked_root(&picks, "games", r"C:\Program Files\Vendor").is_err());
+        picks.remember(PickKind::GamesFolder, r"D:\Roms");
+        assert_eq!(picked_root(&picks, "games", "d:/roms").unwrap(), r"D:\Roms");
+        assert!(picked_root(&picks, "games", r"D:\Roms\..\Other").is_err());
+        // A games-folder pick can't become an emulator folder; unknown kinds are refused.
+        assert!(picked_root(&picks, "emulators", r"D:\Roms").is_err());
+        assert!(picked_root(&picks, "other", r"D:\Roms").is_err());
+        // An emulator pick is not a folder pick.
+        picks.remember(PickKind::EmulatorExecutable, r"D:\Tools");
+        assert!(picked_root(&picks, "emulators", r"D:\Tools").is_err());
+    }
 }

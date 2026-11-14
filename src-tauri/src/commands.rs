@@ -129,6 +129,14 @@ pub async fn library_save(
     let mut patch = validation::game_patch(&game).map_err(err)?;
     let games = {
         let conn = state.db.lock();
+        // Checked under the same lock as the save, so the stored routes can't change in between.
+        if let Some(routes) = &patch.routes {
+            let stored = db::get_game(&conn, &patch.id)
+                .map_err(err)?
+                .map(|g| g.routes)
+                .unwrap_or_default();
+            validation::check_renderer_routes(&stored, routes).map_err(err)?;
+        }
         // A remote cover that is already downloaded is stored as its local file.
         let covers = state.covers_dir();
         for value in [&mut patch.cover, &mut patch.default_cover] {
@@ -201,21 +209,39 @@ pub async fn library_reset_playtime(
     Ok(games)
 }
 
+/// Adds a game that starts through a store link. Programs, shortcuts and ROM files are added
+/// with `library_add_local_game` (native file picker) so the renderer never names an
+/// executable.
 #[tauri::command]
 pub async fn library_add(
     state: State<'_, AppState>,
     title: String,
     target: String,
 ) -> CmdResult<Vec<Game>> {
+    let game = custom_link_game(&title, &target).map_err(err)?;
+    let games = db::save_game(&state.db.lock(), &GamePatch::from(&game)).map_err(err)?;
+    state.tracker.library_changed();
+    Ok(games)
+}
+
+fn custom_link_game(title: &str, target: &str) -> anyhow::Result<Game> {
     let (title, target) = (title.trim().to_string(), target.trim().to_string());
     if title.is_empty()
         || title.chars().count() > 300
         || target.is_empty()
         || target.chars().count() > 8_192
     {
-        return Err("Enter a title and a launch target.".into());
+        anyhow::bail!("Enter a title and a store link.");
     }
-    let game = Game {
+    let target = crate::launch::validate_launch_uri(&target)
+        .ok()
+        .filter(|uri| validation::renderer_link_ok(uri))
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Enter a store link like steam://run/123. To add a program or ROM file on this PC, use \"Add local game\"."
+            )
+        })?;
+    Ok(Game {
         id: format!("custom:{}", uuid::Uuid::new_v4()),
         title,
         store: "Custom".into(),
@@ -227,10 +253,7 @@ pub async fn library_add(
             ..Default::default()
         }],
         ..Default::default()
-    };
-    let games = db::save_game(&state.db.lock(), &GamePatch::from(&game)).map_err(err)?;
-    state.tracker.library_changed();
-    Ok(games)
+    })
 }
 
 static DATA_URL: LazyLock<Regex> = LazyLock::new(|| {
@@ -506,6 +529,12 @@ pub async fn backup_import(
     let Some(path) = pick_file(&window, "JSON", &["json"]).await else {
         return Ok(0);
     };
+    // Trust decision: a backup may restore program and path launch routes (and emulator
+    // profiles) that the renderer could not create through `library_save`. That is accepted
+    // because the file is chosen by the user in a native dialog, so its contents never come
+    // from the renderer. A backup is treated like the user's own library: store links are
+    // checked again at launch, and program routes must still exist, but a store program route
+    // with arguments runs as written (see `launch_game`). Only import backups you trust.
     let raw = read_limited_json(&path, 128 * 1024 * 1024, "Backup file").map_err(err)?;
     let backup = validation::backup(&raw).map_err(err)?;
     let count = db::restore_backup(&mut state.db.lock(), &backup).map_err(err)?;
@@ -872,4 +901,37 @@ pub async fn igdb_cancel_fetch_all(state: State<'_, AppState>) -> CmdResult<()> 
 #[tauri::command]
 pub async fn igdb_progress(state: State<'_, AppState>) -> CmdResult<igdb::BulkProgress> {
     Ok(igdb::progress(&state))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn add_game_accepts_only_store_links() {
+        let game = custom_link_game("  Dota 2 ", " steam://run/570 ").unwrap();
+        assert_eq!(game.title, "Dota 2");
+        assert_eq!(game.routes[0].launch_target, "steam://run/570");
+        assert!(game.routes[0].launch_args.is_none());
+        for bad in [
+            r"C:\Windows\System32\calc.exe",
+            r"C:\Games\game.lnk",
+            r"\\server\share\game.exe",
+            "file:///C:/Windows/System32/calc.exe",
+            "https://evil.example/x.exe",
+            r"shell:AppsFolder\Evil!App",
+            "steam://run/570//-console +exec evil",
+            "steam://run/570/-novid",
+            "steam://uninstall/570",
+            // Opaque links: Windows reads them as relative file paths.
+            r"xbox:x\..\..\Windows\System32\calc.exe",
+            r"xbox:\..\x.exe",
+            "uplay:launch/1",
+            "steam:run/1",
+            "",
+        ] {
+            assert!(custom_link_game("Game", bad).is_err(), "{bad}");
+        }
+        assert!(custom_link_game(" ", "steam://run/570").is_err());
+    }
 }

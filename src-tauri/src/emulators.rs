@@ -51,15 +51,20 @@ pub fn refresh_available(profiles: Vec<EmulatorProfile>) -> Vec<EmulatorProfile>
     profiles.into_iter().map(with_status).collect()
 }
 
-/// An absolute drive-letter path ending in `.exe` (syntax only).
-pub fn executable_path_ok(executable: &str) -> bool {
-    let bytes = executable.as_bytes();
+/// An absolute drive-letter path like `C:\Games\x` (syntax only; no UNC, device or relative
+/// paths).
+pub fn drive_path_ok(path: &str) -> bool {
+    let bytes = path.as_bytes();
     bytes.len() > 3
         && bytes[0].is_ascii_alphabetic()
         && bytes[1] == b':'
         && (bytes[2] == b'\\' || bytes[2] == b'/')
-        && executable.to_lowercase().ends_with(".exe")
-        && normalize_path(executable).is_some()
+        && normalize_path(path).is_some()
+}
+
+/// An absolute drive-letter path ending in `.exe` (syntax only).
+pub fn executable_path_ok(executable: &str) -> bool {
+    drive_path_ok(executable) && executable.to_lowercase().ends_with(".exe")
 }
 
 /// An absolute, existing `.exe` file.
@@ -319,6 +324,43 @@ pub fn profile_name(path: &Path, known: &KnownEmulator) -> String {
         return known.name.to_string();
     }
     folder
+}
+
+/// Trust boundary for profiles sent by the renderer (`emulators_save`): which program a ROM
+/// launch runs, and with which arguments.
+///
+/// - Executable: a profile's executable is set only by an emulator scan, a backup restore
+///   (both Rust-side) or the native file picker (`emulators_browse_executable`, remembered in
+///   [`crate::picks`]). A save must send the stored executable unchanged (compared as a path:
+///   case and `/` vs `\` don't matter) or one the user just picked; `picked` returns that
+///   pick. The stored or picked text is kept, never the renderer's spelling of it.
+/// - Arguments: kept as stored when unchanged with the same executable (profiles saved
+///   before these checks keep working); a new or changed template, or any template when the
+///   executable changes, must pass [`crate::launch::check_template`] for the new executable.
+///
+/// Returns the profile to store and whether the picked executable was used.
+pub fn accept_renderer_profile(
+    stored: Option<&EmulatorProfile>,
+    mut incoming: EmulatorProfile,
+    picked: impl Fn(&str) -> Option<String>,
+) -> Result<(EmulatorProfile, bool)> {
+    let same_path =
+        |a: &str, b: &str| normalize_path(a).is_some_and(|k| Some(k) == normalize_path(b));
+    let mut used_pick = false;
+    match stored.filter(|s| same_path(&s.executable, &incoming.executable)) {
+        Some(stored) => incoming.executable = stored.executable.clone(),
+        None => {
+            let Some(path) = picked(&incoming.executable) else {
+                bail!("Choose the emulator's executable with Browse… (it can't be typed in).");
+            };
+            incoming.executable = path;
+            used_pick = true;
+        }
+    }
+    if used_pick || stored.is_none_or(|s| s.args != incoming.args) {
+        crate::launch::check_template(&incoming.args, &incoming.executable)?;
+    }
+    Ok((incoming, used_pick))
 }
 
 /// A new discovered profile with the catalog defaults.
@@ -848,6 +890,96 @@ mod tests {
         .unwrap();
         assert!(!all.truncated);
         assert_eq!(all.found.len(), 41);
+    }
+
+    #[test]
+    fn renderer_saves_keep_the_executable_and_check_new_arguments() {
+        let exe = r"D:\Emulators\mGBA\mGBA.exe";
+        let stored = profile("mgba", "discovered", Some("mgba"), exe);
+        let none = |_: &str| None;
+        let edit = |f: &dyn Fn(&mut EmulatorProfile)| {
+            let mut p = stored.clone();
+            f(&mut p);
+            p
+        };
+
+        // Name, systems, extensions, enabled and good arguments can change; the stored
+        // executable text is kept even when the renderer spells it differently.
+        let (saved, used) = accept_renderer_profile(
+            Some(&stored),
+            edit(&|p| {
+                p.name = "Mine".into();
+                p.executable = "d:/emulators/mgba/MGBA.EXE".into();
+                p.systems = vec!["gba".into()];
+                p.extensions = vec![".gba".into()];
+                p.enabled = false;
+                p.args = "-f {rom}".into();
+            }),
+            none,
+        )
+        .unwrap();
+        assert!(!used);
+        assert_eq!(saved.executable, exe);
+        assert_eq!(
+            (saved.name.as_str(), saved.args.as_str()),
+            ("Mine", "-f {rom}")
+        );
+
+        // Swapping the executable without a pick is refused, for edits and new profiles.
+        let calc = r"C:\Windows\System32\calc.exe";
+        let swapped = edit(&|p| p.executable = calc.into());
+        assert!(accept_renderer_profile(Some(&stored), swapped.clone(), none).is_err());
+        assert!(accept_renderer_profile(None, swapped.clone(), none).is_err());
+        let climb = edit(&|p| p.executable = r"D:\Emulators\mGBA\..\..\Windows\calc.exe".into());
+        assert!(accept_renderer_profile(Some(&stored), climb, none).is_err());
+
+        // A path the user just picked is accepted (stored as picked).
+        let picked = r"D:\Emulators\mGBA 2\mGBA.exe";
+        let pick =
+            |raw: &str| (normalize_path(raw) == normalize_path(picked)).then(|| picked.to_string());
+        let moved = edit(&|p| p.executable = r"d:\emulators\MGBA 2\mgba.exe".into());
+        let (saved, used) = accept_renderer_profile(Some(&stored), moved, pick).unwrap();
+        assert!(used);
+        assert_eq!(saved.executable, picked);
+        let new = edit(&|p| {
+            p.id = "new".into();
+            p.executable = picked.into();
+        });
+        assert!(accept_renderer_profile(None, new, pick).is_ok());
+        assert!(accept_renderer_profile(None, swapped, pick).is_err());
+
+        // Changed or new arguments must pass `check_template`.
+        let evil = edit(&|p| p.args = r"-L C:\Users\Me\Downloads\evil.dll {rom}".into());
+        assert!(accept_renderer_profile(Some(&stored), evil.clone(), none).is_err());
+        let mut new_evil = evil.clone();
+        new_evil.executable = picked.into();
+        assert!(accept_renderer_profile(None, new_evil, pick).is_err());
+        let shell = edit(&|p| p.args = "{rom} & calc".into());
+        assert!(accept_renderer_profile(Some(&stored), shell, none).is_err());
+
+        // Arguments stored before these checks still save unchanged (e.g. toggling enabled).
+        let legacy = EmulatorProfile {
+            args: r"-L C:\Shared\cores\x.dll {rom}".into(),
+            ..stored.clone()
+        };
+        let toggled = EmulatorProfile {
+            enabled: false,
+            ..legacy.clone()
+        };
+        let (saved, _) = accept_renderer_profile(Some(&legacy), toggled, none).unwrap();
+        assert_eq!(saved.args, legacy.args);
+        assert!(!saved.enabled);
+        // ...but a new executable re-checks them, even unchanged.
+        let repointed = EmulatorProfile {
+            executable: picked.into(),
+            ..legacy.clone()
+        };
+        assert!(accept_renderer_profile(Some(&legacy), repointed, pick).is_err());
+        let fine = EmulatorProfile {
+            executable: picked.into(),
+            ..stored.clone()
+        };
+        assert!(accept_renderer_profile(Some(&stored), fine, pick).is_ok());
     }
 
     #[test]

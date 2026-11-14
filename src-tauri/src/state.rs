@@ -20,6 +20,8 @@ pub struct AppState {
     pub covers: crate::covercache::CacheState,
     /// IGDB access token (memory only), rate limiter and fetch bookkeeping.
     pub igdb: crate::igdb::IgdbState,
+    /// Recent native-picker results that a later save may use (see `picks`).
+    pub picks: crate::picks::PickedPaths,
 }
 
 impl AppState {
