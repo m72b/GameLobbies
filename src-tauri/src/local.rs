@@ -822,6 +822,20 @@ pub fn resolve(db: &Db, id: &str, resolution: &Resolution) -> Result<Resolved> {
     apply(&mut conn, &item, resolution, checked)
 }
 
+/// Ignore and Dismiss belong to the scan kinds. Library health items (`health::KINDS`) have
+/// their own `health_*` commands; ignoring, say, a health duplicate here would put a present
+/// game's executable on the scan ignore list.
+fn only_scan_kinds(item: &review::ReviewItem, what: &str) -> Result<()> {
+    if matches!(
+        item.kind.as_str(),
+        DUPLICATE | AMBIGUOUS_EXE | UNSUPPORTED | UNREADABLE | SHORTCUT
+    ) {
+        Ok(())
+    } else {
+        bail!("This item can't be {what} here. Use the buttons shown on the item.")
+    }
+}
+
 fn apply(
     conn: &mut Connection,
     item: &review::ReviewItem,
@@ -858,6 +872,7 @@ fn apply(
             "linked"
         }
         Resolution::Ignore { path } => {
+            only_scan_kinds(item, "ignored")?;
             let allowed: HashSet<String> = detail_paths(item)
                 .iter()
                 .filter_map(|p| path_key(p))
@@ -938,7 +953,10 @@ fn apply(
             db::upsert_imported_games(conn, &[game])?;
             "shortcut-confirmed"
         }
-        Resolution::Dismiss => "dismissed",
+        Resolution::Dismiss => {
+            only_scan_kinds(item, "dismissed")?;
+            "dismissed"
+        }
     };
     review::resolve(conn, id, label)?;
     Ok(out)
@@ -1989,5 +2007,27 @@ mod tests {
         remove_root(&mut f.db.lock(), &games.id).unwrap();
         assert!(installed_titles(&f).is_empty());
         assert_eq!(db::emulator_profiles(&f.db.lock()).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn ignore_and_dismiss_are_refused_on_health_items() {
+        let f = Fixture::new("local-health-kinds");
+        let exe = f.dir.file("Games/Hades/hades.exe");
+        let details = serde_json::json!({ "path": exe.to_string_lossy() });
+        for kind in crate::health::KINDS {
+            review::upsert(&f.db.lock(), kind, &format!("test:{kind}"), None, &details).unwrap();
+        }
+        let items = review::list(&f.db.lock(), false).unwrap();
+        assert_eq!(items.len(), crate::health::KINDS.len());
+        let path = exe.to_string_lossy().into_owned();
+        for item in &items {
+            assert!(resolve(&f.db, &item.id, &Resolution::Dismiss).is_err());
+            assert!(resolve(&f.db, &item.id, &Resolution::Ignore { path: path.clone() }).is_err());
+        }
+        // Nothing was ignored and every item is still open.
+        assert_eq!(review::list(&f.db.lock(), false).unwrap().len(), items.len());
+        assert!(db::ignores(&f.db.lock(), db::IGNORE_PATH)
+            .unwrap()
+            .is_empty());
     }
 }
