@@ -193,7 +193,7 @@ pub fn image_file_name(game_id: &str, slot: Slot, ext: &str) -> String {
 }
 
 /// Copies a user-chosen image into `covers_dir` under a new name and returns its
-/// `lobby-cover://` value. Accepts PNG, JPEG, WebP and AVIF files (by extension and content)
+/// `lobby-cover://` value. Accepts PNG, JPEG, WebP, GIF and AVIF files (by extension and content)
 /// up to [`MAX_IMAGE_BYTES`].
 pub fn import_image_file(
     covers_dir: &Path,
@@ -206,7 +206,7 @@ pub fn import_image_file(
         .and_then(|e| e.to_str())
         .is_some_and(|e| PAGE_IMAGE_EXTENSIONS.contains(&e.to_ascii_lowercase().as_str()));
     if !ext_ok {
-        bail!("Choose a PNG, JPEG, WebP or AVIF image.");
+        bail!("Choose a PNG, JPEG, WebP, GIF or AVIF image.");
     }
     let too_large = || anyhow!("Choose an image smaller than 20 MB.");
     let unreadable = || anyhow!("Could not read that image.");
@@ -224,7 +224,8 @@ pub fn import_image_file(
     if bytes.len() as u64 > MAX_IMAGE_BYTES {
         return Err(too_large());
     }
-    let ext = sniff_image(&bytes).ok_or_else(|| anyhow!("That file is not a supported image."))?;
+    let ext = crate::covercache::sniff(&bytes)
+        .ok_or_else(|| anyhow!("That file is not a supported image."))?;
     std::fs::create_dir_all(covers_dir)?;
     let name = image_file_name(game_id, slot, ext);
     let path = covers_dir.join(&name);
@@ -588,6 +589,13 @@ mod tests {
         let value = import_image_file(&covers_dir, "g", Slot::Hero, &jpeg_named_png).unwrap();
         assert!(value.starts_with("lobby-cover://hero-g-") && value.ends_with(".jpg"));
 
+        // GIFs are kept as animated hero art, named by content.
+        let gif_src = src.0.join("loop.GIF");
+        std::fs::write(&gif_src, b"GIF89a     ;").unwrap();
+        let value = import_image_file(&covers_dir, "g", Slot::Hero, &gif_src).unwrap();
+        assert!(value.ends_with(".gif"), "{value}");
+        assert_eq!(resolve_image_value(&value, &covers_dir).unwrap(), value);
+
         let long_id = "x".repeat(500);
         let value = import_image_file(&covers_dir, &long_id, Slot::Hero, &png).unwrap();
         assert!(validation::lobby_cover_name(&value).is_some());
@@ -612,7 +620,7 @@ mod tests {
         let dir_named_png = src.0.join("dir.png");
         std::fs::create_dir(&dir_named_png).unwrap();
         assert!(import_image_file(&covers_dir, "g", Slot::Hero, &dir_named_png).is_err());
-        assert_eq!(std::fs::read_dir(&covers_dir).unwrap().count(), 3);
+        assert_eq!(std::fs::read_dir(&covers_dir).unwrap().count(), 4);
     }
 
     #[test]
@@ -623,6 +631,7 @@ mod tests {
         assert_eq!(sniff_image(b"\0\0\0\x1cftypavif\0\0\0\0"), Some("avif"));
         assert_eq!(sniff_image(b"\0\0\0\x1cftypmp42\0\0\0\0"), None);
         assert_eq!(sniff_image(b"GIF89a"), None);
+        assert_eq!(crate::covercache::sniff(b"GIF89a  "), Some("gif"));
         assert_eq!(sniff_image(b""), None);
     }
 }

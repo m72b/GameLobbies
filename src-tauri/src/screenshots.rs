@@ -737,9 +737,6 @@ pub async fn screenshots_set_as_hero(
         .map_err(err)?
         .ok_or("That screenshot no longer exists.")?;
     let (dir, name) = valid_relative(&file).ok_or("That screenshot is unavailable.")?;
-    if name.ends_with(".gif") {
-        return Err("GIF screenshots can't be used as the page background.".into());
-    }
     let source = state.screenshots_dir().join(dir).join(name);
     let covers = state.covers_dir();
     let value = crate::art::import_image_file(&covers, &game_id, crate::art::Slot::Hero, &source)
