@@ -77,7 +77,8 @@ pub struct Walked {
     pub complete: bool,
 }
 
-fn is_reparse(meta: &std::fs::Metadata) -> bool {
+/// Symlinks, junctions and every other reparse point (shared with the health search).
+pub(crate) fn is_reparse(meta: &std::fs::Metadata) -> bool {
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt;

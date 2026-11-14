@@ -211,12 +211,14 @@ fn search_roots(
                 if visited > SEARCH_MAX_ENTRIES || started.elapsed() > budget {
                     return found;
                 }
-                let Ok(kind) = entry.file_type() else {
+                let Ok(meta) = entry.metadata() else {
                     continue;
                 };
-                if kind.is_symlink() {
+                // Links, junctions and other reparse points are never followed or reported.
+                if crate::storage::is_reparse(&meta) {
                     continue;
                 }
+                let kind = meta.file_type();
                 let name = entry.file_name().to_string_lossy().to_lowercase();
                 if let Some(&want_folder) = wanted.get(&name) {
                     if want_folder == kind.is_dir() {
