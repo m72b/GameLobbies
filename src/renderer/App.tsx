@@ -16,6 +16,7 @@ import { GamePage, type GamePageActions } from './game-page'
 import { SessionHistory } from './session-history'
 import { elapsedSeconds, formatClock, useNow } from './format'
 import { LauncherIcon, useLaunchers } from './launcher-icon'
+import { LauncherWaitDialog, type WaitingLaunch } from './launcher-assign'
 import { displayStore, filterLauncherId, gameLauncher, gameMatchesFilter, identifierProblem, isLabelOnly, kindLabel, launcherFilter, launcherKinds } from '../shared/launchers'
 
 type View = 'All Games' | 'Favorites' | 'Recently Played' | 'Hidden'
@@ -68,6 +69,7 @@ export default function App() {
   const [addKind, setAddKind] = useState<LauncherTargetKind | ''>('')
   const [addBusy, setAddBusy] = useState(false)
   const launchers = useLaunchers()
+  const [waiting, setWaiting] = useState<WaitingLaunch | null>(null)
   const [editingGame, setEditingGame] = useState<Game | null>(null)
   const [editTitle, setEditTitle] = useState('')
   const [editGenre, setEditGenre] = useState('')
@@ -97,7 +99,12 @@ export default function App() {
   }
   const launch = async (game: Game, route = 0) => {
     try {
-      await window.lobby.library.launch(game.id, route)
+      const outcome = await window.lobby.library.launch(game.id, route)
+      if (outcome?.status === 'waiting') {
+        // The launcher was started on its own; the game waits for Continue.
+        setWaiting({ game, pendingId: outcome.pendingId, launcherName: outcome.launcherName })
+        return
+      }
       await refresh()
       notice('Launching ' + game.title)
     } catch (error) {
@@ -432,7 +439,9 @@ export default function App() {
     toggleFavorite: game => void window.lobby.library.save({ ...withoutRoutes(game), favorite: !game.favorite }).then(setGames).catch(error => notice(error instanceof Error ? error.message : 'Could not update favorite')),
     openFolder: game => void window.lobby.library.chooseInstallFolder(game.id).catch(error => notice(error instanceof Error ? error.message : 'Could not open install folder')),
     remove: game => void menuAction('Remove', game),
-    setEmulator: async (game, routeIndex, emulatorId) => { setGames(await window.lobby.library.setEmulator(game.id, routeIndex, emulatorId)) }
+    setEmulator: async (game, routeIndex, emulatorId) => { setGames(await window.lobby.library.setEmulator(game.id, routeIndex, emulatorId)) },
+    assignLauncher: async (game, launcherId, routeIndex, kind) => { setGames(await window.lobby.launchers.assign(game.id, launcherId, routeIndex, kind)) },
+    unassignLauncher: async (game, launcherId) => { setGames(await window.lobby.launchers.unassign(game.id, launcherId)) }
   }
 
   return <div className="app-shell">
@@ -589,6 +598,7 @@ export default function App() {
       <div className="modal-actions"><button className="secondary-button" onClick={closeFindCover}>Cancel</button></div>
     </div></div>}
     {editMode && <div className="edit-banner">Edit mode is on · select a title to edit its metadata <button onClick={() => setEditMode(false)}>Done</button></div>}
+    {waiting && <LauncherWaitDialog key={waiting.pendingId} wait={waiting} onClose={() => setWaiting(null)} onStarted={() => { const game = waiting.game; setWaiting(null); notice('Launching ' + game.title); void refresh() }} />}
     {toast && <div className="toast">{toast}</div>}
     {updateNotice && <div className="update-notice" role="status">
       <CloudDownload size={16} />

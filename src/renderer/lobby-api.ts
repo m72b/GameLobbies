@@ -37,6 +37,9 @@ const api: LobbyAPI = {
     list: () => call('library_list'),
     scan: () => call('library_scan'),
     launch: (id, route) => call('library_launch', { id, route }),
+    continueLaunch: (id, pendingId) => call('library_launch_continue', { id, pendingId }),
+    cancelLaunch: pendingId => call('library_launch_cancel', { pendingId }),
+    pendingLaunch: pendingId => call('library_launch_pending', { pendingId }),
     save: game => call('library_save', { game }),
     remove: id => call('library_remove', { id }),
     merge: (targetId, sourceId) => call('library_merge', { targetId, sourceId }),
@@ -81,6 +84,9 @@ const api: LobbyAPI = {
     addGame: (launcherId, title, identifier, kind) => call('launchers_add_game', { launcherId, title, identifier, kind: kind ?? null }),
     browseGamesFolder: launcherId => call('launchers_browse_games_folder', { launcherId }),
     addFolder: (launcherId, path) => call('launchers_add_folder', { launcherId, path }),
+    assignments: gameId => call('launchers_assignments', { gameId }),
+    assign: (gameId, launcherId, routeIndex, kind) => call('launchers_assign', { gameId, launcherId, routeIndex: routeIndex ?? null, kind: kind ?? null }),
+    unassign: (gameId, launcherId) => call('launchers_unassign', { gameId, launcherId }),
     onChanged: callback => subscribe('launchers:changed', () => callback())
   },
   roots: {

@@ -365,3 +365,10 @@
 .launcher-preview .detail-label{margin:0}
 .launcher-preview code{font-family:ui-monospace,Consolas,monospace;color:var(--text);word-break:break-all}.launcher-folders{margin:4px 0 10px 34px;padding:10px 12px;border:1px solid #ffffff0c;border-radius:9px;background:#ffffff04}
 .launcher-folders .card-heading{margin-bottom:4px}.launcher-folders .card-heading b{font-size:12px}
+/* Game page: launchers a game is assigned to, and the "Waiting for <launcher>" prompt. */
+.gp-play-via{display:inline-flex;align-items:center;gap:5px;margin-left:2px;padding:3px 7px;border-radius:6px;background:#0000001f;font-size:11px;font-weight:650;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.gp-launchers .gp-route-row .route-name{flex:1}
+.gp-launcher-remove{border:0;background:transparent;color:var(--muted);width:24px;height:24px;border-radius:6px;display:grid;place-items:center}.gp-launcher-remove:hover:not(:disabled){color:#e48787;background:#ffffff0c}
+.gp-launcher-add{display:grid;gap:7px;margin-top:8px;font-size:11px}.gp-launcher-add select{width:100%;padding:7px 8px;border:1px solid #ffffff17;border-radius:7px;background:#111316;color:var(--text)}.gp-launcher-add .inline-warning{margin:0;line-height:1.5}.gp-launcher-add .secondary-button{justify-self:start;height:30px;font-size:11px}
+.launcher-wait p{font-size:12px;line-height:1.55;color:var(--muted);margin:0 0 12px}.launcher-wait p b{color:var(--text)}
+.launcher-wait-status{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted)}.launcher-wait-status .gp-live-dot{opacity:.35}.launcher-wait-status.ready{color:var(--text)}.launcher-wait-status.ready .gp-live-dot{opacity:1}

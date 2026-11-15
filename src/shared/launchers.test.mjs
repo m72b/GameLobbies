@@ -1,7 +1,7 @@
 // Run with `npm run test:web` (Node strips the TypeScript types of launchers.ts).
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { LAUNCHER_ICONS, canScanFolders, displayStore, filterLauncherId, formatArgv, gameLauncher, gameMatchesFilter, identifierProblem, isHexColor, isLabelOnly, launcherFilter, launcherIdOf, launcherKinds, launcherOfRoute, launcherRoots, libraryRoots, previewArgv, routeLauncherId, scanSummaryLines, toggleKind, tokenizeTemplate } from './launchers.ts'
+import { LAUNCHER_ICONS, assignTargetLabel, assignedLauncherIds, canScanFolders, isAssignedRoute, playLauncher, displayStore, filterLauncherId, formatArgv, gameLauncher, gameMatchesFilter, identifierProblem, isHexColor, isLabelOnly, launcherFilter, launcherIdOf, launcherKinds, launcherOfRoute, launcherRoots, libraryRoots, previewArgv, routeLauncherId, scanSummaryLines, toggleKind, tokenizeTemplate } from './launchers.ts'
 
 const heroic = { id: 'abc', name: 'Heroic', iconKind: 'builtin', iconValue: 'rocket', color: '#4f8cff' }
 const route = (sourceId, extra = {}) => ({ sourceId, store: 'Custom', launchTarget: 'x', ...extra })
@@ -125,4 +125,37 @@ test('built-in icons are a fixed list of 24 unique names', () => {
   assert.equal(LAUNCHER_ICONS.length, 24)
   assert.equal(new Set(LAUNCHER_ICONS).size, 24)
   for (const name of LAUNCHER_ICONS) assert.match(name, /^[a-z0-9-]+$/)
+})
+
+test('assignments from the game page are told apart from a launcher\'s own games', () => {
+  const app = { ...heroic, id: 'app', name: 'App', executable: '' }
+  const withProgram = { ...heroic, executable: 'D:\\Heroic\\Heroic.exe' }
+  const game = {
+    store: 'Steam',
+    routes: [
+      route('launcher:abc', { assigned: true, launchTarget: '400' }),
+      route('steam', { store: 'Steam', appId: '400', launcherId: 'app', assigned: true }),
+      route('launcher:own')
+    ]
+  }
+  assert.equal(isAssignedRoute(game.routes[0]), true)
+  assert.equal(isAssignedRoute(game.routes[2]), false)
+  assert.deepEqual(assignedLauncherIds(game), ['abc', 'app'])
+  assert.deepEqual(assignedLauncherIds({ routes: [route('launcher:abc'), route('local', { launcherId: 'app' })] }), [], 'Add game and games folders are not assignments')
+  // The game shows under the launchers it was assigned to.
+  assert.equal(gameMatchesFilter(game, launcherFilter('abc')), true)
+  assert.equal(gameMatchesFilter(game, launcherFilter('app')), true)
+  // Play names the launcher it runs through; a label-only launcher runs nothing.
+  assert.equal(playLauncher(game.routes[0], [withProgram, app])?.name, 'Heroic')
+  assert.equal(playLauncher(game.routes[1], [withProgram, app]), undefined)
+  assert.equal(playLauncher(route('launcher:app'), [app]), undefined)
+  assert.equal(playLauncher(undefined, [withProgram]), undefined)
+})
+
+test('assignment targets read as their kind and value', () => {
+  const routes = [{ store: 'Steam' }, { store: 'Custom' }]
+  assert.equal(assignTargetLabel({ routeIndex: 0, kind: 'identifier', target: '400' }, routes), 'Store id · 400 (Steam)')
+  assert.equal(assignTargetLabel({ routeIndex: 1, kind: 'file', target: 'D:\\Games\\HK\\hk.exe' }, routes), 'File · hk.exe')
+  assert.equal(assignTargetLabel({ routeIndex: 1, kind: 'folder', target: 'D:\\Games\\HK' }, routes), 'Folder · HK')
+  assert.equal(assignTargetLabel({ routeIndex: 9, kind: 'identifier', target: 'x' }, routes), 'Store id · x')
 })
