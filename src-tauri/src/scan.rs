@@ -155,7 +155,9 @@ pub async fn scan_local(
     let summary = tauri::async_runtime::spawn_blocking(move || {
         let state = worker.state::<AppState>();
         let mut last: Option<(&'static str, std::time::Instant)> = None;
-        local::scan_roots(&state.db, &selected, full, &mut |progress| {
+        // Where launcher games folders may discover emulators (as for emulator roots).
+        let guard = roots::RootGuard::from_environment(&state.data_dir);
+        local::scan_roots_with(&state.db, &selected, full, &guard, &mut |progress| {
             let now = std::time::Instant::now();
             let due = match last {
                 Some((phase, at)) => phase != progress.phase || now - at >= PROGRESS_INTERVAL,

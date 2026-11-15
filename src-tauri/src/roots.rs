@@ -22,6 +22,11 @@
 //! - for emulator roots only, also refused when equal, inside or containing: Downloads,
 //!   Desktop and the Temp folders, which commonly hold files nobody installed on purpose.
 //!
+//! A launcher's games folder is a `games` root with `launcherId` set (the custom launcher it
+//! belongs to): the same rules apply, and its scan also looks for emulators (unless the folder
+//! is one emulator roots refuse, see [`RootGuard::allows_emulators`]) and classifies a mixed app
+//! folder (`localscan::ScanInputs::mixed`).
+//!
 //! [`prepare`] does every filesystem check without the database; [`insert`] then only
 //! compares with the stored roots. `online` is filled in by [`with_online`] after the
 //! database lock is released.
@@ -55,6 +60,9 @@ pub struct LibraryRoot {
     pub last_result: Option<Value>,
     /// Output only: the folder exists right now.
     pub online: bool,
+    /// The custom launcher whose games folder this is (`games` roots only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub launcher_id: Option<String>,
 }
 
 impl LibraryRoot {
@@ -120,6 +128,13 @@ impl RootGuard {
             }
         }
         guard
+    }
+
+    /// Whether emulators may be discovered under `path` (a launcher's games folder): not in
+    /// Downloads, the Desktop or a Temp folder, like emulator roots.
+    pub fn allows_emulators(&self, path: &str) -> bool {
+        let key = crate::localscan::path_key(path).unwrap_or_default();
+        !key.is_empty() && self.check_kind(&key, "emulators").is_ok()
     }
 
     /// The kind-specific part of the guard.
@@ -305,6 +320,9 @@ fn read(row: &rusqlite::Row) -> rusqlite::Result<LibraryRoot> {
         last_result: row
             .get::<_, Option<String>>("lastResult")?
             .and_then(|s| serde_json::from_str(&s).ok()),
+        launcher_id: row
+            .get::<_, Option<String>>("launcherId")?
+            .filter(|id| !id.is_empty()),
     })
 }
 
@@ -367,12 +385,32 @@ pub fn prepare(kind: &str, raw: &str, guard: &RootGuard) -> Result<(String, Stri
 
 /// Stores a prepared root after checking it against the stored ones.
 pub fn insert(conn: &Connection, kind: &str, display: &str, key: &str) -> Result<LibraryRoot> {
+    insert_for(conn, kind, display, key, None)
+}
+
+/// [`insert`], optionally as the games folder of custom launcher `launcher_id` (which must exist;
+/// only `games` roots).
+pub fn insert_for(
+    conn: &Connection,
+    kind: &str,
+    display: &str,
+    key: &str,
+    launcher_id: Option<&str>,
+) -> Result<LibraryRoot> {
     valid_kind(kind)?;
+    if let Some(id) = launcher_id {
+        if kind != "games" {
+            bail!("A launcher's folders are game folders.");
+        }
+        if crate::launchers::get(conn, id)?.is_none() {
+            bail!("That launcher no longer exists.");
+        }
+    }
     check_overlap(key, kind, &list(conn)?)?;
     let id = format!("root:{}", uuid::Uuid::new_v4());
     conn.execute(
-        "INSERT INTO library_roots(id,kind,path,enabled,addedAt) VALUES(?,?,?,1,?)",
-        params![id, kind, display, now_ms()],
+        "INSERT INTO library_roots(id,kind,path,enabled,addedAt,launcherId) VALUES(?,?,?,1,?,?)",
+        params![id, kind, display, now_ms(), launcher_id],
     )?;
     get(conn, &id)?.ok_or_else(|| anyhow!("The folder could not be saved."))
 }
@@ -382,6 +420,18 @@ pub fn insert(conn: &Connection, kind: &str, display: &str, key: &str) -> Result
 pub fn add(conn: &Connection, kind: &str, raw: &str, guard: &RootGuard) -> Result<LibraryRoot> {
     let (display, key) = prepare(kind, raw, guard)?;
     insert(conn, kind, &display, &key)
+}
+
+/// [`prepare`] + [`insert_for`] a launcher (tests).
+#[cfg(test)]
+pub fn add_for_launcher(
+    conn: &Connection,
+    launcher_id: &str,
+    raw: &str,
+    guard: &RootGuard,
+) -> Result<LibraryRoot> {
+    let (display, key) = prepare("games", raw, guard)?;
+    insert_for(conn, "games", &display, &key, Some(launcher_id))
 }
 
 pub fn set_enabled(conn: &Connection, id: &str, enabled: bool) -> Result<()> {

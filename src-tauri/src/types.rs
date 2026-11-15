@@ -74,6 +74,13 @@ pub struct GameRoute {
     /// Catalog system id (`catalog::SYSTEMS`) of a ROM or local PC route.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system: Option<String>,
+    /// A label only: the custom launcher (`launchers::CustomLauncher::id`) whose games folder a
+    /// scan found this local or ROM route in, so "Play from" shows the launcher's name. It never
+    /// changes what runs (the route launches like any local or ROM route). Set only by Rust
+    /// (scans, review resolutions, backups); the renderer can't add or change it
+    /// (`validation::check_renderer_routes`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launcher_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]

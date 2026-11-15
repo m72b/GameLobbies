@@ -24,18 +24,43 @@
 //!   `root:<id>` state of the root that found it, and reconcile and root removal only touch
 //!   their own root's state.
 //! - Games are only ever matched by route identity; similar titles are reported as
-//!   `duplicate` review items, never merged.
+//!   `duplicate` review items, never merged. (Launcher games folders are the exception, below.)
+//!
+//! Launcher games folders (a `games` root with `launcherId`, see `roots`):
+//! - One scan classifies the mixed app folder: emulator executables (the emulator discovery,
+//!   unless the folder is one emulator roots refuse) become profiles with the catalog's default
+//!   arguments, de-duplicated by executable path as for emulator roots; PC game folders,
+//!   shortcuts and ROMs are found by the mixed walk (`localscan::ScanInputs::mixed`).
+//! - A launcher with a program: every game gets a route `launcher:<id>` whose target is the
+//!   discovered file (or, when the launcher takes folders only, the game folder), run through the
+//!   launcher's own checked argv like a game added by hand. Shortcuts are only files passed to the
+//!   launcher there, so they need no confirmation.
+//! - A launcher without a program (label only): PC games and ROMs get the ordinary local and ROM
+//!   routes above (same trust: discovered under a folder picked natively), with `launcherId` as
+//!   their label. Shortcuts with arguments still wait for confirmation. A ROM whose extension
+//!   several systems share is matched to the one system an enabled emulator runs; otherwise it is
+//!   an `uncertain-rom` review item where the user picks the emulator.
+//! - A route found there joins an existing game instead of duplicating it: the game holding the
+//!   same route identity, else the one game with a route to the same file or folder, else the
+//!   one game with the same clean title (and, for ROMs, system). Only the route is added: title,
+//!   cover, favourite, hidden, notes, sessions and playtime stay as they are.
+//! - Rescans touch only routes holding this root's install state, like any root.
+//! - Removing such a root keeps its games (their routes just stop belonging to the folder) or
+//!   removes the routes it found ([`remove_launcher_root`]).
 
 use crate::catalog;
 use crate::db::{self, Db};
 use crate::emulators::{self, EmulatorCounts};
+use crate::launchers::{self, CustomLauncher, TargetKind};
 use crate::localscan::{
     self, classify_shortcut, key_of, path_key, GameScan, ScanInputs, ShortcutKind,
 };
-use crate::review::{self, AMBIGUOUS_EXE, DUPLICATE, SHORTCUT, UNREADABLE, UNSUPPORTED};
-use crate::roots::LibraryRoot;
+use crate::review::{
+    self, AMBIGUOUS_EXE, DUPLICATE, SHORTCUT, UNCERTAIN_ROM, UNREADABLE, UNSUPPORTED,
+};
+use crate::roots::{LibraryRoot, RootGuard};
 use crate::tracker::{is_within, normalize_path};
-use crate::types::{now_ms, Game, GameRoute};
+use crate::types::{now_ms, EmulatorProfile, Game, GameRoute};
 use anyhow::{anyhow, bail, Result};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
@@ -134,6 +159,16 @@ pub struct GameCounts {
     pub failed: usize,
     /// Routes not marked missing because too many at once looked gone (see the module docs).
     pub removals_held: usize,
+    /// Launcher games folders: routes added to games already in the library.
+    #[serde(default)]
+    pub routes_added: usize,
+    /// ROMs found whose system an enabled emulator runs (or that were matched to one).
+    #[serde(default)]
+    pub roms_matched: usize,
+    /// Review items this scan left open for its roots (choose an executable or emulator,
+    /// confirm a shortcut, unsupported or unreadable folders).
+    #[serde(default)]
+    pub needs_review: usize,
 }
 
 /// Result of a library folder scan (returned and emitted as `library-scan:finished`).
@@ -185,6 +220,177 @@ fn pc_route(
     }
 }
 
+/// A route of a launcher with a program: `launcher:<id>`, the discovered file or folder as the
+/// target (exactly like a game added to the launcher by hand), this root's install state.
+fn launcher_route(
+    l: &CustomLauncher,
+    root_id: Option<&str>,
+    target: &Path,
+    kind: TargetKind,
+) -> GameRoute {
+    let text = target.to_string_lossy().into_owned();
+    GameRoute {
+        source_id: launchers::source_id(&l.id),
+        store: "Custom".into(),
+        app_id: Some(key_of(target)),
+        install_path: match kind {
+            TargetKind::Folder => Some(text.clone()),
+            _ => target.parent().map(|p| p.to_string_lossy().into_owned()),
+        },
+        launch_target: text,
+        installed: Some(true),
+        install_states: root_id.map(|id| [(db::root_state_key(id), true)].into()),
+        ..Default::default()
+    }
+}
+
+/// What a launcher with a program is given for a game: the file when it takes files, else the
+/// game's folder when it takes folders. `None` when it takes neither for this game.
+fn launcher_target(
+    l: &CustomLauncher,
+    file: &Path,
+    folder: Option<&Path>,
+) -> Option<(PathBuf, TargetKind)> {
+    if l.allows(TargetKind::File) {
+        return Some((file.to_path_buf(), TargetKind::File));
+    }
+    match folder {
+        Some(folder) if l.allows(TargetKind::Folder) => {
+            Some((folder.to_path_buf(), TargetKind::Folder))
+        }
+        _ => None,
+    }
+}
+
+/// How one root's finds become routes (see the module docs).
+#[derive(Clone, Copy)]
+pub enum RootMode<'a> {
+    /// An ordinary library folder.
+    Library,
+    /// A launcher's games folder: launcher routes when it has a program, labelled local and ROM
+    /// routes when it hasn't.
+    Launcher(&'a CustomLauncher),
+}
+
+impl RootMode<'_> {
+    fn label(&self) -> Option<String> {
+        match self {
+            RootMode::Launcher(l) if launchers::is_label_only(l) => Some(l.id.clone()),
+            _ => None,
+        }
+    }
+
+    fn program(&self) -> Option<&CustomLauncher> {
+        match self {
+            RootMode::Launcher(l) if !launchers::is_label_only(l) => Some(l),
+            _ => None,
+        }
+    }
+}
+
+fn labelled(mut route: GameRoute, label: Option<&String>) -> GameRoute {
+    route.launcher_id = label.cloned();
+    route
+}
+
+/// Path keys a route points at (its file or folder), for matching a find to an existing game.
+/// Stored text only (no disk access: called under the database lock).
+fn route_path_keys(route: &GameRoute) -> Vec<String> {
+    let mut keys = Vec::new();
+    for raw in [route.app_id.as_deref(), Some(route.launch_target.as_str())]
+        .into_iter()
+        .flatten()
+    {
+        if crate::emulators::drive_path_ok(raw) {
+            if let Some(key) = normalize_path(raw) {
+                if !keys.contains(&key) {
+                    keys.push(key);
+                }
+            }
+        }
+    }
+    keys
+}
+
+/// Points each new game of a launcher folder scan at the existing game it belongs to (see the
+/// module docs) by giving it that game's id, so the upsert only adds its route. Returns the
+/// indexes of the games that were attached that way.
+fn attach_to_existing(conn: &Connection, games: &mut [Game]) -> Result<HashSet<usize>> {
+    let existing = db::all_games(conn)?;
+    let mut identities: HashSet<String> = HashSet::new();
+    let mut by_path: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut by_title: HashMap<String, Vec<(String, HashSet<String>, bool)>> = HashMap::new();
+    for game in &existing {
+        let mut systems = HashSet::new();
+        let mut rom = false;
+        for route in &game.routes {
+            identities.insert(db::route_identity(route));
+            for key in route_path_keys(route) {
+                by_path.entry(key).or_default().insert(game.id.clone());
+            }
+            if route.source_id == ROM_SOURCE {
+                rom = true;
+                if let Some(system) = &route.system {
+                    systems.insert(system.clone());
+                }
+            }
+        }
+        let title = catalog::title_key(&game.title);
+        if !title.is_empty() {
+            by_title
+                .entry(title)
+                .or_default()
+                .push((game.id.clone(), systems, rom));
+        }
+    }
+    let mut attached = HashSet::new();
+    for (index, game) in games.iter_mut().enumerate() {
+        let Some(route) = game.routes.first() else {
+            continue;
+        };
+        if identities.contains(&db::route_identity(route)) {
+            continue;
+        }
+        let mut owners: HashSet<String> = HashSet::new();
+        for key in route_path_keys(route) {
+            owners.extend(by_path.get(&key).into_iter().flatten().cloned());
+        }
+        let owner = match owners.len() {
+            1 => owners.into_iter().next(),
+            0 => {
+                let system = route.system.clone().filter(|s| s != catalog::PC);
+                let fits: Vec<&String> = by_title
+                    .get(&catalog::title_key(&game.title))
+                    .into_iter()
+                    .flatten()
+                    .filter(|(_, systems, rom)| match &system {
+                        // A ROM joins a game with a ROM of the same system.
+                        Some(s) if route.source_id == ROM_SOURCE => systems.contains(s),
+                        // A PC game (or a launcher's file) joins a game that isn't a ROM.
+                        _ => !rom,
+                    })
+                    .map(|(id, _, _)| id)
+                    .collect();
+                match fits.as_slice() {
+                    [only] => Some((*only).clone()),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        if let Some(id) = owner {
+            game.id = id;
+            attached.insert(index);
+        }
+    }
+    Ok(attached)
+}
+
+/// Whether `profiles` (after `refresh_available`) can run `system` automatically.
+fn has_emulator(profiles: &[EmulatorProfile], system: &str) -> bool {
+    crate::emulators::default_for_system(profiles, system).is_some()
+}
+
 fn new_game(prefix: &str, title: &str, store: &str, route: GameRoute) -> Game {
     Game {
         id: format!("{prefix}:{}", uuid::Uuid::new_v4()),
@@ -205,7 +411,7 @@ fn scan_inputs(conn: &Connection) -> Result<ScanInputs> {
         exe_choices,
         shortcut_ok: db::shortcut_confirmations(conn)?,
         limits: localscan::ScanLimits::default(),
-        excluded: HashSet::new(),
+        ..Default::default()
     })
 }
 
@@ -226,36 +432,152 @@ fn known_routes(conn: &Connection) -> Result<HashMap<String, (bool, String)>> {
 /// Applies one games root's scan (see the module docs). `root_readable`: the root could still
 /// be listed right before the database was locked for this (checked by the caller, so no
 /// filesystem access happens under the lock). Returns the counts and a warning for the user,
-/// if any.
+/// if any. (Tests; scans use [`apply_root_scan`].)
+#[cfg(test)]
 pub fn apply_game_scan(
     conn: &mut Connection,
     root: &LibraryRoot,
     scan: &GameScan,
     root_readable: bool,
 ) -> Result<(GameCounts, Option<String>)> {
+    apply_root_scan(conn, root, scan, root_readable, RootMode::Library, &[])
+}
+
+/// A launcher folder scan's ROM with an extension several systems share, matched to the one
+/// candidate system `profiles` can run, if exactly one.
+fn matched_system(
+    rom: &localscan::UncertainRom,
+    profiles: &[EmulatorProfile],
+) -> Option<&'static str> {
+    let covered: Vec<&'static str> = rom
+        .systems
+        .iter()
+        .copied()
+        .filter(|s| has_emulator(profiles, s))
+        .collect();
+    match covered.as_slice() {
+        [only] => Some(only),
+        _ => None,
+    }
+}
+
+/// [`apply_game_scan`] for any root: `mode` decides the routes (see the module docs); `profiles`
+/// (after `refresh_available`, read without the lock) match ROMs to emulators.
+pub fn apply_root_scan(
+    conn: &mut Connection,
+    root: &LibraryRoot,
+    scan: &GameScan,
+    root_readable: bool,
+    mode: RootMode<'_>,
+    profiles: &[EmulatorProfile],
+) -> Result<(GameCounts, Option<String>)> {
     let mut counts = GameCounts {
         skipped: scan.skipped,
         failed: scan.unreadable.len(),
         ..Default::default()
     };
-    let mut games: Vec<Game> = scan
-        .roms
-        .iter()
-        .map(|rom| new_game("rom", &rom.title, "Emulator", rom_route(&root.id, rom)))
-        .collect();
-    games.extend(scan.pcs.iter().map(|pc| {
-        new_game(
-            "local",
-            &pc.title,
-            "Custom",
-            pc_route(Some(&root.id), pc.folder.as_deref(), &pc.source, &pc.target),
-        )
-    }));
+    let label = mode.label();
+    let mut skipped_by_launcher: Vec<String> = Vec::new();
+    let mut games: Vec<Game> = Vec::new();
+    // Uncertain ROMs that become review items (label-only launchers).
+    let mut uncertain_open: Vec<&localscan::UncertainRom> = Vec::new();
+    match mode.program() {
+        Some(l) => {
+            let mut add = |title: &str, file: &Path, folder: Option<&Path>| match launcher_target(
+                l, file, folder,
+            ) {
+                Some((target, kind)) => games.push(new_game(
+                    "custom",
+                    title,
+                    "Custom",
+                    launcher_route(l, Some(&root.id), &target, kind),
+                )),
+                None => skipped_by_launcher.push(file.to_string_lossy().into_owned()),
+            };
+            for rom in &scan.roms {
+                add(&rom.title, &rom.path, None);
+            }
+            for rom in &scan.uncertain {
+                add(&rom.title, &rom.path, None);
+            }
+            for pc in &scan.pcs {
+                add(&pc.title, &pc.file, pc.folder.as_deref());
+            }
+            // Only a file handed to the launcher: no confirmation of what the shortcut runs.
+            for item in &scan.shortcuts {
+                add(&item.title, &item.shortcut, item.folder.as_deref());
+            }
+            // A launcher that takes folders doesn't need the executable picked.
+            if !l.allows(TargetKind::File) {
+                for item in &scan.ambiguous {
+                    add(&item.title, &item.folder, Some(&item.folder));
+                }
+            }
+        }
+        None => {
+            for rom in &scan.roms {
+                games.push(new_game(
+                    "rom",
+                    &rom.title,
+                    "Emulator",
+                    labelled(rom_route(&root.id, rom), label.as_ref()),
+                ));
+            }
+            for rom in &scan.uncertain {
+                match matched_system(rom, profiles) {
+                    Some(system) => {
+                        let certain = localscan::RomGame {
+                            system,
+                            path: rom.path.clone(),
+                            title: rom.title.clone(),
+                            format: String::new(),
+                            other_discs: Vec::new(),
+                        };
+                        games.push(new_game(
+                            "rom",
+                            &rom.title,
+                            "Emulator",
+                            labelled(rom_route(&root.id, &certain), label.as_ref()),
+                        ));
+                    }
+                    None => uncertain_open.push(rom),
+                }
+            }
+            games.extend(scan.pcs.iter().map(|pc| {
+                new_game(
+                    "local",
+                    &pc.title,
+                    "Custom",
+                    labelled(
+                        pc_route(Some(&root.id), pc.folder.as_deref(), &pc.source, &pc.target),
+                        label.as_ref(),
+                    ),
+                )
+            }));
+        }
+    }
+    counts.skipped += skipped_by_launcher.len();
+    for game in &games {
+        let route = &game.routes[0];
+        if route.source_id == ROM_SOURCE
+            && route
+                .system
+                .as_deref()
+                .is_some_and(|s| has_emulator(profiles, s))
+        {
+            counts.roms_matched += 1;
+        }
+    }
+    let attached = match mode {
+        RootMode::Launcher(_) => attach_to_existing(conn, &mut games)?,
+        RootMode::Library => HashSet::new(),
+    };
     let known = known_routes(conn)?;
     let mut found: HashSet<String> = HashSet::new();
-    for game in &games {
+    for (index, game) in games.iter().enumerate() {
         let identity = db::route_identity(&game.routes[0]);
         match known.get(&identity) {
+            None if attached.contains(&index) => counts.routes_added += 1,
             None => counts.added += 1,
             Some((installed, target)) => {
                 if !installed || *target != game.routes[0].launch_target {
@@ -267,12 +589,19 @@ pub fn apply_game_scan(
     }
     // Ambiguous folders and shortcuts awaiting confirmation keep whatever they had until
     // the user decides.
+    let pending_identity = |source: &Path| match mode.program() {
+        Some(l) => format!("{}:{}", launchers::source_id(&l.id), key_of(source)),
+        None => format!("{LOCAL_SOURCE}:{}", key_of(source)),
+    };
     for item in &scan.ambiguous {
-        found.insert(format!("{LOCAL_SOURCE}:{}", key_of(&item.folder)));
+        found.insert(pending_identity(&item.folder));
     }
     for item in &scan.shortcuts {
         let source = item.folder.as_deref().unwrap_or(&item.shortcut);
-        found.insert(format!("{LOCAL_SOURCE}:{}", key_of(source)));
+        found.insert(pending_identity(source));
+    }
+    for rom in &uncertain_open {
+        found.insert(format!("{ROM_SOURCE}:{}", key_of(&rom.path)));
     }
     db::upsert_imported_games(conn, &games)?;
     let mut warning = None;
@@ -302,7 +631,14 @@ pub fn apply_game_scan(
     }
     // Review items for this root.
     let mut keep = HashSet::new();
-    for item in scan.ambiguous.iter().take(MAX_REVIEW_PER_KIND) {
+    // Launcher folders that take folders only never ask for an executable (see above).
+    let ask_exe = mode.program().is_none_or(|l| l.allows(TargetKind::File));
+    for item in scan
+        .ambiguous
+        .iter()
+        .filter(|_| ask_exe)
+        .take(MAX_REVIEW_PER_KIND)
+    {
         let key = format!("{AMBIGUOUS_EXE}:{}", key_of(&item.folder));
         review::upsert(
             conn,
@@ -329,7 +665,57 @@ pub fn apply_game_scan(
         )?;
         keep.insert(key);
     }
-    for item in scan.shortcuts.iter().take(MAX_REVIEW_PER_KIND) {
+    for path in skipped_by_launcher.iter().take(MAX_REVIEW_PER_KIND) {
+        let key = format!("{UNSUPPORTED}:{}", path_key(path).unwrap_or_default());
+        review::upsert(
+            conn,
+            UNSUPPORTED,
+            &key,
+            Some(&root.id),
+            &json!({ "path": path, "reason": "The launcher doesn't take files, and this game has no folder of its own to pass instead. Let the launcher use files to add it.", "rootId": root.id }),
+        )?;
+        keep.insert(key);
+    }
+    for rom in uncertain_open.iter().take(MAX_REVIEW_PER_KIND) {
+        let key = format!("{UNCERTAIN_ROM}:{}", key_of(&rom.path));
+        let emulators: Vec<Value> = profiles
+            .iter()
+            .filter(|p| p.enabled && rom.systems.iter().any(|s| p.systems.iter().any(|ps| ps == s)))
+            .map(|p| {
+                json!({
+                    "id": p.id,
+                    "name": p.name,
+                    "systems": p.systems.iter().filter(|s| rom.systems.contains(&s.as_str())).collect::<Vec<_>>(),
+                })
+            })
+            .collect();
+        let systems: Vec<Value> = rom
+            .systems
+            .iter()
+            .map(|s| json!({ "id": s, "name": catalog::system(s).map_or(*s, |x| x.name) }))
+            .collect();
+        review::upsert(
+            conn,
+            UNCERTAIN_ROM,
+            &key,
+            Some(&root.id),
+            &json!({
+                "title": rom.title,
+                "path": rom.path.to_string_lossy(),
+                "systems": systems,
+                "emulators": emulators,
+                "rootId": root.id,
+            }),
+        )?;
+        keep.insert(key);
+    }
+    for item in scan
+        .shortcuts
+        .iter()
+        // A launcher with a program is only given the shortcut file (added above).
+        .filter(|_| mode.program().is_none())
+        .take(MAX_REVIEW_PER_KIND)
+    {
         let key = format!("{SHORTCUT}:{}", key_of(&item.shortcut));
         review::upsert(
             conn,
@@ -355,10 +741,17 @@ pub fn apply_game_scan(
         review::prune(
             conn,
             Some(&root.id),
-            &[AMBIGUOUS_EXE, UNSUPPORTED, UNREADABLE, SHORTCUT],
+            &[
+                AMBIGUOUS_EXE,
+                UNSUPPORTED,
+                UNREADABLE,
+                SHORTCUT,
+                UNCERTAIN_ROM,
+            ],
             &keep,
         )?;
     }
+    counts.needs_review = review::open_count_for_root(conn, &root.id)?;
     Ok((counts, warning))
 }
 
@@ -383,8 +776,22 @@ pub fn request_shortcut_confirmation(
     conn: &Connection,
     item: &localscan::PendingShortcut,
 ) -> Result<()> {
+    request_shortcut_confirmation_for(conn, item, None)
+}
+
+/// [`request_shortcut_confirmation`], the game to be labelled with launcher `launcher_id` once
+/// confirmed (a label-only launcher's Add game).
+pub fn request_shortcut_confirmation_for(
+    conn: &Connection,
+    item: &localscan::PendingShortcut,
+    launcher_id: Option<&str>,
+) -> Result<()> {
     let key = format!("{SHORTCUT}:{}", key_of(&item.shortcut));
-    review::upsert(conn, SHORTCUT, &key, None, &shortcut_details(item, None))
+    let mut details = shortcut_details(item, None);
+    if let (Some(id), Value::Object(map)) = (launcher_id, &mut details) {
+        map.insert("launcherId".into(), json!(id));
+    }
+    review::upsert(conn, SHORTCUT, &key, None, &details)
 }
 
 fn non_empty_key(route: &GameRoute) -> String {
@@ -453,13 +860,76 @@ pub fn refresh_duplicates(conn: &Connection) -> Result<()> {
     review::prune(conn, None, &[DUPLICATE], &keep)
 }
 
-/// Scans `roots` (emulator roots first, so new games get a default emulator), applies the
-/// results and returns the summary. Disabled roots are skipped. Each root's result is also
-/// stored on the root (`lastScanAt`, `lastResult`).
+/// [`scan_roots_with`] with no protected folders (tests).
+#[cfg(test)]
 pub fn scan_roots(
     db: &Db,
     roots: &[LibraryRoot],
     full: bool,
+    progress: &mut dyn FnMut(Progress),
+) -> Result<ScanSummary> {
+    scan_roots_with(db, roots, full, &RootGuard::default(), progress)
+}
+
+fn add_emulator_counts(total: &mut EmulatorCounts, counts: &EmulatorCounts) {
+    total.added += counts.added;
+    total.updated += counts.updated;
+    total.unavailable += counts.unavailable;
+}
+
+/// A launcher games folder's emulator discovery (see the module docs): registers what it finds
+/// and returns the counts and the emulator folders, which the game walk then skips. `None` when
+/// emulators aren't looked for there (`guard`).
+fn launcher_emulators(
+    db: &Db,
+    root: &LibraryRoot,
+    all_roots: &[LibraryRoot],
+    full: bool,
+    guard: &RootGuard,
+    progress: &mut dyn FnMut(Progress),
+) -> Result<Option<(EmulatorCounts, HashSet<String>, usize)>> {
+    if !guard.allows_emulators(&root.path) {
+        return Ok(None);
+    }
+    let ignored = db::ignore_keys(&db.lock(), db::IGNORE_EMULATOR)?;
+    let nested = crate::roots::nested_roots(root, all_roots);
+    let mut report = |processed: usize, current: &Path| {
+        progress(Progress {
+            phase: "emulators",
+            root: root.path.clone(),
+            processed,
+            total: None,
+            current: Some(current.to_string_lossy().into_owned()),
+        })
+    };
+    let found = emulators::discover(
+        Path::new(&root.path),
+        &ignored,
+        &nested,
+        localscan::ScanLimits::emulators(full),
+        &mut report,
+    )?;
+    let mut counts = emulators::apply_discovered(&db.lock(), &found)?;
+    let raw = db::emulator_profiles(&db.lock())?;
+    let profiles = emulators::refresh_available(raw);
+    counts.unavailable = emulators::unavailable_in_root(&profiles, &root.key());
+    let folders = found
+        .folders
+        .iter()
+        .map(|f| localscan::listed_key(f))
+        .collect();
+    Ok(Some((counts, folders, found.found.len())))
+}
+
+/// Scans `roots` (emulator roots first, then launcher games folders, which find emulators too,
+/// so new games get a default emulator), applies the results and returns the summary. Disabled
+/// roots are skipped. Each root's result is also stored on the root (`lastScanAt`,
+/// `lastResult`). `guard` says where launcher games folders may discover emulators.
+pub fn scan_roots_with(
+    db: &Db,
+    roots: &[LibraryRoot],
+    full: bool,
+    guard: &RootGuard,
     progress: &mut dyn FnMut(Progress),
 ) -> Result<ScanSummary> {
     let started = Instant::now();
@@ -467,7 +937,7 @@ pub fn scan_roots(
     // Every registered root (also ones not being scanned now), to keep nested roots apart.
     let all_roots = crate::roots::list(&db.lock())?;
     let mut ordered: Vec<&LibraryRoot> = roots.iter().filter(|r| r.enabled).collect();
-    ordered.sort_by_key(|r| r.kind != "emulators");
+    ordered.sort_by_key(|r| (r.kind != "emulators", r.launcher_id.is_none()));
     for root in ordered {
         let root_started = Instant::now();
         let root_path = PathBuf::from(&root.path);
@@ -533,15 +1003,65 @@ pub fn scan_roots(
                 }
             }
         } else {
+            let launcher = match &root.launcher_id {
+                Some(id) => match launchers::get(&db.lock(), id)? {
+                    Some(l) => Some(l),
+                    None => {
+                        outcome.ok = false;
+                        outcome.error = Some("This folder's launcher no longer exists.".into());
+                        summary.roots.push(outcome);
+                        continue;
+                    }
+                },
+                None => None,
+            };
             let mut inputs = scan_inputs(&db.lock())?;
             inputs.limits = localscan::ScanLimits::games(full);
             inputs.excluded = crate::roots::nested_roots(root, &all_roots);
+            let mut emulator_counts = None;
+            if let Some(l) = &launcher {
+                inputs.mixed = true;
+                if let Some(exe) = path_key(&l.executable) {
+                    inputs.skip_files.insert(exe);
+                }
+                match launcher_emulators(db, root, &all_roots, full, guard, progress) {
+                    Ok(Some((counts, folders, _))) => {
+                        add_emulator_counts(&mut summary.emulators, &counts);
+                        inputs.emulator_dirs = folders;
+                        emulator_counts = Some(counts);
+                    }
+                    Ok(None) => {
+                        outcome.warning = Some("Emulators aren't looked for in Downloads, the Desktop or a Temp folder. Move them to a folder of their own and add it under Library folders.".into());
+                    }
+                    // The game walk below reports an unreadable root.
+                    Err(_) => {}
+                }
+            }
+            let mut report = |processed: usize, current: &Path| {
+                progress(Progress {
+                    phase,
+                    root: root.path.clone(),
+                    processed,
+                    total: None,
+                    current: Some(current.to_string_lossy().into_owned()),
+                })
+            };
             match localscan::scan_games(&root_path, &inputs, &mut report) {
                 Ok(scan) => {
                     // The walk may have taken a while: re-check the root, then lock.
                     let readable = root_still_readable(&root_path);
-                    let (counts, warning) = apply_game_scan(&mut db.lock(), root, &scan, readable)?;
-                    outcome.warning = warning;
+                    // Availability needs the filesystem: read it before locking.
+                    let raw = db::emulator_profiles(&db.lock())?;
+                    let profiles = emulators::refresh_available(raw);
+                    let mode = match &launcher {
+                        Some(l) => RootMode::Launcher(l),
+                        None => RootMode::Library,
+                    };
+                    let (counts, warning) =
+                        apply_root_scan(&mut db.lock(), root, &scan, readable, mode, &profiles)?;
+                    if warning.is_some() {
+                        outcome.warning = warning;
+                    }
                     let g = &mut summary.games;
                     g.added += counts.added;
                     g.updated += counts.updated;
@@ -549,6 +1069,9 @@ pub fn scan_roots(
                     g.skipped += counts.skipped;
                     g.failed += counts.failed;
                     g.removals_held += counts.removals_held;
+                    g.routes_added += counts.routes_added;
+                    g.roms_matched += counts.roms_matched;
+                    g.needs_review += counts.needs_review;
                     outcome.truncated = scan.truncated;
                     if scan.truncated && scan.visited > inputs.limits.max_entries {
                         outcome.notice = Some(truncation_notice(
@@ -569,7 +1092,10 @@ pub fn scan_roots(
                             summary.unsupported_samples.push(sample);
                         }
                     }
-                    root_counts = json!({ "games": counts });
+                    root_counts = match emulator_counts {
+                        Some(e) => json!({ "games": counts, "emulators": e }),
+                        None => json!({ "games": counts }),
+                    };
                 }
                 Err(e) => {
                     outcome.ok = false;
@@ -622,6 +1148,56 @@ pub fn remove_root(conn: &mut Connection, root_id: &str) -> Result<(usize, usize
     Ok(changed)
 }
 
+/// Removes a launcher's games folder, like deleting a launcher: `KeepGames` keeps every game and
+/// route it found (they only stop belonging to the folder: its install state is dropped, the
+/// launcher label stays); `RemoveGames` removes the routes it found, and games left without any
+/// route. Profiles of emulators found there stay. Returns the ids of removed games.
+pub fn remove_launcher_root(
+    conn: &mut Connection,
+    root_id: &str,
+    mode: launchers::RemoveMode,
+) -> Result<Vec<String>> {
+    let key = db::root_state_key(root_id);
+    let tx = conn.transaction()?;
+    let mut removed = Vec::new();
+    for game in db::all_games(&tx)? {
+        let ours = |r: &GameRoute| {
+            r.install_states
+                .as_ref()
+                .is_some_and(|s| s.contains_key(&key))
+        };
+        if !game.routes.iter().any(ours) {
+            continue;
+        }
+        let routes: Vec<GameRoute> = match mode {
+            launchers::RemoveMode::RemoveGames => {
+                game.routes.iter().filter(|r| !ours(r)).cloned().collect()
+            }
+            launchers::RemoveMode::KeepGames => game
+                .routes
+                .iter()
+                .cloned()
+                .map(|mut r| {
+                    if let Some(states) = r.install_states.as_mut() {
+                        states.remove(&key);
+                    }
+                    r
+                })
+                .collect(),
+        };
+        if routes.is_empty() {
+            db::delete_game_rows(&tx, &game.id)?;
+            removed.push(game.id);
+        } else {
+            db::set_routes(&tx, &game.id, routes)?;
+        }
+    }
+    crate::roots::delete(&tx, root_id)?;
+    review::forget_root(&tx, root_id)?;
+    tx.commit()?;
+    Ok(removed)
+}
+
 // ---------------------------------------------------------------------------
 // Review resolution
 
@@ -641,6 +1217,9 @@ pub enum Resolution {
     /// `shortcut`: the user checked the shortcut's target and arguments; add the game. Fails
     /// when the shortcut changed since the item was made.
     ConfirmShortcut,
+    /// `uncertain-rom`: play the ROM with `emulatorId` (one of the item's listed emulators).
+    #[serde(rename_all = "camelCase")]
+    ChooseEmulator { emulator_id: String },
     /// Any kind: close without changes.
     Dismiss,
 }
@@ -694,6 +1273,34 @@ fn duplicate_ids(item: &review::ReviewItem) -> Vec<String> {
 struct Checked {
     /// `choose-exe`: (the chosen candidate as listed, what the route launches).
     choice: Option<(String, String)>,
+}
+
+/// How a resolution's new game is routed: by the item's root (a launcher games folder routes
+/// like its scan, see [`RootMode`]) or, for a shortcut added with a label-only launcher's Add
+/// game, the launcher stored in the item. `None` = an ordinary library item.
+fn item_launcher(conn: &Connection, item: &review::ReviewItem) -> Result<Option<CustomLauncher>> {
+    let from_root = match item.root_id.as_deref() {
+        Some(id) => crate::roots::get(conn, id)?.and_then(|r| r.launcher_id),
+        None => None,
+    };
+    let id = from_root.or_else(|| item_text(item, "launcherId"));
+    match id {
+        Some(id) => {
+            Ok(Some(launchers::get(conn, &id)?.ok_or_else(|| {
+                anyhow!("This item's launcher no longer exists.")
+            })?))
+        }
+        None => Ok(None),
+    }
+}
+
+/// Stores a resolution's new game, joining an existing one for launcher items (see the module
+/// docs).
+fn add_resolved_game(conn: &mut Connection, mut game: Game, launcher: bool) -> Result<()> {
+    if launcher {
+        attach_to_existing(conn, std::slice::from_mut(&mut game))?;
+    }
+    db::upsert_imported_games(conn, &[game])
 }
 
 fn item_text(item: &review::ReviewItem, key: &str) -> Option<String> {
@@ -776,6 +1383,15 @@ fn check(
             };
             checked.choice = Some((chosen, target));
         }
+        Resolution::ChooseEmulator { .. } => {
+            if item.kind != UNCERTAIN_ROM {
+                bail!("Only uncertain ROMs need an emulator chosen.");
+            }
+            let path = item_text(item, "path").ok_or_else(|| anyhow!("This item has no file."))?;
+            if !Path::new(&path).is_file() {
+                bail!("That file no longer exists. Rescan the folder.");
+            }
+        }
         Resolution::ConfirmShortcut => {
             if item.kind != SHORTCUT {
                 bail!("Only shortcuts can be confirmed.");
@@ -828,7 +1444,7 @@ pub fn resolve(db: &Db, id: &str, resolution: &Resolution) -> Result<Resolved> {
 fn only_scan_kinds(item: &review::ReviewItem, what: &str) -> Result<()> {
     if matches!(
         item.kind.as_str(),
-        DUPLICATE | AMBIGUOUS_EXE | UNSUPPORTED | UNREADABLE | SHORTCUT
+        DUPLICATE | AMBIGUOUS_EXE | UNSUPPORTED | UNREADABLE | SHORTCUT | UNCERTAIN_ROM
     ) {
         Ok(())
     } else {
@@ -908,19 +1524,94 @@ fn apply(
                 params![key_of(Path::new(&folder)), chosen, now_ms()],
             )?;
             let root_id = item.root_id.clone();
-            let game = new_game(
-                "local",
-                &title,
-                "Custom",
-                pc_route(
-                    root_id.as_deref(),
-                    Some(Path::new(&folder)),
-                    Path::new(&folder),
-                    &target,
+            let launcher = item_launcher(conn, item)?;
+            let game = match launcher.as_ref().filter(|l| !launchers::is_label_only(l)) {
+                // A launcher with a program is given the chosen file, like its scan does.
+                Some(l) => {
+                    let (target, kind) =
+                        launcher_target(l, Path::new(&chosen), Some(Path::new(&folder)))
+                            .ok_or_else(|| anyhow!("{} doesn't take files or folders.", l.name))?;
+                    new_game(
+                        "custom",
+                        &title,
+                        "Custom",
+                        launcher_route(l, root_id.as_deref(), &target, kind),
+                    )
+                }
+                None => new_game(
+                    "local",
+                    &title,
+                    "Custom",
+                    labelled(
+                        pc_route(
+                            root_id.as_deref(),
+                            Some(Path::new(&folder)),
+                            Path::new(&folder),
+                            &target,
+                        ),
+                        launcher.as_ref().map(|l| &l.id),
+                    ),
                 ),
-            );
-            db::upsert_imported_games(conn, &[game])?;
+            };
+            add_resolved_game(conn, game, launcher.is_some())?;
             "exe-chosen"
+        }
+        Resolution::ChooseEmulator { emulator_id } => {
+            let listed = item
+                .details
+                .get("emulators")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .any(|e| e.get("id").and_then(Value::as_str) == Some(emulator_id.as_str()));
+            if !listed {
+                bail!("Choose one of the listed emulators.");
+            }
+            let profile = db::emulator_profile(conn, emulator_id)?
+                .ok_or_else(|| anyhow!("That emulator profile no longer exists."))?;
+            let systems: Vec<String> = item
+                .details
+                .get("systems")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|s| s.get("id").and_then(Value::as_str).map(String::from))
+                .collect();
+            let system = systems
+                .iter()
+                .find(|s| profile.systems.contains(s))
+                .ok_or_else(|| {
+                    anyhow!("{} doesn't run any of this file's systems.", profile.name)
+                })?;
+            let system =
+                catalog::system(system).ok_or_else(|| anyhow!("This item's system is unknown."))?;
+            let path = PathBuf::from(item_text(item, "path").unwrap_or_default());
+            let title = item_text(item, "title").unwrap_or_else(|| "Untitled".into());
+            let launcher = item_launcher(conn, item)?;
+            let rom = localscan::RomGame {
+                system: system.id,
+                path,
+                title: title.clone(),
+                format: String::new(),
+                other_discs: Vec::new(),
+            };
+            let mut route = match item.root_id.as_deref() {
+                Some(root) => rom_route(root, &rom),
+                None => {
+                    let mut r = rom_route("", &rom);
+                    r.install_states = None;
+                    r
+                }
+            };
+            route.launcher_id = launcher
+                .as_ref()
+                .filter(|l| launchers::is_label_only(l))
+                .map(|l| l.id.clone());
+            // The user's choice (scans never set one).
+            route.emulator_id = Some(profile.id.clone());
+            let game = new_game("rom", &title, "Emulator", route);
+            add_resolved_game(conn, game, launcher.is_some())?;
+            "emulator-chosen"
         }
         Resolution::ConfirmShortcut => {
             // `check` verified the file still matches what the item showed.
@@ -939,18 +1630,24 @@ fn apply(
             let folder = text("folder").map(PathBuf::from);
             let source = folder.clone().unwrap_or_else(|| PathBuf::from(&shortcut));
             let title = text("title").unwrap_or_else(|| "Untitled".into());
+            // Shortcut items only come from library folders and label-only launchers (a
+            // launcher with a program is given the shortcut file instead).
+            let launcher = item_launcher(conn, item)?.filter(launchers::is_label_only);
             let game = new_game(
                 "local",
                 &title,
                 "Custom",
-                pc_route(
-                    item.root_id.as_deref(),
-                    folder.as_deref(),
-                    &source,
-                    &shortcut,
+                labelled(
+                    pc_route(
+                        item.root_id.as_deref(),
+                        folder.as_deref(),
+                        &source,
+                        &shortcut,
+                    ),
+                    launcher.as_ref().map(|l| &l.id),
                 ),
             );
-            db::upsert_imported_games(conn, &[game])?;
+            add_resolved_game(conn, game, launcher.is_some())?;
             "shortcut-confirmed"
         }
         Resolution::Dismiss => {
@@ -1219,6 +1916,9 @@ mod tests {
             second.games,
             GameCounts {
                 skipped: 1,
+                // Pokemon (mGBA) and Zelda (Dolphin) have an emulator; Okami (PS2) hasn't.
+                roms_matched: 2,
+                needs_review: 1,
                 ..Default::default()
             }
         );
@@ -1869,6 +2569,7 @@ mod tests {
                 folder: Some(mystery.clone()),
                 source: mystery.clone(),
                 target: beta.to_string_lossy().into(),
+                file: beta.clone(),
                 title: "Mystery Game".into(),
             }],
             unreadable: vec![short_path(&sub).to_string_lossy().into()],
@@ -2007,6 +2708,561 @@ mod tests {
         remove_root(&mut f.db.lock(), &games.id).unwrap();
         assert!(installed_titles(&f).is_empty());
         assert_eq!(db::emulator_profiles(&f.db.lock()).unwrap().len(), 1);
+    }
+
+    // -----------------------------------------------------------------------
+    // Launcher games folders
+
+    /// A launcher with a program (`exe`) or, with `None`, a label-only one.
+    fn save_launcher(f: &Fixture, exe: Option<&Path>, kinds: &[&str]) -> CustomLauncher {
+        let l = launchers::validate(CustomLauncher {
+            id: if exe.is_some() { "prog" } else { "app" }.into(),
+            name: if exe.is_some() { "Playnite" } else { "Arcade" }.into(),
+            icon_kind: "builtin".into(),
+            icon_value: "rocket".into(),
+            color: "#4f8cff".into(),
+            executable: exe
+                .map(|e| e.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            args_template: if exe.is_some() {
+                "--start {target}"
+            } else {
+                ""
+            }
+            .into(),
+            target_kind: kinds[0].into(),
+            target_kinds: kinds.iter().map(|k| k.to_string()).collect(),
+            working_dir: None,
+            sort_order: 0,
+            created_at: 1,
+            available: false,
+        })
+        .unwrap();
+        launchers::save(&f.db.lock(), &l).unwrap();
+        l
+    }
+
+    fn launcher_root(f: &Fixture, l: &CustomLauncher, rel: &str) -> LibraryRoot {
+        let path = f.dir.dir(rel);
+        crate::roots::add_for_launcher(
+            &f.db.lock(),
+            &l.id,
+            &path.to_string_lossy(),
+            &RootGuard::default(),
+        )
+        .unwrap()
+    }
+
+    /// The target scenario: one app folder with PC games, a shortcut, emulators and ROMs.
+    fn app_folder(f: &Fixture) {
+        for rel in [
+            "App/App.exe",
+            "App/Celeste/Celeste.exe",
+            "App/Hades/x64/Hades.exe",
+            "App/Witcher/bin/x64/witcher3.exe",
+            "App/Games/Ori/ori.exe",
+            "App/Games/Hollow Knight/hollow_knight.exe",
+            "App/Tools/red.exe",
+            "App/Tools/blue.exe",
+            "App/Emulators/Dolphin/Dolphin.exe",
+            "App/Emulators/DuckStation/duckstation-qt.exe",
+            "App/Emulators/mGBA/mGBA.exe",
+            "App/Roms/GBA/Pokemon Emerald (USA).gba",
+            "App/Roms/Metroid Fusion.gba",
+            "App/Roms/Crash Bandicoot.chd",
+            "App/Roms/Wind Waker.rvz",
+            "App/Roms/readme.md",
+            "App/Empty/data.bin",
+        ] {
+            f.dir.file(rel);
+        }
+        f.dir.write(
+            "App/Portal.url",
+            b"[InternetShortcut]\r\nURL=steam://rungameid/400\r\n",
+        );
+        let red = f.dir.path().join("App/Tools/red.exe");
+        crate::platform::create_shortcut(
+            &f.dir.path().join("App/Server.lnk"),
+            &red.to_string_lossy(),
+            "+connect 10.0.0.1",
+        )
+        .unwrap();
+    }
+
+    fn open_items(f: &Fixture) -> Vec<review::ReviewItem> {
+        review::list(&f.db.lock(), false).unwrap()
+    }
+
+    fn item(f: &Fixture, kind: &str) -> review::ReviewItem {
+        open_items(f).into_iter().find(|i| i.kind == kind).unwrap()
+    }
+
+    fn titles(f: &Fixture) -> Vec<String> {
+        let mut t: Vec<String> = f.games().into_iter().map(|g| g.title).collect();
+        t.sort();
+        t
+    }
+
+    #[test]
+    fn a_label_only_app_folder_is_classified_and_labelled() {
+        let f = Fixture::new("launcher-label");
+        app_folder(&f);
+        let l = save_launcher(&f, None, &["file"]);
+        let root = launcher_root(&f, &l, "App");
+        let summary = f.scan();
+        assert!(summary.roots[0].ok, "{:?}", summary.roots[0]);
+        assert_eq!(summary.emulators.added, 3, "Dolphin, DuckStation, mGBA");
+        assert_eq!(
+            titles(&f),
+            [
+                "Celeste",
+                "Crash Bandicoot",
+                "Hades",
+                "Hollow Knight",
+                "Metroid Fusion",
+                "Ori",
+                "Pokemon Emerald",
+                "Portal",
+                "Witcher"
+            ],
+            "emulator folders, the app's own .exe and containers are never games"
+        );
+        let g = summary.games;
+        assert_eq!((g.added, g.routes_added, g.updated), (9, 0, 0));
+        // Pokemon and Metroid (mGBA), Crash (.chd: only DuckStation's PS1 has an emulator).
+        assert_eq!(g.roms_matched, 3);
+        // Tools (two programs), Wind Waker (.rvz: GameCube or Wii, both Dolphin), Server.lnk
+        // (arguments) and Empty (nothing usable).
+        assert_eq!(g.needs_review, 4, "{:#?}", open_items(&f));
+        let kinds: HashSet<String> = open_items(&f).into_iter().map(|i| i.kind).collect();
+        for kind in [AMBIGUOUS_EXE, UNCERTAIN_ROM, SHORTCUT, UNSUPPORTED] {
+            assert!(kinds.contains(kind), "{kind}");
+        }
+        assert!(summary
+            .unsupported_samples
+            .iter()
+            .any(|s| s.contains("App.exe") && s.contains("own folder")));
+        // Every route: the ordinary local or ROM route, labelled with the launcher and owned by
+        // the root.
+        for game in f.games() {
+            let route = &game.routes[0];
+            assert_eq!(route.launcher_id.as_deref(), Some("app"), "{}", game.title);
+            assert!(route.source_id == LOCAL_SOURCE || route.source_id == ROM_SOURCE);
+            assert_eq!(
+                route
+                    .install_states
+                    .as_ref()
+                    .unwrap()
+                    .get(&db::root_state_key(&root.id)),
+                Some(&true)
+            );
+            assert_eq!(route.emulator_id, None, "scans never choose an emulator");
+        }
+        assert_eq!(
+            f.game("Crash Bandicoot").routes[0].system.as_deref(),
+            Some("ps1")
+        );
+        assert!(f.game("Hades").routes[0]
+            .launch_target
+            .ends_with(r"x64\Hades.exe"));
+        assert!(f.game("Witcher").routes[0]
+            .launch_target
+            .ends_with(r"bin\x64\witcher3.exe"));
+        assert_eq!(
+            f.game("Portal").routes[0].launch_target,
+            "steam://rungameid/400"
+        );
+        let profiles = db::emulator_profiles(&f.db.lock()).unwrap();
+        for p in &profiles {
+            // Discovered profiles use the catalog's checked default arguments.
+            let known = catalog::known_emulator(p.detected_as.as_deref().unwrap()).unwrap();
+            assert_eq!(p.args, known.default_args);
+            crate::launch::check_template(&p.args, &p.executable).unwrap();
+        }
+
+        // The uncertain ROM: the user picks Dolphin (one of the listed emulators only).
+        let uncertain = item(&f, UNCERTAIN_ROM);
+        assert_eq!(uncertain.details["emulators"].as_array().unwrap().len(), 1);
+        let dolphin = profiles.iter().find(|p| p.name == "Dolphin").unwrap();
+        let other = profiles.iter().find(|p| p.name == "mGBA").unwrap();
+        assert!(resolve(
+            &f.db,
+            &uncertain.id,
+            &Resolution::ChooseEmulator {
+                emulator_id: other.id.clone()
+            }
+        )
+        .is_err());
+        resolve(
+            &f.db,
+            &uncertain.id,
+            &Resolution::ChooseEmulator {
+                emulator_id: dolphin.id.clone(),
+            },
+        )
+        .unwrap();
+        let waker = f.game("Wind Waker").routes[0].clone();
+        assert_eq!(waker.emulator_id.as_deref(), Some(dolphin.id.as_str()));
+        assert_eq!(waker.system.as_deref(), Some("gc"));
+        assert_eq!(waker.launcher_id.as_deref(), Some("app"));
+        // The ambiguous folder: choosing among the listed candidates only.
+        let tools = item(&f, AMBIGUOUS_EXE);
+        assert!(resolve(
+            &f.db,
+            &tools.id,
+            &Resolution::ChooseExe {
+                executable: r"C:\Windows\System32\cmd.exe".into()
+            }
+        )
+        .is_err());
+        let red = tools.details["candidates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(Value::as_str)
+            .find(|c| c.ends_with("red.exe"))
+            .unwrap()
+            .to_string();
+        resolve(&f.db, &tools.id, &Resolution::ChooseExe { executable: red }).unwrap();
+        let tools_game = f.game("Tools").routes[0].clone();
+        assert_eq!(
+            (
+                tools_game.source_id.as_str(),
+                tools_game.launcher_id.as_deref()
+            ),
+            (LOCAL_SOURCE, Some("app"))
+        );
+
+        // Rescan: nothing new, nothing duplicated (games, routes, emulators, review items).
+        let again = f.scan();
+        let g = again.games;
+        assert_eq!(
+            (g.added, g.routes_added, g.updated, g.removed_or_uninstalled),
+            (0, 0, 0, 0)
+        );
+        assert_eq!((again.emulators.added, again.emulators.updated), (0, 0));
+        assert_eq!(db::emulator_profiles(&f.db.lock()).unwrap().len(), 3);
+        assert_eq!(f.games().len(), 11);
+        assert_eq!(
+            f.game("Wind Waker").routes.len(),
+            1,
+            "the chosen emulator is kept"
+        );
+        assert_eq!(
+            f.game("Wind Waker").routes[0].emulator_id.as_deref(),
+            Some(dolphin.id.as_str())
+        );
+        assert_eq!(
+            again.games.needs_review, 2,
+            "Server.lnk and Empty are still open"
+        );
+    }
+
+    #[test]
+    fn a_launcher_with_a_program_gets_launcher_routes_for_every_find() {
+        let f = Fixture::new("launcher-program");
+        app_folder(&f);
+        let exe = f.dir.path().join("App/App.exe");
+        let l = save_launcher(&f, Some(&exe), &["file"]);
+        let root = launcher_root(&f, &l, "App");
+        let summary = f.scan();
+        assert_eq!(summary.emulators.added, 3);
+        let g = summary.games;
+        // 6 PC games + Server.lnk + 4 ROMs (Wind Waker too: the launcher decides how to run it).
+        assert_eq!(g.added, 11, "{:?}", titles(&f));
+        assert_eq!(g.needs_review, 2, "Tools (pick the file) and Empty");
+        for game in f.games() {
+            let route = &game.routes[0];
+            assert_eq!(route.source_id, "launcher:prog", "{}", game.title);
+            assert_eq!(route.launcher_id, None);
+            assert!(
+                Path::new(&route.launch_target).is_file(),
+                "{}",
+                route.launch_target
+            );
+            assert!(route
+                .install_states
+                .as_ref()
+                .unwrap()
+                .contains_key(&db::root_state_key(&root.id)));
+            // Exactly what a launch checks and runs.
+            let launch = launchers::prepare_launch(&l, route).unwrap();
+            assert_eq!(launch.argv, ["--start", route.launch_target.as_str()]);
+            assert_eq!(launch.program, exe);
+        }
+        // The shortcut is only a file given to the launcher: no confirmation, never run itself.
+        assert!(f.game("Server").routes[0]
+            .launch_target
+            .ends_with("Server.lnk"));
+        assert!(f.game("Portal").routes[0]
+            .launch_target
+            .ends_with("Portal.url"));
+        assert!(
+            !titles(&f).contains(&"App".to_string()),
+            "the launcher's own program"
+        );
+        let tools = item(&f, AMBIGUOUS_EXE);
+        let blue = tools.details["candidates"][0].as_str().unwrap().to_string();
+        resolve(
+            &f.db,
+            &tools.id,
+            &Resolution::ChooseExe {
+                executable: blue.clone(),
+            },
+        )
+        .unwrap();
+        let route = f.game("Tools").routes[0].clone();
+        assert_eq!(
+            (route.source_id.as_str(), route.launch_target.as_str()),
+            ("launcher:prog", blue.as_str())
+        );
+        assert_eq!(f.scan().games.added, 0, "idempotent");
+
+        // A launcher that takes folders gets each game's folder instead (and no executable
+        // has to be picked).
+        let f = Fixture::new("launcher-folders");
+        app_folder(&f);
+        let l = save_launcher(&f, Some(&exe), &["folder"]);
+        launcher_root(&f, &l, "App");
+        let summary = f.scan();
+        assert!(f.game("Tools").routes[0].launch_target.ends_with("Tools"));
+        assert!(f.game("Celeste").routes[0]
+            .launch_target
+            .ends_with("Celeste"));
+        // Loose ROMs and shortcuts have no folder of their own: reported, not guessed.
+        assert!(f
+            .games()
+            .iter()
+            .all(|g| Path::new(&g.routes[0].launch_target).is_dir()));
+        assert!(summary.games.skipped > 0);
+        assert!(open_items(&f).iter().all(|i| i.kind != AMBIGUOUS_EXE));
+    }
+
+    #[test]
+    fn existing_games_get_another_route_and_keep_their_data() {
+        let f = Fixture::new("launcher-existing");
+        app_folder(&f);
+        // A Steam game with the same title, and a game added by hand from the same .exe.
+        let steam = Game {
+            id: "steam:504230".into(),
+            title: "Celeste".into(),
+            store: "Steam".into(),
+            routes: vec![GameRoute {
+                source_id: "steam".into(),
+                store: "Steam".into(),
+                app_id: Some("504230".into()),
+                launch_target: "steam://rungameid/504230".into(),
+                installed: Some(true),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let hades_exe = f.dir.path().join("App/Hades/x64/Hades.exe");
+        let LocalFile::Game(hades) = game_for_file(&hades_exe, &HashMap::new()).unwrap() else {
+            panic!("an .exe is a game");
+        };
+        {
+            let mut conn = f.db.lock();
+            db::upsert_imported_games(&mut conn, &[steam.clone(), hades.clone()]).unwrap();
+            db::save_game(
+                &conn,
+                &GamePatch {
+                    title: Some("Celeste (my copy)".into()),
+                    favorite: Some(true),
+                    hidden: Some(true),
+                    cover: Some("lobby-cover://c.png".into()),
+                    playtime_seconds: Some(7_200),
+                    ..GamePatch::new("steam:504230")
+                },
+            )
+            .unwrap();
+            crate::notes::set_notes(&conn, "steam:504230", "my notes").unwrap();
+        }
+        let before = db::get_game(&f.db.lock(), "steam:504230").unwrap().unwrap();
+        let l = save_launcher(&f, None, &["file"]);
+        let root = launcher_root(&f, &l, "App");
+        let summary = f.scan();
+        // Celeste: the same clean title ("Celeste (my copy)" → "celeste"); Hades: the same file.
+        assert_eq!(summary.games.routes_added, 2);
+        assert_eq!(summary.games.added, 7);
+        let hades_now = f.game("Hades");
+        assert_eq!(hades_now.id, hades.id);
+        assert_eq!(hades_now.routes.len(), 2);
+        assert_eq!(hades_now.routes[0], hades.routes[0]);
+        assert_eq!(hades_now.routes[1].launcher_id.as_deref(), Some("app"));
+        let celeste = db::get_game(&f.db.lock(), "steam:504230").unwrap().unwrap();
+        assert_eq!(celeste.routes.len(), 2);
+        assert_eq!(celeste.routes[0], before.routes[0]);
+        assert_eq!(celeste.routes[1].launcher_id.as_deref(), Some("app"));
+        assert!(celeste.routes[1].launch_target.ends_with("Celeste.exe"));
+        // Only the route was added: the user's title, cover, favourite, hidden flag, playtime
+        // and notes are untouched.
+        assert_eq!(
+            Game {
+                routes: before.routes.clone(),
+                ..celeste.clone()
+            },
+            before
+        );
+        assert_eq!(
+            (
+                celeste.title.as_str(),
+                celeste.cover.as_deref(),
+                celeste.favorite,
+                celeste.hidden
+            ),
+            ("Celeste (my copy)", Some("lobby-cover://c.png"), true, true)
+        );
+        assert_eq!(celeste.playtime_seconds, Some(7_200));
+        assert_eq!(
+            crate::notes::load(&f.db.lock(), "steam:504230")
+                .unwrap()
+                .notes,
+            "my notes"
+        );
+        assert!(
+            !titles(&f).contains(&"Celeste".to_string()),
+            "not duplicated"
+        );
+
+        // Rescans are idempotent; a vanished file is marked not installed (the game has data).
+        assert_eq!(
+            f.scan().games,
+            GameCounts {
+                needs_review: 4,
+                roms_matched: 3,
+                skipped: summary.games.skipped,
+                ..Default::default()
+            }
+        );
+        std::fs::remove_file(f.dir.path().join("App/Celeste/Celeste.exe")).unwrap();
+        let summary = f.scan();
+        assert_eq!(summary.games.removed_or_uninstalled, 1);
+        let celeste = db::get_game(&f.db.lock(), "steam:504230").unwrap().unwrap();
+        assert_eq!(celeste.routes[1].installed, Some(false));
+        assert_eq!(
+            celeste.routes[0], before.routes[0],
+            "the Steam route is untouched"
+        );
+
+        // Removing the folder, keeping its games: the routes stay, no longer owned by it.
+        let keep = Fixture::new("launcher-remove-keep");
+        app_folder(&keep);
+        let l = save_launcher(&keep, None, &["file"]);
+        let r = launcher_root(&keep, &l, "App");
+        keep.scan();
+        let count = keep.games().len();
+        remove_launcher_root(&mut keep.db.lock(), &r.id, launchers::RemoveMode::KeepGames).unwrap();
+        assert_eq!(keep.games().len(), count);
+        assert!(keep.games().iter().all(|g| g.routes[0]
+            .install_states
+            .as_ref()
+            .is_none_or(|s| !s.contains_key(&db::root_state_key(&r.id)))
+            && g.routes[0].launcher_id.as_deref() == Some("app")));
+        assert!(crate::roots::list(&keep.db.lock()).unwrap().is_empty());
+        assert!(open_items(&keep).is_empty());
+
+        // Removing it with its games: only routes it found go (and games left without any).
+        remove_launcher_root(
+            &mut f.db.lock(),
+            &root.id,
+            launchers::RemoveMode::RemoveGames,
+        )
+        .unwrap();
+        let celeste = db::get_game(&f.db.lock(), "steam:504230").unwrap().unwrap();
+        assert_eq!(celeste.routes, before.routes[..1]);
+        let hades_now = f.game("Hades");
+        assert_eq!(hades_now.routes, hades.routes, "the hand-added route stays");
+        assert_eq!(titles(&f), ["Celeste (my copy)", "Hades"]);
+    }
+
+    #[test]
+    fn deleting_a_label_only_launcher_handles_its_folders_and_labels() {
+        for mode in [
+            launchers::RemoveMode::KeepGames,
+            launchers::RemoveMode::RemoveGames,
+        ] {
+            let f = Fixture::new("launcher-delete");
+            app_folder(&f);
+            let l = save_launcher(&f, None, &["file"]);
+            let root = launcher_root(&f, &l, "App");
+            f.scan();
+            let count = f.games().len();
+            assert_eq!(
+                launchers::games_of(&f.db.lock(), "app").unwrap().len(),
+                count
+            );
+            launchers::remove(&f.db.lock(), "app", mode)
+                .unwrap()
+                .unwrap();
+            assert!(crate::roots::list(&f.db.lock()).unwrap().is_empty());
+            assert!(open_items(&f)
+                .iter()
+                .all(|i| i.root_id.as_deref() != Some(root.id.as_str())));
+            match mode {
+                launchers::RemoveMode::KeepGames => {
+                    assert_eq!(f.games().len(), count);
+                    for game in f.games() {
+                        let route = &game.routes[0];
+                        assert_eq!(route.launcher_id, None);
+                        assert!(route.install_states.as_ref().unwrap().is_empty());
+                        assert_eq!(route.installed, Some(true));
+                    }
+                }
+                launchers::RemoveMode::RemoveGames => assert!(f.games().is_empty()),
+            }
+        }
+    }
+
+    #[test]
+    fn emulators_in_downloads_are_not_discovered_from_an_app_folder() {
+        let f = Fixture::new("launcher-guard");
+        app_folder(&f);
+        let l = save_launcher(&f, None, &["file"]);
+        launcher_root(&f, &l, "App");
+        let guard = RootGuard {
+            emulator_trees: vec![normalize_path(&f.dir.path().to_string_lossy()).unwrap()],
+            ..Default::default()
+        };
+        let roots = crate::roots::list(&f.db.lock()).unwrap();
+        let summary = scan_roots_with(&f.db, &roots, false, &guard, &mut |_| {}).unwrap();
+        assert_eq!(summary.emulators.added, 0);
+        assert!(summary.roots[0]
+            .warning
+            .as_deref()
+            .unwrap()
+            .contains("Downloads"));
+        // Their folders are still never games.
+        assert!(!titles(&f)
+            .iter()
+            .any(|t| t == "Dolphin" || t == "Emulators"));
+    }
+
+    #[test]
+    fn the_scan_never_starts_a_process() {
+        // The scan, its walks and their review resolutions never start, open or shell-execute
+        // anything (structural, like `launch_dispatch_never_uses_a_shell`).
+        for (name, source) in [
+            ("local.rs", include_str!("local.rs")),
+            ("localscan.rs", include_str!("localscan.rs")),
+            ("emulators.rs", include_str!("emulators.rs")),
+            ("roots.rs", include_str!("roots.rs")),
+            ("review.rs", include_str!("review.rs")),
+        ] {
+            let code = &source[..source.find("mod tests {").unwrap_or(source.len())];
+            for forbidden in [
+                "Command::new",
+                "spawn_detached",
+                "shell_open",
+                "ShellExecute",
+                "CreateProcess",
+                "launch_game",
+                "open_path",
+                "opener",
+            ] {
+                assert!(!code.contains(forbidden), "{name} uses {forbidden}");
+            }
+        }
     }
 
     #[test]

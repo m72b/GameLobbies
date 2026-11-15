@@ -33,6 +33,7 @@ const ROUTE_KEYS: &[&str] = &[
     "lastPlayed",
     "emulatorId",
     "system",
+    "launcherId",
 ];
 const GAME_KEYS: &[&str] = &[
     "id",
@@ -120,6 +121,7 @@ const LAUNCHER_KEYS: &[&str] = &[
     "executable",
     "argsTemplate",
     "targetKind",
+    "targetKinds",
     "workingDir",
     "sortOrder",
     "createdAt",
@@ -248,6 +250,12 @@ fn route(value: &Value) -> Result<GameRoute> {
             bail!("A custom launcher route is invalid.");
         }
     }
+    // A launcher label: a launcher id in shape (whether it exists only changes the label).
+    if let Some(id) = r.launcher_id.as_deref() {
+        if !id.is_empty() && crate::launchers::check_id(id).ok().as_deref() != Some(id) {
+            bail!("A launch route's launcher label is invalid.");
+        }
+    }
     max_len(&r.launch_args, 8_192, "Launch arguments")?;
     max_len(&r.install_path, 8_192, "Install path")?;
     if r.install_states
@@ -272,9 +280,10 @@ fn routes(value: Option<&Value>) -> Result<Option<Vec<GameRoute>>> {
     list.iter().map(route).collect::<Result<_>>().map(Some)
 }
 
-/// The fields of a route that decide what a launch runs (or which file or folder it touches).
-/// Empty text counts as absent, like it does at launch.
-fn launch_identity(r: &GameRoute) -> [Option<&str>; 7] {
+/// The fields of a route that decide what a launch runs (or which file or folder it touches),
+/// plus its launcher label (`launcherId`): only Rust sets it, so the renderer can't put a
+/// launcher's name on another route either. Empty text counts as absent, like it does at launch.
+fn launch_identity(r: &GameRoute) -> [Option<&str>; 8] {
     fn text(v: &Option<String>) -> Option<&str> {
         v.as_deref().filter(|s| !s.is_empty())
     }
@@ -286,6 +295,7 @@ fn launch_identity(r: &GameRoute) -> [Option<&str>; 7] {
         text(&r.install_path),
         text(&r.emulator_id),
         text(&r.system),
+        text(&r.launcher_id),
     ]
 }
 
@@ -307,6 +317,7 @@ fn is_renderer_uri_route(stored: &[GameRoute], r: &GameRoute) -> bool {
         && !crate::launchers::is_launcher_route(r)
         && r.emulator_id.as_deref().is_none_or(str::is_empty)
         && r.system.as_deref().is_none_or(str::is_empty)
+        && r.launcher_id.as_deref().is_none_or(str::is_empty)
         && r.launch_args.as_deref().is_none_or(str::is_empty)
         && folder_ok
         && crate::launch::validate_launch_uri(&r.launch_target)
@@ -1018,6 +1029,56 @@ mod tests {
         edit(&mut game);
         let patch = game_patch(&game)?;
         check_renderer_routes(stored, patch.routes.as_deref().unwrap_or_default())
+    }
+
+    #[test]
+    fn the_renderer_cannot_add_or_change_launcher_labels() {
+        let mut labelled = exe_route();
+        labelled.launcher_id = Some("app".into());
+        let stored = vec![exe_route(), labelled.clone(), rom_route()];
+        // Sent back unchanged (also its label), or with non-launch edits: fine.
+        assert!(renderer_save(&stored, |g| g["routes"][1]["installed"] = json!(false)).is_ok());
+        // A label added to a route, changed, or put on a ROM route: refused. (Every route must
+        // equal a stored one, so a copy of the stored labelled route is the most it can send.)
+        let unlabelled = vec![exe_route(), rom_route()];
+        assert!(
+            renderer_save(&unlabelled, |g| g["routes"][0]["launcherId"] = json!("app")).is_err()
+        );
+        assert!(renderer_save(&stored, |g| g["routes"][1]["launcherId"] = json!("other")).is_err());
+        assert!(renderer_save(&stored, |g| g["routes"][2]["launcherId"] = json!("app")).is_err());
+        // Removing a label is a change too (it came from a scan).
+        let only_labelled = vec![labelled.clone()];
+        assert!(renderer_save(&only_labelled, |g| {
+            g["routes"][0].as_object_mut().unwrap().remove("launcherId");
+        })
+        .is_err());
+        // A store link the renderer may add can't carry one either.
+        assert!(renderer_save(&stored, |g| {
+            g["routes"].as_array_mut().unwrap().push(json!({
+                "sourceId": "manual", "store": "Steam", "launchTarget": "steam://rungameid/400",
+                "launcherId": "app"
+            }));
+        })
+        .is_err());
+        assert!(renderer_save(&stored, |g| {
+            g["routes"].as_array_mut().unwrap().push(json!({
+                "sourceId": "manual", "store": "Steam", "launchTarget": "steam://rungameid/400"
+            }));
+        })
+        .is_ok());
+        // Nor a path: a label-shaped launcher route or a new local route with a label.
+        assert!(renderer_save(&stored, |g| {
+            g["routes"].as_array_mut().unwrap().push(json!({
+                "sourceId": "local", "store": "Custom", "launchTarget": r"C:\Windows\System32\cmd.exe",
+                "launcherId": "app"
+            }));
+        })
+        .is_err());
+        // Labels must look like launcher ids.
+        assert!(game_patch(&json!({ "id": "x", "routes": [{
+            "sourceId": "local", "store": "Custom", "launchTarget": "x", "launcherId": "../x"
+        }] }))
+        .is_err());
     }
 
     #[test]

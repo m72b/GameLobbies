@@ -27,6 +27,9 @@ pub enum PickKind {
     LauncherExecutable,
     /// `launchers_browse_folder`: a custom launcher's working folder.
     LauncherFolder,
+    /// `launchers_browse_games_folder`: a custom launcher's games folder (a scanned `games`
+    /// root). Never a working folder or a plain library folder, nor the other way round.
+    LauncherGamesFolder,
 }
 
 impl PickKind {
@@ -190,6 +193,30 @@ mod tests {
         picks.remember(PickKind::LauncherFolder, r"D:\Mods");
         picks.forget(PickKind::LauncherFolder, r"D:\Mods");
         assert_eq!(picks.latest(PickKind::LauncherFolder), None);
+    }
+
+    #[test]
+    fn launcher_games_folder_picks_are_their_own_kind() {
+        let picks = PickedPaths::default();
+        picks.remember(PickKind::LauncherGamesFolder, r"D:\Arcade");
+        assert!(picks
+            .find(PickKind::LauncherGamesFolder, r"d:\arcade")
+            .is_some());
+        // Never a library folder, a working folder or an executable.
+        for other in [
+            PickKind::GamesFolder,
+            PickKind::EmulatorsFolder,
+            PickKind::LauncherFolder,
+            PickKind::LauncherExecutable,
+            PickKind::EmulatorExecutable,
+        ] {
+            assert!(picks.find(other, r"D:\Arcade").is_none(), "{other:?}");
+        }
+        // And the other way round.
+        picks.remember(PickKind::LauncherFolder, r"D:\Mods");
+        assert!(picks
+            .find(PickKind::LauncherGamesFolder, r"D:\Mods")
+            .is_none());
     }
 
     #[test]

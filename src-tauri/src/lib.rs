@@ -268,6 +268,8 @@ pub fn run() {
             launcher_commands::launchers_remove,
             launcher_commands::launchers_browse_executable,
             launcher_commands::launchers_browse_folder,
+            launcher_commands::launchers_browse_games_folder,
+            launcher_commands::launchers_add_folder,
             launcher_commands::launchers_choose_icon,
             launcher_commands::launchers_add_game,
             commands::plugins_list,

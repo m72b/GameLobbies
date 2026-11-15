@@ -22,6 +22,9 @@ pub const UNREADABLE: &str = "unreadable";
 /// A `.lnk` with arguments (or a target that isn't a plain `.exe`): shown with its target
 /// and arguments, added only once the user confirms exactly those.
 pub const SHORTCUT: &str = "shortcut";
+/// A ROM in a launcher's games folder whose extension several systems share, and no single
+/// emulator runs: the user picks the emulator from the profiles listed.
+pub const UNCERTAIN_ROM: &str = "uncertain-rom";
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -135,6 +138,15 @@ pub fn resolve(conn: &Connection, id: &str, resolution: &str) -> Result<()> {
         params![resolution, now_ms(), id],
     )?;
     Ok(())
+}
+
+/// Open items of one root.
+pub fn open_count_for_root(conn: &Connection, root_id: &str) -> Result<usize> {
+    Ok(conn.query_row(
+        "SELECT COUNT(*) FROM scan_review WHERE status='open' AND rootId=?",
+        [root_id],
+        |r| r.get::<_, i64>(0),
+    )? as usize)
 }
 
 pub fn open_count(conn: &Connection) -> Result<usize> {
