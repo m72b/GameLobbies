@@ -58,6 +58,8 @@ Game Lobby is **my first Rust project**. It started as an Electron app and was r
 
 Windows 10 and 11 already include the WebView2 runtime that Game Lobby uses.
 
+**Updating:** use **Settings → About and Updates** inside the app; it installs over the old version and keeps your library. If you run a newer installer by hand instead, your library is also kept, as long as you leave **Also delete my library and settings** unticked.
+
 The installer is not yet signed with a code-signing certificate, so Windows SmartScreen may show a warning the first time. Choose **More info → Run anyway** if you trust the download. App updates are signed separately and verified by the app before they install.
 
 ## Getting started
