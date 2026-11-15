@@ -761,6 +761,19 @@ mod tests {
         assert!(known_emulator("retroarch").unwrap().needs_configuration);
     }
 
+    /// Discovered profiles (emulator roots and launcher games folders) are saved with these
+    /// defaults without asking: each must pass the same checks a template the user typed does.
+    #[test]
+    fn every_default_template_passes_the_template_checks() {
+        for e in EMULATORS {
+            let exe = format!(r"D:\Emulators\{}\{}", e.name, e.executables[0]);
+            crate::launch::check_template(e.default_args, &exe)
+                .unwrap_or_else(|err| panic!("{}: {err:#}", e.id));
+            crate::launch::check_no_debugging_options(e.default_args, "emulator")
+                .unwrap_or_else(|err| panic!("{}: {err:#}", e.id));
+        }
+    }
+
     #[test]
     fn executables_map_to_known_emulators() {
         let id = |name: &str| emulator_for_executable(name).map(|e| e.id);
