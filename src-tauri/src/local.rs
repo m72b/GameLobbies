@@ -33,8 +33,9 @@
 //!   shortcuts and ROMs are found by the mixed walk (`localscan::ScanInputs::mixed`).
 //! - A launcher with a program: every game gets a route `launcher:<id>` whose target is the
 //!   discovered file (or, when the launcher takes folders only, the game folder), run through the
-//!   launcher's own checked argv like a game added by hand. Shortcuts are only files passed to the
-//!   launcher there, so they need no confirmation.
+//!   launcher's own checked argv like a game added by hand. A shortcut with arguments (or a target
+//!   that isn't a plain `.exe`) still waits for the user's confirmation under Review, exactly as in
+//!   label-only folders, and is checked again at every launch (`launch::check_launcher_shortcut`).
 //! - A launcher without a program (label only): PC games and ROMs get the ordinary local and ROM
 //!   routes above (same trust: discovered under a folder picked natively), with `launcherId` as
 //!   their label. Shortcuts with arguments still wait for confirmation. A ROM whose extension
@@ -503,14 +504,17 @@ pub fn apply_root_scan(
             for pc in &scan.pcs {
                 add(&pc.title, &pc.file, pc.folder.as_deref());
             }
-            // Only a file handed to the launcher: no confirmation of what the shortcut runs.
-            for item in &scan.shortcuts {
-                add(&item.title, &item.shortcut, item.folder.as_deref());
-            }
             // A launcher that takes folders doesn't need the executable picked.
             if !l.allows(TargetKind::File) {
                 for item in &scan.ambiguous {
                     add(&item.title, &item.folder, Some(&item.folder));
+                }
+            }
+            // Shortcuts awaiting confirmation become review items below, in both modes, unless
+            // the launcher can't be given them at all.
+            for item in &scan.shortcuts {
+                if launcher_target(l, &item.shortcut, item.folder.as_deref()).is_none() {
+                    skipped_by_launcher.push(item.shortcut.to_string_lossy().into_owned());
                 }
             }
         }
@@ -597,8 +601,15 @@ pub fn apply_root_scan(
         found.insert(pending_identity(&item.folder));
     }
     for item in &scan.shortcuts {
-        let source = item.folder.as_deref().unwrap_or(&item.shortcut);
-        found.insert(pending_identity(source));
+        // The route a confirmation creates: the shortcut file (or its folder) for a launcher with
+        // a program, the game folder or shortcut otherwise.
+        let source = match mode.program() {
+            Some(l) => launcher_target(l, &item.shortcut, item.folder.as_deref())
+                .map(|(target, _)| target)
+                .unwrap_or_else(|| item.shortcut.clone()),
+            None => item.folder.clone().unwrap_or_else(|| item.shortcut.clone()),
+        };
+        found.insert(pending_identity(&source));
     }
     for rom in &uncertain_open {
         found.insert(format!("{ROM_SOURCE}:{}", key_of(&rom.path)));
@@ -712,8 +723,11 @@ pub fn apply_root_scan(
     for item in scan
         .shortcuts
         .iter()
-        // A launcher with a program is only given the shortcut file (added above).
-        .filter(|_| mode.program().is_none())
+        .filter(|item| {
+            mode.program().is_none_or(|l| {
+                launcher_target(l, &item.shortcut, item.folder.as_deref()).is_some()
+            })
+        })
         .take(MAX_REVIEW_PER_KIND)
     {
         let key = format!("{SHORTCUT}:{}", key_of(&item.shortcut));
@@ -769,6 +783,41 @@ fn shortcut_details(item: &localscan::PendingShortcut, root_id: Option<&str>) ->
         "folder": item.folder.as_ref().map(|f| f.to_string_lossy().into_owned()),
         "rootId": root_id,
     })
+}
+
+/// A file picked as a launcher game (`launchers_add_game`): a `.lnk` that needs the user's
+/// confirmation of its target and arguments first (`Some`); `None` for any other file, a plain
+/// `.exe` shortcut, a store-link `.url` or a confirmed shortcut. Unusable shortcuts are refused.
+/// Reads shortcuts (COM): off the async threads.
+pub fn launcher_shortcut_pending(
+    path: &Path,
+    confirmations: &HashMap<String, (String, String)>,
+) -> Result<Option<localscan::PendingShortcut>> {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    if !matches!(
+        catalog::extension_of(&name).as_deref(),
+        Some(".lnk") | Some(".url")
+    ) {
+        return Ok(None);
+    }
+    match classify_shortcut(path, confirmations) {
+        ShortcutKind::Exe(_) | ShortcutKind::Uri(_) | ShortcutKind::Confirmed => Ok(None),
+        ShortcutKind::NeedsConfirmation { target, arguments } => {
+            let stem = name.rsplit_once('.').map_or(name.as_str(), |(s, _)| s);
+            Ok(Some(localscan::PendingShortcut {
+                shortcut: path.to_path_buf(),
+                folder: None,
+                title: catalog::clean_title(stem),
+                target,
+                arguments,
+            }))
+        }
+        ShortcutKind::Invalid(reason) => bail!("{reason}"),
+        ShortcutKind::Unreadable => bail!("That shortcut can't be read."),
+    }
 }
 
 /// Stores a shortcut awaiting confirmation (`library.addLocalGame` of a `.lnk`).
@@ -1630,23 +1679,36 @@ fn apply(
             let folder = text("folder").map(PathBuf::from);
             let source = folder.clone().unwrap_or_else(|| PathBuf::from(&shortcut));
             let title = text("title").unwrap_or_else(|| "Untitled".into());
-            // Shortcut items only come from library folders and label-only launchers (a
-            // launcher with a program is given the shortcut file instead).
-            let launcher = item_launcher(conn, item)?.filter(launchers::is_label_only);
-            let game = new_game(
-                "local",
-                &title,
-                "Custom",
-                labelled(
-                    pc_route(
-                        item.root_id.as_deref(),
-                        folder.as_deref(),
-                        &source,
-                        &shortcut,
+            let launcher = item_launcher(conn, item)?;
+            let game = match launcher.as_ref().filter(|l| !launchers::is_label_only(l)) {
+                // A launcher with a program is given the confirmed shortcut file (or its
+                // folder), like its scan does; the launch checks the shortcut again.
+                Some(l) => {
+                    let (target, kind) =
+                        launcher_target(l, Path::new(&shortcut), folder.as_deref())
+                            .ok_or_else(|| anyhow!("{} doesn't take files or folders.", l.name))?;
+                    new_game(
+                        "custom",
+                        &title,
+                        "Custom",
+                        launcher_route(l, item.root_id.as_deref(), &target, kind),
+                    )
+                }
+                None => new_game(
+                    "local",
+                    &title,
+                    "Custom",
+                    labelled(
+                        pc_route(
+                            item.root_id.as_deref(),
+                            folder.as_deref(),
+                            &source,
+                            &shortcut,
+                        ),
+                        launcher.as_ref().map(|l| &l.id),
                     ),
-                    launcher.as_ref().map(|l| &l.id),
                 ),
-            );
+            };
             add_resolved_game(conn, game, launcher.is_some())?;
             "shortcut-confirmed"
         }
@@ -2968,9 +3030,14 @@ mod tests {
         let summary = f.scan();
         assert_eq!(summary.emulators.added, 3);
         let g = summary.games;
-        // 6 PC games + Server.lnk + 4 ROMs (Wind Waker too: the launcher decides how to run it).
-        assert_eq!(g.added, 11, "{:?}", titles(&f));
-        assert_eq!(g.needs_review, 2, "Tools (pick the file) and Empty");
+        // 6 PC games + 4 ROMs (Wind Waker too: the launcher decides how to run it). Server.lnk
+        // has arguments: it waits for confirmation like everywhere else.
+        assert_eq!(g.added, 10, "{:?}", titles(&f));
+        assert_eq!(
+            g.needs_review, 3,
+            "Tools (pick the file), Server.lnk (confirm) and Empty"
+        );
+        assert!(!titles(&f).contains(&"Server".to_string()));
         for game in f.games() {
             let route = &game.routes[0];
             assert_eq!(route.source_id, "launcher:prog", "{}", game.title);
@@ -2990,13 +3057,46 @@ mod tests {
             assert_eq!(launch.argv, ["--start", route.launch_target.as_str()]);
             assert_eq!(launch.program, exe);
         }
-        // The shortcut is only a file given to the launcher: no confirmation, never run itself.
-        assert!(f.game("Server").routes[0]
-            .launch_target
-            .ends_with("Server.lnk"));
-        assert!(f.game("Portal").routes[0]
-            .launch_target
-            .ends_with("Portal.url"));
+        // A store-link .url is a file the launcher may be given as it is (checked at launch).
+        let portal = f.game("Portal").routes[0].clone();
+        assert!(portal.launch_target.ends_with("Portal.url"));
+        crate::launch::check_launcher_shortcut(&portal.launch_target, &HashMap::new()).unwrap();
+        // Confirming the shortcut gives a launcher route with the shortcut file.
+        let pending = item(&f, SHORTCUT);
+        let lnk = pending.details["shortcut"].as_str().unwrap().to_string();
+        // Unconfirmed, a launch refuses it.
+        assert!(crate::launch::check_launcher_shortcut(&lnk, &HashMap::new()).is_err());
+        resolve(&f.db, &pending.id, &Resolution::ConfirmShortcut).unwrap();
+        let server = f.game("Server").routes[0].clone();
+        assert_eq!(
+            (server.source_id.as_str(), server.launch_target.as_str()),
+            ("launcher:prog", lnk.as_str())
+        );
+        assert!(server
+            .install_states
+            .as_ref()
+            .unwrap()
+            .contains_key(&db::root_state_key(&root.id)));
+        let confirmed = db::shortcut_confirmations(&f.db.lock()).unwrap();
+        crate::launch::check_launcher_shortcut(&lnk, &confirmed).unwrap();
+        // Changed after the confirmation: refused at launch.
+        let red = f.dir.path().join("App/Tools/red.exe");
+        crate::platform::create_shortcut(Path::new(&lnk), &red.to_string_lossy(), "+exec evil.cfg")
+            .unwrap();
+        let err = crate::launch::check_launcher_shortcut(&lnk, &confirmed).unwrap_err();
+        assert!(err.to_string().contains("confirm"), "{err}");
+        crate::platform::create_shortcut(
+            Path::new(&lnk),
+            &red.to_string_lossy(),
+            "+connect 10.0.0.1",
+        )
+        .unwrap();
+        assert_eq!(
+            f.scan().games.added,
+            0,
+            "the confirmed shortcut is kept on rescan"
+        );
+        assert_eq!(f.game("Server").routes.len(), 1);
         assert!(
             !titles(&f).contains(&"App".to_string()),
             "the launcher's own program"
@@ -3036,6 +3136,52 @@ mod tests {
             .all(|g| Path::new(&g.routes[0].launch_target).is_dir()));
         assert!(summary.games.skipped > 0);
         assert!(open_items(&f).iter().all(|i| i.kind != AMBIGUOUS_EXE));
+    }
+
+    #[test]
+    fn a_hand_picked_shortcut_with_arguments_needs_confirmation() {
+        use crate::platform::create_shortcut;
+        let f = Fixture::new("launcher-hand-lnk");
+        let exe = f.dir.file("Launcher/Launcher.exe");
+        let tool = f.dir.file("Games/Tool/tool.exe");
+        let with_args = f.dir.path().join("Games/Server.lnk");
+        create_shortcut(&with_args, &tool.to_string_lossy(), "+connect 1.2.3.4").unwrap();
+        let plain = f.dir.path().join("Games/Plain.lnk");
+        create_shortcut(&plain, &tool.to_string_lossy(), "").unwrap();
+        let rom = f.dir.file("Games/x.gba");
+        let none = HashMap::new();
+        // Other files, plain .exe shortcuts and store links need nothing.
+        assert!(launcher_shortcut_pending(&rom, &none).unwrap().is_none());
+        assert!(launcher_shortcut_pending(&plain, &none).unwrap().is_none());
+        let bad_url = f.dir.write(
+            "Games/Site.url",
+            b"[InternetShortcut]\r\nURL=https://example.com/\r\n",
+        );
+        assert!(launcher_shortcut_pending(&bad_url, &none).is_err());
+        let pending = launcher_shortcut_pending(&with_args, &none)
+            .unwrap()
+            .unwrap();
+        assert_eq!(pending.arguments, "+connect 1.2.3.4");
+        // As `launchers_add_game` does: a review item naming the launcher, then the user confirms.
+        let l = save_launcher(&f, Some(&exe), &["file"]);
+        request_shortcut_confirmation_for(&f.db.lock(), &pending, Some(&l.id)).unwrap();
+        assert!(
+            f.games().is_empty(),
+            "nothing is added before the confirmation"
+        );
+        let item = item(&f, SHORTCUT);
+        resolve(&f.db, &item.id, &Resolution::ConfirmShortcut).unwrap();
+        let route = f.game("Server").routes[0].clone();
+        assert_eq!(route.source_id, "launcher:prog");
+        assert_eq!(route.launch_target, with_args.to_string_lossy());
+        assert_eq!(
+            route.install_states, None,
+            "picked by hand: no folder owns it"
+        );
+        let confirmed = db::shortcut_confirmations(&f.db.lock()).unwrap();
+        assert!(launcher_shortcut_pending(&with_args, &confirmed)
+            .unwrap()
+            .is_none());
     }
 
     #[test]

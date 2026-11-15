@@ -1873,6 +1873,12 @@ mod tests {
         let branch = &source[start..];
         let branch = &branch[..branch.find("if is_rom_route(route)").expect("next branch")];
         assert!(branch.contains("launchers::prepare_launch"));
+        // A shortcut given to the launcher is checked again before every launch, and before
+        // `prepare_launch` builds the argv.
+        let check = branch
+            .find("check_launcher_shortcut(&target, &confirmations)")
+            .expect("shortcut check");
+        assert!(check < branch.find("launchers::prepare_launch").unwrap());
         assert!(branch.contains("spawn_detached_in(&launch.program, &launch.argv"));
         assert!(branch.contains("return track_started_process"));
         for forbidden in [

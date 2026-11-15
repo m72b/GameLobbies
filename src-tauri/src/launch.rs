@@ -476,6 +476,32 @@ pub enum LocalLaunch {
     Uri(String),
 }
 
+/// Checks a custom launcher route's target right before launching (and when one is added by
+/// hand): a `.lnk` or `.url` file is passed to the launcher, which may well open it, so it must
+/// be one Game Lobby would start itself. That is a plain `.exe` shortcut without arguments, a
+/// `.url` with a valid store link, or a `.lnk` whose target and arguments are exactly what the
+/// user confirmed. Anything else (arguments nobody confirmed, a shortcut changed since, scripts,
+/// documents) is refused. Other targets pass (the launcher's own kind checks apply). Reads
+/// shortcuts (COM): call it off the async runtime threads.
+pub fn check_launcher_shortcut(
+    target: &str,
+    confirmations: &HashMap<String, (String, String)>,
+) -> Result<()> {
+    let lower = target.to_lowercase();
+    let path = Path::new(target);
+    if !(lower.ends_with(".lnk") || lower.ends_with(".url")) || path.is_dir() {
+        return Ok(());
+    }
+    match classify_shortcut(path, confirmations) {
+        ShortcutKind::Exe(_) | ShortcutKind::Uri(_) | ShortcutKind::Confirmed => Ok(()),
+        ShortcutKind::NeedsConfirmation { target, arguments } => bail!(
+            "This shortcut runs {target} {arguments}, which you haven't confirmed (or it changed since you did). Rescan the launcher's games folder, or add the game again, and confirm it under Review."
+        ),
+        ShortcutKind::Invalid(reason) => bail!("{reason}"),
+        ShortcutKind::Unreadable => bail!("The shortcut was not found or can't be read."),
+    }
+}
+
 /// Checks a `local` route's target right before launching: a store link must pass
 /// [`validate_launch_uri`]; an `.exe` must be an absolute existing file; a `.lnk` must
 /// still be a plain `.exe` shortcut (then that `.exe` is started) or match exactly what the
@@ -584,6 +610,12 @@ pub async fn launch_game(app: &AppHandle, game: &Game, route_index: usize) -> Re
         let launcher = launchers::get(&state.db.lock(), launcher_id)?.ok_or_else(|| {
             anyhow!("This game's launcher was deleted. Add the game again to another launcher.")
         })?;
+        // A shortcut handed to the launcher must still be one the user may run (confirmed,
+        // or a plain `.exe` / store link), however the route got there (scan, Add game, a
+        // health relocation). Read through COM, off the async threads.
+        let confirmations = db::shortcut_confirmations(&state.db.lock())?;
+        let target = route.launch_target.clone();
+        on_thread(move || check_launcher_shortcut(&target, &confirmations)).await??;
         // Touches the filesystem: the database lock is already released.
         let launch = launchers::prepare_launch(&launcher, route)?;
         let pid = spawn_detached_in(&launch.program, &launch.argv, Some(&launch.cwd))

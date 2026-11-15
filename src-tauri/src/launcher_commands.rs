@@ -393,6 +393,33 @@ pub async fn launchers_add_game(
                     "Choose a file or folder on a local drive (not a network folder).".into(),
                 );
             }
+            if kind == TargetKind::File {
+                // A shortcut with arguments waits for confirmation, as everywhere else.
+                let confirmed = db::shortcut_confirmations(&state.db.lock()).map_err(err)?;
+                let picked = path.clone();
+                let pending = crate::platform::on_thread(move || {
+                    local::launcher_shortcut_pending(&picked, &confirmed)
+                })
+                .await
+                .map_err(err)?
+                .map_err(err)?;
+                if let Some(mut pending) = pending {
+                    if !title.trim().is_empty() {
+                        pending.title = title.trim().to_string();
+                    }
+                    local::request_shortcut_confirmation_for(
+                        &state.db.lock(),
+                        &pending,
+                        Some(&launcher.id),
+                    )
+                    .map_err(err)?;
+                    let _ = app.emit("review:changed", ());
+                    return Err(format!(
+                        "This shortcut runs {} with the arguments \"{}\". Check it under Review and confirm it to add the game to {}.",
+                        pending.target, pending.arguments, launcher.name
+                    ));
+                }
+            }
             text
         }
     };
