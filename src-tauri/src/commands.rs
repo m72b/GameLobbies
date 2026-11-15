@@ -1,7 +1,7 @@
 //! Tauri commands — one per channel of the Electron preload API (`window.lobby`).
 //! Every input from the renderer is validated before it reaches the database.
 
-use crate::launch::launch_game;
+use crate::launch::{launch_game, LaunchOutcome, LauncherWait};
 use crate::platform::shell_open;
 use crate::state::AppState;
 use crate::steamgriddb::{self, CoverPage, FetchSummary, KeyStatus, KeyTest};
@@ -106,7 +106,7 @@ pub async fn library_launch(
     state: State<'_, AppState>,
     id: String,
     route: Option<i64>,
-) -> CmdResult<bool> {
+) -> CmdResult<LaunchOutcome> {
     let route = route.unwrap_or(0);
     if !(0..128).contains(&route) {
         return Err("Launch route is invalid.".into());
@@ -114,9 +114,19 @@ pub async fn library_launch(
     let game = db::get_game(&state.db.lock(), &id)
         .map_err(err)?
         .ok_or("Game not found.")?;
-    launch_game(&app, &game, route as usize)
+    let outcome = launch_game(&app, &game, route as usize, LauncherWait::IfNotRunning)
         .await
         .map_err(err)?;
+    after_launch(&app, &state, &outcome);
+    Ok(outcome)
+}
+
+/// Minimizes the main window after a game started, when the settings ask for it (not while a
+/// launch waits for its launcher: the prompt must stay visible).
+fn after_launch(app: &AppHandle, state: &AppState, outcome: &LaunchOutcome) {
+    if *outcome != LaunchOutcome::Started {
+        return;
+    }
     let minimize = db::get_settings(&state.db.lock())
         .map(|settings| settings.minimize_on_launch)
         .unwrap_or(false);
@@ -127,7 +137,92 @@ pub async fn library_launch(
             }
         }
     }
-    Ok(true)
+}
+
+/// Continues a launch that waited for its custom launcher (`library_launch` returned
+/// `waiting`). The renderer names only the game and the pending id: the launch runs the route
+/// that was checked when Play was pressed, found again in the library and checked again (it
+/// fails when that route or the launcher's program changed meanwhile). Each id works once.
+#[tauri::command]
+pub async fn library_launch_continue(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+    pending_id: String,
+) -> CmdResult<LaunchOutcome> {
+    let pending = state.pending_launches.take(&id, &pending_id).map_err(err)?;
+    let (game, launcher) = {
+        let conn = state.db.lock();
+        let game = db::get_game(&conn, &pending.game_id)
+            .map_err(err)?
+            .ok_or("Game not found.")?;
+        let launcher = crate::launchers::get(&conn, &pending.launcher_id).map_err(err)?;
+        (game, launcher)
+    };
+    if launcher.is_none_or(|l| l.executable != pending.program) {
+        return Err(format!(
+            "{} changed since you pressed Play. Press Play again.",
+            pending.launcher_name
+        ));
+    }
+    // What a launcher route runs is its launcher and target (both checked again by
+    // `launch_game`); its install state may change meanwhile.
+    let index = game
+        .routes
+        .iter()
+        .position(|r| {
+            r.source_id == pending.route.source_id && r.launch_target == pending.route.launch_target
+        })
+        .ok_or("This game's launch settings changed since you pressed Play. Press Play again.")?;
+    let outcome = launch_game(&app, &game, index, LauncherWait::Never)
+        .await
+        .map_err(err)?;
+    after_launch(&app, &state, &outcome);
+    Ok(outcome)
+}
+
+/// Drops a waiting launch (the prompt's Cancel). The launcher stays open.
+#[tauri::command]
+pub async fn library_launch_cancel(
+    state: State<'_, AppState>,
+    pending_id: String,
+) -> CmdResult<()> {
+    state.pending_launches.cancel(&pending_id);
+    Ok(())
+}
+
+/// Whether a waiting launch is still pending and its launcher's program is running now (matched
+/// by its exact executable path), for the prompt to show. The launch itself still waits for
+/// Continue.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingLaunchStatus {
+    pending: bool,
+    launcher_running: bool,
+}
+
+#[tauri::command]
+pub async fn library_launch_pending(
+    state: State<'_, AppState>,
+    pending_id: String,
+) -> CmdResult<PendingLaunchStatus> {
+    let Some(pending) = state.pending_launches.peek(&pending_id) else {
+        return Ok(PendingLaunchStatus {
+            pending: false,
+            launcher_running: false,
+        });
+    };
+    let processes = crate::platform::on_thread(crate::platform::running_processes)
+        .await
+        .map_err(err)?
+        .map_err(err)?;
+    Ok(PendingLaunchStatus {
+        pending: true,
+        launcher_running: crate::launchers::program_running(
+            &processes,
+            Path::new(&pending.program),
+        ),
+    })
 }
 
 #[tauri::command]

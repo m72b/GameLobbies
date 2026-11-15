@@ -572,6 +572,13 @@ pub fn merge_route(existing: &GameRoute, incoming: &GameRoute) -> GameRoute {
         .launcher_id
         .clone()
         .or_else(|| existing.launcher_id.clone());
+    // A launcher assignment made on the game page is the user's decision: scans never set one,
+    // and it stays while the route keeps the label (or launcher) it was made with.
+    combined.assigned = if combined.launcher_id == existing.launcher_id {
+        existing.assigned.or(incoming.assigned)
+    } else {
+        incoming.assigned
+    };
     combined
 }
 
@@ -701,6 +708,9 @@ fn has_user_data(row: &GameRow, customized: &HashSet<String>) -> bool {
         || (non_empty(&row.cover).is_some() && row.cover != row.default_cover)
         // An emulator chosen for a ROM (scans never set one; only the user does).
         || row.routes.iter().any(|r| r.emulator_id.is_some())
+        // A launcher assigned on the game page (scans never assign one): the route it was made
+        // from stays when its store or folder no longer lists it.
+        || row.routes.iter().any(|r| r.assigned == Some(true))
 }
 
 /// Applies an installed-games scan. An empty scan is ambiguous (client missing, drive

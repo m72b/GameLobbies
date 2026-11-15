@@ -22,6 +22,8 @@ pub struct AppState {
     pub igdb: crate::igdb::IgdbState,
     /// Recent native-picker results that a later save may use (see `picks`).
     pub picks: crate::picks::PickedPaths,
+    /// Launches waiting for a custom launcher to open (see `pending_launch`).
+    pub pending_launches: crate::pending_launch::PendingLaunches,
 }
 
 impl AppState {

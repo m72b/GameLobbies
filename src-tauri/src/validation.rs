@@ -34,6 +34,7 @@ const ROUTE_KEYS: &[&str] = &[
     "emulatorId",
     "system",
     "launcherId",
+    "assigned",
 ];
 const GAME_KEYS: &[&str] = &[
     "id",
@@ -283,7 +284,10 @@ fn routes(value: Option<&Value>) -> Result<Option<Vec<GameRoute>>> {
 /// The fields of a route that decide what a launch runs (or which file or folder it touches),
 /// plus its launcher label (`launcherId`): only Rust sets it, so the renderer can't put a
 /// launcher's name on another route either. Empty text counts as absent, like it does at launch.
-fn launch_identity(r: &GameRoute) -> [Option<&str>; 8] {
+/// A launcher assignment (`assigned`) is part of it too: only `launchers_assign` and
+/// `launchers_unassign` set or clear it, so the renderer can't make a launcher's own route look
+/// assigned (or the other way round).
+fn launch_identity(r: &GameRoute) -> [Option<&str>; 9] {
     fn text(v: &Option<String>) -> Option<&str> {
         v.as_deref().filter(|s| !s.is_empty())
     }
@@ -296,6 +300,7 @@ fn launch_identity(r: &GameRoute) -> [Option<&str>; 8] {
         text(&r.emulator_id),
         text(&r.system),
         text(&r.launcher_id),
+        (r.assigned == Some(true)).then_some("assigned"),
     ]
 }
 
@@ -318,6 +323,7 @@ fn is_renderer_uri_route(stored: &[GameRoute], r: &GameRoute) -> bool {
         && r.emulator_id.as_deref().is_none_or(str::is_empty)
         && r.system.as_deref().is_none_or(str::is_empty)
         && r.launcher_id.as_deref().is_none_or(str::is_empty)
+        && r.assigned != Some(true)
         && r.launch_args.as_deref().is_none_or(str::is_empty)
         && folder_ok
         && crate::launch::validate_launch_uri(&r.launch_target)

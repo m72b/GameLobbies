@@ -17,7 +17,7 @@ export type Store = 'Steam' | 'Epic Games' | 'GOG' | 'EA app' | 'Battle.net' | '
  *   falls back to automatic. Change it with `library.setEmulator`.
  * - `system`: a `CatalogSystem.id` (`'ps2'`, `'switch'`, `'pc'`, ...).
  */
-export interface GameRoute { sourceId: string; store: Store; appId?: string; launchTarget: string; launchArgs?: string; installPath?: string; owned?: boolean; installed?: boolean; installStates?: Record<string, boolean>; playtimeMinutes?: number; lastPlayed?: number; emulatorId?: string; system?: string; /** A label only: the custom launcher whose games folder this local or ROM route was found in ("Play from" shows its name). Set by Game Lobby; saves must send it back unchanged. */ launcherId?: string }
+export interface GameRoute { sourceId: string; store: Store; appId?: string; launchTarget: string; launchArgs?: string; installPath?: string; owned?: boolean; installed?: boolean; installStates?: Record<string, boolean>; playtimeMinutes?: number; lastPlayed?: number; emulatorId?: string; system?: string; /** A label only: the custom launcher whose games folder this local or ROM route was found in ("Play from" shows its name). Set by Game Lobby; saves must send it back unchanged. */ launcherId?: string; /** Added from the game page (`launchers.assign`): a `launcher:<id>` route made from another of the game's routes, or (on any other route) its `launcherId` label. `launchers.unassign` removes exactly that. Set by Game Lobby; saves must send it back unchanged. */ assigned?: boolean }
 export interface Game { id: string; title: string; cover?: string; defaultCover?: string; store: Store; genre?: string; playtimeMinutes: number; playtimeSeconds?: number; lastPlayed?: number; hidden: boolean; favorite: boolean; routes: GameRoute[] }
 /** `library.scan()` result. `local` is the library folder part, present when any folder was scanned (store scans and folder scans run side by side). */
 export interface LibraryStats { total: number; imported?: number; errors?: string[]; scannedAt?: number; local?: LocalScanSummary }
@@ -288,7 +288,32 @@ export interface AddedLauncherGame { gameId: string; games: Game[] }
  *   (only the path just picked is accepted); returns every library root. Scan it with
  *   `roots.rescan(id)`; remove it with `roots.remove(id, mode)`.
  */
-export interface LaunchersAPI { list(): Promise<CustomLauncher[]>; save(launcher: LauncherInput): Promise<CustomLauncher[]>; remove(id: string, mode: 'keep' | 'remove'): Promise<CustomLauncher[]>; browseExecutable(): Promise<string | null>; browseFolder(): Promise<string | null>; chooseIcon(): Promise<string | null>; addGame(launcherId: string, title: string, identifier: string | null, kind?: LauncherTargetKind): Promise<AddedLauncherGame | null>; browseGamesFolder(launcherId: string): Promise<string | null>; addFolder(launcherId: string, path: string): Promise<LibraryRoot[]>; onChanged(callback: () => void): () => void }
+/** One way to pass a game to a launcher: route `routeIndex`'s file, install folder or store id. */
+export interface AssignTarget { routeIndex: number; kind: LauncherTargetKind; target: string }
+/**
+ * A launcher as seen from a game's page (`launchers.assignments`). `listed`: the game shows under
+ * it (any way). `assigned`: the game page added it (`unassign` removes it). `targets`: for a
+ * launcher with a program, what it can be given (existing files and folders only; the first is the
+ * default). `problem`: why it can't be assigned (already listed, or no target fits its kinds).
+ */
+export interface AssignmentOption { launcherId: string; listed: boolean; assigned: boolean; targets: AssignTarget[]; problem?: string | null }
+/**
+ * What `library.launch` did. `waiting`: the game's custom launcher wasn't running, so its program
+ * was started on its own; the launch waits for `library.continueLaunch(gameId, pendingId)` (once,
+ * within a few minutes) or `cancelLaunch(pendingId)`.
+ */
+export type LaunchOutcome = { status: 'started' } | { status: 'waiting'; pendingId: string; launcherId: string; launcherName: string }
+/** `pending`: the launch still waits; `launcherRunning`: its launcher's program is running now. */
+export interface PendingLaunchStatus { pending: boolean; launcherRunning: boolean }
+/**
+ * - assignments(gameId): every launcher as seen from that game's page.
+ * - assign(gameId, launcherId, routeIndex?, kind?): lists the game under the launcher. With a
+ *   program, Play then runs it through the launcher with the chosen target (a native dialog asks
+ *   first; rejects when cancelled); the game's own routes stay. Returns the library.
+ * - unassign(gameId, launcherId): removes only what `assign` added. Returns the library.
+ */
+export interface LauncherAssignAPI { assignments(gameId: string): Promise<AssignmentOption[]>; assign(gameId: string, launcherId: string, routeIndex?: number, kind?: LauncherTargetKind): Promise<Game[]>; unassign(gameId: string, launcherId: string): Promise<Game[]> }
+export interface LaunchersAPI extends LauncherAssignAPI { list(): Promise<CustomLauncher[]>; save(launcher: LauncherInput): Promise<CustomLauncher[]>; remove(id: string, mode: 'keep' | 'remove'): Promise<CustomLauncher[]>; browseExecutable(): Promise<string | null>; browseFolder(): Promise<string | null>; chooseIcon(): Promise<string | null>; addGame(launcherId: string, title: string, identifier: string | null, kind?: LauncherTargetKind): Promise<AddedLauncherGame | null>; browseGamesFolder(launcherId: string): Promise<string | null>; addFolder(launcherId: string, path: string): Promise<LibraryRoot[]>; onChanged(callback: () => void): () => void }
 export interface EmulatorsAPI { list(): Promise<EmulatorProfile[]>; save(profile: EmulatorProfile): Promise<EmulatorProfile[]>; remove(id: string): Promise<EmulatorProfile[]>; scan(): Promise<LocalScanSummary>; catalog(): Promise<EmulatorCatalog>; ignored(): Promise<IgnoredPath[]>; unignore(path: string): Promise<IgnoredPath[]>; browseExecutable(): Promise<string | null> }
 /**
  * Scan review.
@@ -568,7 +593,7 @@ export interface StorageProgress { done: number; total: number; title: string }
 export interface RecentGame { gameId: string; addedAt: number }
 export interface LobbyAPI {
   window: { minimize(): Promise<void>; toggleMaximize(): Promise<void>; close(): Promise<void>; isMaximized(): Promise<boolean> }
-  library: { list(): Promise<Game[]>; scan(): Promise<LibraryStats>; launch(id: string, route?: number): Promise<void>; save(game: Partial<Game> & { id: string }): Promise<Game[]>; remove(id: string): Promise<Game[]>; merge(targetId: string, sourceId: string): Promise<Game[]>; resetPlaytime(): Promise<Game[]>; setCover(id: string, dataUrl: string | null): Promise<Game[]>; chooseCover(id: string): Promise<Game[]>; chooseInstallFolder(id: string): Promise<void>; add(title: string, target: string): Promise<Game[]>; stores(): Promise<StoreStatus[]>; onChanged(callback: () => void): () => void
+  library: { list(): Promise<Game[]>; scan(): Promise<LibraryStats>; launch(id: string, route?: number): Promise<LaunchOutcome>; continueLaunch(id: string, pendingId: string): Promise<LaunchOutcome>; cancelLaunch(pendingId: string): Promise<void>; pendingLaunch(pendingId: string): Promise<PendingLaunchStatus>; save(game: Partial<Game> & { id: string }): Promise<Game[]>; remove(id: string): Promise<Game[]>; merge(targetId: string, sourceId: string): Promise<Game[]>; resetPlaytime(): Promise<Game[]>; setCover(id: string, dataUrl: string | null): Promise<Game[]>; chooseCover(id: string): Promise<Game[]>; chooseInstallFolder(id: string): Promise<void>; add(title: string, target: string): Promise<Game[]>; stores(): Promise<StoreStatus[]>; onChanged(callback: () => void): () => void
     /** Sets the emulator of a `rom` route (`routeIndex` into `game.routes`); `null` = automatic. The profile must exist; other route kinds are rejected. Returns the library. */
     setEmulator(gameId: string, routeIndex: number, emulatorId: string | null): Promise<Game[]>
     /**

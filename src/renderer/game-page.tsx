@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ArrowLeft, ChevronDown, FolderOpen, Heart, MoreHorizontal, Pencil, Play } from 'lucide-react'
-import { RouteIcon } from './launcher-icon'
+import { LauncherIcon, RouteIcon } from './launcher-icon'
 import { CustomizePanel, useLogoLayout } from './customize-page'
 import { coverUrl } from './lobby-api'
 import { defaultGamePageCustom } from '../shared/defaults'
@@ -8,14 +8,15 @@ import { coverLayerStyle, coverStyle } from './cover'
 import { CoverLayer, useCover } from './poster'
 import { GenreBlock, IgdbAbout, IgdbPicker, IgdbRatings, useIgdb } from './igdb-details'
 import { isEmulatorRoute, routeLabel, routeTitle } from '../shared/routes'
-import { launcherOfRoute } from '../shared/launchers'
+import { launcherOfRoute, playLauncher } from '../shared/launchers'
+import { LauncherBlock } from './launcher-assign'
 import { ImageWall, useScreenshots } from './image-wall'
 import { GameNotesSection, YourScore } from './game-notes'
 import { ControllerBadge, ControllerBlock, useGameInput } from './controller-info'
 import { SessionHistory } from './session-history'
 import { formatRange } from '../shared/sessions'
 import { elapsedSeconds, formatClock, formatDate, formatSession, formatTime, formatTotal, useNow } from './format'
-import type { CustomLauncher, EmulatorCatalog, EmulatorProfile, Game, GamePageArt, GameRoute, PlaySession, PlayStats, RunningGame, Settings } from '../shared/types'
+import type { CustomLauncher, EmulatorCatalog, EmulatorProfile, Game, GamePageArt, GameRoute, LauncherTargetKind, PlaySession, PlayStats, RunningGame, Settings } from '../shared/types'
 
 export interface GamePageActions {
   back(): void
@@ -29,6 +30,10 @@ export interface GamePageActions {
   openFolder(game: Game): void
   remove(game: Game): void
   setEmulator(game: Game, routeIndex: number, emulatorId: string | null): Promise<void>
+  /** Lists the game under a custom launcher (Rust confirms a new launch route natively). */
+  assignLauncher(game: Game, launcherId: string, routeIndex?: number, kind?: LauncherTargetKind): Promise<void>
+  /** Removes only what `assignLauncher` added. */
+  unassignLauncher(game: Game, launcherId: string): Promise<void>
 }
 
 const emptyArt: GamePageArt = { hero: [], logo: [], custom: defaultGamePageCustom }
@@ -53,8 +58,12 @@ export function GamePage({ game, index, settings, launchers, running, libraryVer
   const { layout, change: changeLayout, flush: flushLayout } = useLogoLayout(game.id, art.custom)
   const now = useNow(!!running || sessions.some(session => !session.endedAt))
 
-  const defaultRoute = useMemo(() => Math.max(0, game.routes.findIndex(route => route.installed)), [game.id]) // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { setRouteIdx(defaultRoute); setMenuOpen(false); setCustomizing(false); setIgdbPicking(false) }, [game.id, defaultRoute])
+  // Routes added or removed (a launcher assigned on this page goes first) pick the default again,
+  // so the selection never points at a route that moved.
+  const routesKey = game.routes.map(route => route.sourceId + '|' + route.launchTarget).join('\n')
+  const defaultRoute = useMemo(() => Math.max(0, game.routes.findIndex(route => route.installed)), [game.id, routesKey]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setMenuOpen(false); setCustomizing(false); setIgdbPicking(false) }, [game.id])
+  useEffect(() => { setRouteIdx(defaultRoute) }, [game.id, routesKey, defaultRoute])
 
   useEffect(() => {
     let live = true
@@ -93,6 +102,7 @@ export function GamePage({ game, index, settings, launchers, running, libraryVer
   const logoSrc = art.logo[logoIdx] ? coverUrl(art.logo[logoIdx]) : undefined
   const cover = useCover(game)
   const route = game.routes[routeIdx]
+  const playVia = playLauncher(route, launchers)
   // A route run by or labelled with a launcher reads as that launcher ("Play from: My Arcade";
   // the store once the launcher is deleted), with the file when the launcher has several routes here.
   const label = (item: GameRoute) => {
@@ -146,7 +156,7 @@ export function GamePage({ game, index, settings, launchers, running, libraryVer
         ? <button className="gp-play" disabled><Play size={18} fill="currentColor" /> Launching…</button>
         : isRunning
           ? <button className="gp-play running" disabled><span className="gp-live-dot" /> Running <span className="gp-clock">{formatClock(elapsedSeconds(running.startedAt, now))}</span></button>
-          : <button className="gp-play" onClick={() => actions.play(game, routeIdx)}><Play size={18} fill="currentColor" /> Play</button>}
+          : <button className="gp-play" onClick={() => actions.play(game, routeIdx)} title={playVia ? 'Play through ' + playVia.name : undefined}><Play size={18} fill="currentColor" /> Play{playVia && <span className="gp-play-via"><LauncherIcon launcher={playVia} size={12} /> {playVia.name}</span>}</button>}
       {game.routes.length > 0 && <label className="gp-route">
         <span className="gp-route-label">Play from</span>
         <span className="gp-route-select">
@@ -241,6 +251,7 @@ export function GamePage({ game, index, settings, launchers, running, libraryVer
           })}
           {emuError && <div className="form-error" role="alert">{emuError}</div>}
         </div>
+        <LauncherBlock game={game} launchers={launchers} libraryVersion={libraryVersion} onAssign={(launcherId, routeIndex, kind) => actions.assignLauncher(game, launcherId, routeIndex, kind)} onUnassign={launcherId => actions.unassignLauncher(game, launcherId)} />
         <GenreBlock game={game} view={igdb} />
         <YourScore gameId={game.id} />
         <IgdbRatings view={igdb} />

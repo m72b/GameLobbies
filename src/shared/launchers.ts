@@ -1,4 +1,4 @@
-import type { CustomLauncher, Game, GameRoute, LauncherTargetKind, LibraryRoot, LocalScanSummary } from './types'
+import type { AssignTarget, CustomLauncher, Game, GameRoute, LauncherTargetKind, LibraryRoot, LocalScanSummary } from './types'
 
 /**
  * Pure helpers for custom launchers. The Rust side (`launchers.rs`) is the authority: these only
@@ -220,4 +220,37 @@ export function kindLabel(kind: LauncherTargetKind): string {
 /** An example target for the preview, by target kind. */
 export function sampleTarget(kind: CustomLauncher['targetKind']): string {
   return kind === 'identifier' ? 'game-id' : kind === 'folder' ? 'D:\\Games\\My Game' : 'D:\\Games\\My Game\\game.file'
+}
+
+/** Whether a route (or its launcher label) was added on the game page (`launchers.assign`). */
+export function isAssignedRoute(route: Pick<GameRoute, 'assigned'>): boolean {
+  return route.assigned === true
+}
+
+/** The launchers a game page assigned (their ids, in route order, without repeats). */
+export function assignedLauncherIds(game: Pick<Game, 'routes'>): string[] {
+  const ids: string[] = []
+  for (const route of game.routes) {
+    const id = isAssignedRoute(route) ? routeLauncherId(route) : undefined
+    if (id && !ids.includes(id)) ids.push(id)
+  }
+  return ids
+}
+
+/** How an assignment target reads in the game page's launcher picker: `File · hk.exe`, `Store id · 400 (Steam)`. */
+export function assignTargetLabel(target: AssignTarget, routes: readonly Pick<GameRoute, 'store'>[]): string {
+  const base = target.target.split(/[\\/]/).filter(Boolean).pop() ?? target.target
+  const store = routes[target.routeIndex]?.store
+  if (target.kind === 'identifier') return 'Store id · ' + target.target + (store ? ' (' + store + ')' : '')
+  return (target.kind === 'file' ? 'File · ' : 'Folder · ') + base
+}
+
+/**
+ * The launcher a Play button runs through (a `launcher:<id>` route of a launcher with a program),
+ * to name it on the button; undefined for every other route.
+ */
+export function playLauncher(route: Pick<GameRoute, 'sourceId'> | undefined, launchers: readonly CustomLauncher[]): CustomLauncher | undefined {
+  const id = route ? launcherIdOf(route) : undefined
+  const launcher = id ? launchers.find(item => item.id === id) : undefined
+  return launcher && !isLabelOnly(launcher) ? launcher : undefined
 }
