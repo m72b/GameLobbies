@@ -64,11 +64,12 @@ fn is_launchable_name(name: &str) -> bool {
 /// Whether an install folder holds anything launchable (`.exe`, `.bat`, `.cmd`, `.lnk`, `.com`)
 /// at any depth, ignoring redistributable folders and uninstallers. Folders with only DLLs and
 /// data are not a playable install. The search is shallowest-first and bounded; when the folder
-/// can't be read (missing, drive not connected) or the bounds run out, the answer is `true`, so
+/// can't be read (missing, drive not connected) or a bound (entries or depth) cut the search short, the answer is `true`, so
 /// a game is never marked uninstalled on incomplete evidence.
 pub fn has_launchable(dir: &Path) -> bool {
     let mut queue = VecDeque::from([(dir.to_path_buf(), 0usize)]);
     let mut seen = 0usize;
+    let mut truncated = false;
     while let Some((current, depth)) = queue.pop_front() {
         let Ok(read) = std::fs::read_dir(&current) else {
             return true;
@@ -89,15 +90,17 @@ pub fn has_launchable(dir: &Path) -> bool {
                 if is_launchable_name(&name) {
                     return true;
                 }
-            } else if kind.is_dir()
-                && depth < MAX_SEARCH_DEPTH
-                && !REDIST_DIRS.contains(&name.to_ascii_lowercase().as_str())
-            {
-                queue.push_back((entry.path(), depth + 1));
+            } else if kind.is_dir() && !REDIST_DIRS.contains(&name.to_ascii_lowercase().as_str()) {
+                if depth < MAX_SEARCH_DEPTH {
+                    queue.push_back((entry.path(), depth + 1));
+                } else {
+                    // Not looked into: an exe may be down there.
+                    truncated = true;
+                }
             }
         }
     }
-    false
+    truncated
 }
 
 #[cfg(test)]
@@ -124,5 +127,11 @@ mod tests {
         assert!(has_launchable(&dir.path().join("game")));
         // A missing folder is unknown, not empty.
         assert!(has_launchable(&dir.path().join("gone")));
+        // Deeper than the search looks: unknown, so not "nothing launchable".
+        dir.file("deep/a/b/c/d/e/f/g/h/Game.exe");
+        assert!(has_launchable(&dir.path().join("deep")));
+        // A deep folder holding nothing launchable within reach but fully searched is still false.
+        dir.file("shallow/a/b/c/data.pak");
+        assert!(!has_launchable(&dir.path().join("shallow")));
     }
 }
