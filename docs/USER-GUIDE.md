@@ -18,14 +18,27 @@ The Windows scanners support these sources:
 
 | Store | Current import method |
 | --- | --- |
-| Steam | Auto-detected installed games from `appmanifest_*.acf` files |
+| Steam | Auto-detected installed games from `appmanifest_*.acf` files; optionally owned games that aren't installed, from the Steam Web API (see below) |
 | Epic Games | Auto-detected installed games from the Epic Games Launcher `.item` manifests |
 | GOG | Owned titles from the local GOG Galaxy database, with installed state when available |
 | EA app, Battle.net, Ubisoft Connect, Amazon Games | Best-effort installed-game discovery from Windows registry and uninstall records |
 | itch.io | Installed games found in the local itch app folders |
 | Xbox / Microsoft Store | Best-effort installed game-package scan; package-name matching can miss games |
 
-All stores are detected automatically; no store accounts or keys are used. **Settings → Libraries** shows which stores and launchers were found on this PC, lets you turn each one off, and sets the scan interval. In the library, **Sort → Library** orders games by store, then title.
+All stores are detected automatically; no store accounts or keys are needed. **Settings → Libraries** shows which stores and launchers were found on this PC, lets you turn each one off, and sets the scan interval. In the library, **Sort → Library** orders games by store, then title.
+
+### Steam games you own but haven't installed
+
+Steam is installed-games only unless you set this up. Under the Steam row in **Settings → Libraries**, open **Show games you own but haven't installed**:
+
+1. Get a free Steam Web API key at [steamcommunity.com/dev/apikey](https://steamcommunity.com/dev/apikey) (any domain name, such as `localhost`, works).
+2. Find your SteamID64: it is the 17-digit number starting with `7656119`, shown as "Steam ID" on your [Steam account page](https://store.steampowered.com/account/).
+3. Set **Game details** to **Public** in your Steam profile's privacy settings; otherwise Steam returns no games.
+4. Paste both and choose **Save**. Game Lobby asks Steam at once and shows the result on the status line.
+
+Owned games that aren't installed are added as Steam games marked not installed; they show under **All** when **Show only installed games** is off, and **Play** asks Steam to install them. What the installed-games scan finds always wins, there are no duplicates, and your titles, covers, favourites, notes and playtime are never changed (Steam's own playtime is not imported). Library scans ask Steam at most every 30 minutes (10 minutes after a failure). If Steam can't be reached, the profile is private or the key is rejected, the games from the last successful check stay and the status line says why; after "Key rejected", save a new key. Games that leave your Steam account later are removed again unless you favourited, played, rated or customized them.
+
+The key and SteamID are encrypted for your Windows user, are never shown again, and are left out of backups, logs and **Copy diagnostics**. **Remove** clears both and removes the not-installed games the import added (again, games you put something into stay).
 
 Scanning combines routes when their stable source and external app identity match. Games with the same title remain separate unless a source provides a shared identity; use **Link another game** on a game's page to combine cross-store duplicates yourself. This avoids merging unrelated games such as different releases with identical names. On a game's page, **Play from** chooses the store or launcher to start it with. Installed discovery for the other listed stores is local-only; those integrations do not retrieve complete online account catalogs.
 
