@@ -67,6 +67,15 @@ fn parse_item(manifest: &Value, file: &str) -> Result<Game> {
     ))
 }
 
+/// An install folder with nothing to launch (only DLLs and data) is not an installed game; a
+/// missing folder or one without a recorded path is left alone.
+fn has_executable(game: &Game) -> bool {
+    game.routes
+        .iter()
+        .filter_map(|route| route.install_path.as_deref())
+        .all(|path| super::has_launchable(Path::new(path)))
+}
+
 pub fn scan_installed() -> Result<Vec<Game>> {
     let mut games = Vec::new();
     for root in MANIFEST_ROOTS.iter().map(Path::new).filter(|p| p.exists()) {
@@ -82,7 +91,8 @@ pub fn scan_installed() -> Result<Vec<Game>> {
                 .and_then(|text| serde_json::from_str::<Value>(&text).map_err(anyhow::Error::from))
                 .and_then(|manifest| parse_item(&manifest, &file));
             match parsed {
-                Ok(game) => games.push(game),
+                Ok(game) if has_executable(&game) => games.push(game),
+                Ok(_) => {}
                 Err(e) => bail!("Could not verify Epic manifest {file}: {e}"),
             }
         }
@@ -105,5 +115,24 @@ mod tests {
             "com.epicgames.launcher://apps/Fortnite%20Game?action=launch&silent=true"
         );
         assert!(parse_item(&json!({ "InstallLocation": "x" }), "x.item").is_err());
+    }
+
+    #[test]
+    fn dll_only_install_folders_are_not_installed() {
+        use crate::localscan::tests::TempDir;
+        let dir = TempDir::new("epic-dll");
+        dir.file("dlls/a.dll");
+        dir.file("ok/bin/Game.exe");
+        let item = |sub: &str| {
+            let path = dir.path().join(sub).to_string_lossy().into_owned();
+            parse_item(
+                &json!({ "AppName": "A", "DisplayName": "A", "InstallLocation": path }),
+                "x.item",
+            )
+            .unwrap()
+        };
+        assert!(!has_executable(&item("dlls")));
+        assert!(has_executable(&item("ok")));
+        assert!(has_executable(&item("missing")));
     }
 }

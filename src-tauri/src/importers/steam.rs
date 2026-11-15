@@ -140,6 +140,14 @@ fn parse_manifest(text: &str, folder: &Path) -> Result<Option<Game>> {
     let install_path = field(text, "installdir")
         .filter(|d| !d.is_empty())
         .map(|d| folder.join("common").join(d).to_string_lossy().into_owned());
+    // Tools, redistributables and broken installs: an install folder with nothing to launch
+    // (only DLLs and data) is not an installed game. A missing folder is left alone.
+    if install_path
+        .as_deref()
+        .is_some_and(|path| !super::has_launchable(Path::new(path)))
+    {
+        return Ok(None);
+    }
     Ok(Some(single_route_game(
         format!("steam:{app_id}"),
         title,
@@ -212,6 +220,27 @@ mod tests {
             game.routes[0].install_path.as_deref(),
             Some(r"C:\Steam\steamapps\common\dota 2 beta")
         );
+    }
+
+    #[test]
+    fn manifests_of_folders_without_an_executable_are_not_installed() {
+        use crate::localscan::tests::TempDir;
+        let dir = TempDir::new("steam-dll");
+        let manifest = |name: &str| {
+            format!(
+                "\"appid\" \"7\"\n\"name\" \"T\"\n\"StateFlags\" \"4\"\n\"installdir\" \"{name}\""
+            )
+        };
+        let steamapps = dir.dir("steamapps");
+        dir.file("steamapps/common/dlls/engine.dll");
+        assert!(parse_manifest(&manifest("dlls"), &steamapps)
+            .unwrap()
+            .is_none());
+        // The executable may live in a subfolder.
+        dir.file("steamapps/common/deep/bin/win64/game.exe");
+        assert!(parse_manifest(&manifest("deep"), &steamapps)
+            .unwrap()
+            .is_some());
     }
 
     #[test]
