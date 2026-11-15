@@ -530,6 +530,8 @@ pub async fn backup_export(
                 .filter(|entries| !entries.is_empty()),
             play_sessions: Some(crate::sessions::export_all(&conn).map_err(err)?)
                 .filter(|sessions| !sessions.is_empty()),
+            launchers: Some(crate::launchers::list(&conn).map_err(err)?)
+                .filter(|launchers| !launchers.is_empty()),
         }
     };
     std::fs::write(&path, serde_json::to_string_pretty(&backup).map_err(err)?).map_err(err)?;
@@ -551,12 +553,18 @@ pub async fn backup_import(
     // from the renderer. A backup is treated like the user's own library: store links are
     // checked again at launch, and program routes must still exist, but a store program route
     // with arguments runs as written (see `launch_game`). Only import backups you trust.
+    // Custom launchers in a backup keep their executable (it came from a native picker when
+    // it was set up) but pass every shape check of a save (`launchers::validate`), and their
+    // games' targets are checked again at launch.
     let raw = read_limited_json(&path, 128 * 1024 * 1024, "Backup file").map_err(err)?;
     let backup = validation::backup(&raw).map_err(err)?;
     let count = db::restore_backup(&mut state.db.lock(), &backup).map_err(err)?;
     state.tracker.library_changed();
     notify_library(&app);
     covercache::spawn_pass(&app, std::time::Duration::ZERO);
+    if backup.launchers.is_some() {
+        let _ = app.emit("launchers:changed", ());
+    }
     if backup.settings.is_some() {
         if let Ok(settings) = db::get_settings(&state.db.lock()) {
             notify_settings(&app, settings);

@@ -111,9 +111,19 @@ pub struct Subject {
 /// path. Store routes and routes not marked installed are not checked here (scans and the
 /// stores report those themselves).
 pub fn subject_of(route: &GameRoute) -> Option<Subject> {
-    if !(route.source_id == ROM_SOURCE || route.source_id == LOCAL_SOURCE)
-        || route.installed != Some(true)
-    {
+    if route.installed != Some(true) {
+        return None;
+    }
+    // A custom launcher's file or folder target (identifiers are never paths). A folder
+    // target is stored as its own install path.
+    if crate::launchers::is_launcher_route(route) {
+        let target = route.launch_target.trim();
+        return crate::emulators::drive_path_ok(target).then(|| Subject {
+            path: target.to_string(),
+            folder: route.install_path.as_deref().map(str::trim) == Some(target),
+        });
+    }
+    if !(route.source_id == ROM_SOURCE || route.source_id == LOCAL_SOURCE) {
         return None;
     }
     let target = route.launch_target.trim();
@@ -762,7 +772,12 @@ pub fn prepare_relocation(ctx: &RepairContext, new: &Path) -> Result<Option<Game
         .extension()
         .map(|e| e.to_string_lossy().to_lowercase())
         .unwrap_or_default();
-    if ctx.target.subject.folder || (ext != "lnk" && ext != "url") {
+    // A custom launcher's target is passed to the launcher as it is: a shortcut stays a file.
+    let launcher_route = ctx
+        .target
+        .route_id
+        .starts_with(crate::launchers::SOURCE_PREFIX);
+    if ctx.target.subject.folder || launcher_route || (ext != "lnk" && ext != "url") {
         return Ok(None);
     }
     // A shortcut follows the shortcut rules (store links and plain programs only; arguments

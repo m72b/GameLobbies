@@ -11,7 +11,7 @@ use crate::localscan::{classify_shortcut, ShortcutKind};
 use crate::platform::{on_thread, resolve, shell_open, spawn_detached, spawn_detached_in};
 use crate::state::AppState;
 use crate::types::{non_empty, now_ms, EmulatorProfile, Game, GameRoute};
-use crate::{db, emulators, local};
+use crate::{db, emulators, launchers, local};
 use anyhow::{anyhow, bail, Result};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -224,13 +224,31 @@ const SHELL_CHARACTERS: [char; 7] = ['&', '|', '<', '>', '^', '%', '`'];
 /// (look-alikes of `\ / : " .`) are refused. A template without `{rom}` stays valid:
 /// the ROM path is then appended as the last argument.
 pub fn check_template(template: &str, executable: &str) -> Result<()> {
+    check_arguments(
+        template,
+        executable,
+        &PLACEHOLDERS,
+        "emulator",
+        r"cores\snes9x_libretro.dll",
+    )
+}
+
+/// [`check_template`]'s rules for any program Game Lobby starts with an argument template
+/// (emulators, custom launchers): `placeholders` are the template's own placeholders (a piece
+/// starting with one is about the launched file; one glued to an option is refused), `noun`
+/// names the program in messages and `example` is a path inside its folder.
+pub(crate) fn check_arguments(
+    template: &str,
+    executable: &str,
+    placeholders: &[&str],
+    noun: &str,
+    example: &str,
+) -> Result<()> {
     if template.chars().any(char::is_control) {
-        bail!(
-            "The emulator arguments can't contain tabs, line breaks or other control characters."
-        );
+        bail!("The {noun} arguments can't contain tabs, line breaks or other control characters.");
     }
     if let Some(c) = template.chars().find(|c| SHELL_CHARACTERS.contains(c)) {
-        bail!("The emulator arguments can't contain \"{c}\". Arguments are passed to the emulator directly, without a command prompt.");
+        bail!("The {noun} arguments can't contain \"{c}\". Arguments are passed to the {noun} directly, without a command prompt.");
     }
     // Emulators with an ANSI command line get the arguments "best-fit" converted: look-alikes
     // such as U+FF3C (fullwidth \), U+2215 (division slash) or U+FF1A (fullwidth :) turn into
@@ -241,33 +259,38 @@ pub fn check_template(template: &str, executable: &str) -> Result<()> {
         .find(|c| !(c.is_ascii_graphic() || *c == ' ' || c.is_alphanumeric()))
     {
         bail!(
-            "The emulator arguments can't contain \"{c}\" (U+{:04X}). Use plain ASCII punctuation.",
+            "The {noun} arguments can't contain \"{c}\" (U+{:04X}). Use plain ASCII punctuation.",
             c as u32
         );
     }
     let folder = Path::new(executable)
         .parent()
         .and_then(|p| crate::tracker::normalize_path(&p.to_string_lossy()))
-        .ok_or_else(|| anyhow!("The emulator executable must be a full path to an .exe file."))?;
+        .ok_or_else(|| anyhow!("The {noun} executable must be a full path to an .exe file."))?;
     for token in tokenize_template(template)? {
         for piece in token.split('=') {
-            check_template_piece(piece, &folder).map_err(|reason| {
-                anyhow!("The emulator argument \"{token}\" is not allowed: {reason} Paths in the arguments must be inside the emulator's folder, like cores\\snes9x_libretro.dll.")
+            check_template_piece(piece, &folder, placeholders, noun).map_err(|reason| {
+                anyhow!("The {noun} argument \"{token}\" is not allowed: {reason} Paths in the arguments must be inside the {noun}'s folder, like {example}.")
             })?;
         }
     }
     Ok(())
 }
 
-fn check_template_piece(piece: &str, folder: &str) -> Result<(), &'static str> {
+fn check_template_piece(
+    piece: &str,
+    folder: &str,
+    placeholders: &[&str],
+    noun: &str,
+) -> Result<(), String> {
     let is_separator = |c: char| c == '\\' || c == '/';
     let climbs = || piece.split(is_separator).any(|s| s.trim_end() == "..");
     if piece.is_empty() {
         return Ok(());
     }
-    if PLACEHOLDERS.iter().any(|p| piece.starts_with(p)) {
+    if placeholders.iter().any(|p| piece.starts_with(p)) {
         return if climbs() {
-            Err("it leaves the game's folder with \"..\".")
+            Err("it leaves the game's folder with \"..\".".into())
         } else {
             Ok(())
         };
@@ -281,11 +304,14 @@ fn check_template_piece(piece: &str, folder: &str) -> Result<(), &'static str> {
     // file to an option that loads code (`-L {rom}` as separate arguments, or a code-loading
     // `--key={rom}`) would run that file as code. Such templates must be written by hand in
     // Settings, and the game file itself comes from a scan or a native picker.
-    if piece.starts_with(['-', '/', '@']) && PLACEHOLDERS.iter().any(|p| piece.contains(p)) {
-        return Err("it glues the game file to an option (\"-L{rom}\") or to \"@\".");
+    if piece.starts_with(['-', '/', '@']) && placeholders.iter().any(|p| piece.contains(p)) {
+        return Err(format!(
+            "it glues the game file to an option (\"-L{}\") or to \"@\".",
+            placeholders[0]
+        ));
     }
     if piece.contains(r"\\") || piece.contains("//") {
-        return Err("it names a network location.");
+        return Err("it names a network location.".into());
     }
     if piece.contains(':') {
         let bytes = piece.as_bytes();
@@ -295,11 +321,11 @@ fn check_template_piece(piece: &str, folder: &str) -> Result<(), &'static str> {
             && is_separator(bytes[2] as char)
             && !piece[2..].contains(':');
         if !absolute {
-            return Err("it has a \":\" that isn't part of a full path.");
+            return Err("it has a \":\" that isn't part of a full path.".into());
         }
         return match crate::tracker::normalize_path(piece) {
             Some(key) if !climbs() && crate::tracker::is_within(folder, &key) => Ok(()),
-            _ => Err("it points outside the emulator's folder."),
+            _ => Err(format!("it points outside the {noun}'s folder.")),
         };
     }
     if !piece.contains(is_separator) {
@@ -315,10 +341,10 @@ fn check_template_piece(piece: &str, folder: &str) -> Result<(), &'static str> {
     }
     let first = piece.chars().next().unwrap_or(' ');
     if !(first.is_alphanumeric() || first == '_' || first == '.') {
-        return Err("it is not a path inside the emulator's folder.");
+        return Err(format!("it is not a path inside the {noun}'s folder."));
     }
     if climbs() {
-        return Err("it leaves the emulator's folder with \"..\".");
+        return Err(format!("it leaves the {noun}'s folder with \"..\"."));
     }
     Ok(())
 }
@@ -486,12 +512,37 @@ async fn launch_local_exe(path: &Path) -> Result<()> {
     }
 }
 
+/// Hands a process Game Lobby started for `game_id` to the tracker (the session lasts while
+/// that process runs), or only marks the game played when it can't be tracked.
+fn track_started_process(state: &AppState, game_id: &str, pid: u32, exe: &Path) -> Result<()> {
+    let settings = db::get_settings(&state.db.lock())?;
+    let watching = state
+        .tracker
+        .watch_process(game_id, pid, &exe.to_string_lossy(), &settings);
+    if !watching {
+        db::mark_game_played(&state.db.lock(), game_id, now_ms())?;
+    }
+    Ok(())
+}
+
 pub async fn launch_game(app: &AppHandle, game: &Game, route_index: usize) -> Result<()> {
     let route = game
         .routes
         .get(route_index)
         .ok_or_else(|| anyhow!("No launch route is configured."))?;
     let state = app.state::<AppState>();
+    // Custom launchers: only the launcher's own .exe, started directly (never through a shell
+    // or a link), with the checked argv of `launchers::prepare_launch`.
+    if let Some(launcher_id) = launchers::launcher_id_of(route) {
+        let launcher = launchers::get(&state.db.lock(), launcher_id)?.ok_or_else(|| {
+            anyhow!("This game's launcher was deleted. Add the game again to another launcher.")
+        })?;
+        // Touches the filesystem: the database lock is already released.
+        let launch = launchers::prepare_launch(&launcher, route)?;
+        let pid = spawn_detached_in(&launch.program, &launch.argv, Some(&launch.cwd))
+            .map_err(|e| anyhow!("Could not start {}: {e}", launch.program.display()))?;
+        return track_started_process(&state, &game.id, pid, &launch.program);
+    }
     if is_rom_route(route) {
         let (exe, argv, cwd) = {
             let raw = db::emulator_profiles(&state.db.lock())?;
@@ -502,15 +553,7 @@ pub async fn launch_game(app: &AppHandle, game: &Game, route_index: usize) -> Re
         };
         let pid = spawn_detached_in(&exe, &argv, Some(&cwd))
             .map_err(|e| anyhow!("Could not start {}: {e}", exe.display()))?;
-        let settings = db::get_settings(&state.db.lock())?;
-        let watching =
-            state
-                .tracker
-                .watch_process(&game.id, pid, &exe.to_string_lossy(), &settings);
-        if !watching {
-            db::mark_game_played(&state.db.lock(), &game.id, now_ms())?;
-        }
-        return Ok(());
+        return track_started_process(&state, &game.id, pid, &exe);
     }
     let target = route.launch_target.as_str();
     if route.source_id == local::LOCAL_SOURCE {

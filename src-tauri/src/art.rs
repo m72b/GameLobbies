@@ -201,33 +201,68 @@ pub fn import_image_file(
     slot: Slot,
     source: &Path,
 ) -> Result<String> {
+    let name = import_image_as(
+        covers_dir,
+        source,
+        &ImageRules {
+            extensions: PAGE_IMAGE_EXTENSIONS,
+            kinds: "PNG, JPEG, WebP, GIF or AVIF",
+            max_bytes: MAX_IMAGE_BYTES,
+        },
+        |ext| image_file_name(game_id, slot, ext),
+    )?;
+    Ok(format!("{LOBBY_COVER_PREFIX}{name}"))
+}
+
+/// What [`import_image_as`] accepts.
+pub struct ImageRules {
+    /// Lower-case extensions (file name AND content); content types are named as
+    /// [`crate::covercache::sniff`] names them (`jpg` for JPEG).
+    pub extensions: &'static [&'static str],
+    /// For the error message, like "PNG, JPEG, WebP or GIF".
+    pub kinds: &'static str,
+    pub max_bytes: u64,
+}
+
+/// Copies a user-chosen image into `covers_dir` under the new bare name `name(ext)` (`ext` is
+/// the format found in the file's first bytes) and returns that name. The file name's
+/// extension and its content must both be one of `rules.extensions`, and it must be a regular
+/// file of at most `rules.max_bytes`. SVG and other text formats are never images here.
+pub fn import_image_as(
+    covers_dir: &Path,
+    source: &Path,
+    rules: &ImageRules,
+    name: impl FnOnce(&str) -> String,
+) -> Result<String> {
     let ext_ok = source
         .extension()
         .and_then(|e| e.to_str())
-        .is_some_and(|e| PAGE_IMAGE_EXTENSIONS.contains(&e.to_ascii_lowercase().as_str()));
+        .is_some_and(|e| rules.extensions.contains(&e.to_ascii_lowercase().as_str()));
     if !ext_ok {
-        bail!("Choose a PNG, JPEG, WebP, GIF or AVIF image.");
+        bail!("Choose a {} image.", rules.kinds);
     }
-    let too_large = || anyhow!("Choose an image smaller than 20 MB.");
+    let max = rules.max_bytes;
+    let too_large = || anyhow!("Choose an image smaller than {} MB.", max / (1024 * 1024));
     let unreadable = || anyhow!("Could not read that image.");
     let meta = std::fs::metadata(source).map_err(|_| unreadable())?;
     if !meta.is_file() {
         return Err(unreadable());
     }
-    if meta.len() > MAX_IMAGE_BYTES {
+    if meta.len() > max {
         return Err(too_large());
     }
     let mut bytes = Vec::new();
     std::fs::File::open(source)
-        .and_then(|f| f.take(MAX_IMAGE_BYTES + 1).read_to_end(&mut bytes))
+        .and_then(|f| f.take(max + 1).read_to_end(&mut bytes))
         .map_err(|_| unreadable())?;
-    if bytes.len() as u64 > MAX_IMAGE_BYTES {
+    if bytes.len() as u64 > max {
         return Err(too_large());
     }
     let ext = crate::covercache::sniff(&bytes)
+        .filter(|ext| rules.extensions.contains(ext))
         .ok_or_else(|| anyhow!("That file is not a supported image."))?;
     std::fs::create_dir_all(covers_dir)?;
-    let name = image_file_name(game_id, slot, ext);
+    let name = name(ext);
     let path = covers_dir.join(&name);
     let written = std::fs::OpenOptions::new()
         .write(true)
@@ -238,7 +273,7 @@ pub fn import_image_file(
         let _ = std::fs::remove_file(&path);
         return Err(anyhow!("Could not save the image: {e}"));
     }
-    Ok(format!("{LOBBY_COVER_PREFIX}{name}"))
+    Ok(name)
 }
 
 /// Art for one game. Only fails on a local database error; an unknown game has no art.

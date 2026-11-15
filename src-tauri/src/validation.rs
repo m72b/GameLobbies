@@ -109,6 +109,21 @@ const BACKUP_KEYS: &[&str] = &[
     "gameNotes",
     "gameAdded",
     "playSessions",
+    "customLaunchers",
+];
+const LAUNCHER_KEYS: &[&str] = &[
+    "id",
+    "name",
+    "iconKind",
+    "iconValue",
+    "color",
+    "executable",
+    "argsTemplate",
+    "targetKind",
+    "workingDir",
+    "sortOrder",
+    "createdAt",
+    "available",
 ];
 /// Top-level backup keys of older versions (library connections and store accounts) that are
 /// ignored on import.
@@ -214,6 +229,15 @@ fn route(value: &Value) -> Result<GameRoute> {
         }
     }
     short_text(&mut r.launch_target, 8_192, "Launch target")?;
+    // Custom launcher routes: a valid launcher id, and a target that is a drive path or a
+    // valid identifier (checked against the launcher's own kind again at launch).
+    if crate::launchers::is_launcher_route(&r) {
+        let id_ok = crate::launchers::launcher_id_of(&r)
+            .is_some_and(|id| crate::launchers::check_id(id).is_ok_and(|clean| clean == id));
+        if !id_ok || !crate::launchers::route_target_ok(&r.launch_target) {
+            bail!("A custom launcher route is invalid.");
+        }
+    }
     max_len(&r.launch_args, 8_192, "Launch arguments")?;
     max_len(&r.install_path, 8_192, "Install path")?;
     if r.install_states
@@ -268,6 +292,9 @@ fn is_renderer_uri_route(stored: &[GameRoute], r: &GameRoute) -> bool {
             .any(|s| text(&s.install_path) == Some(path.clone()))
     });
     r.source_id != crate::local::ROM_SOURCE
+        // Custom launcher routes are made only by `launchers_add_game` (native picker or a
+        // checked identifier).
+        && !crate::launchers::is_launcher_route(r)
         && r.emulator_id.as_deref().is_none_or(str::is_empty)
         && r.system.as_deref().is_none_or(str::is_empty)
         && r.launch_args.as_deref().is_none_or(str::is_empty)
@@ -843,6 +870,25 @@ pub fn backup(value: &Value) -> Result<Backup> {
         .get("playSessions")
         .map(|list| crate::sessions::validate_backup(list, now_ms()))
         .transpose()?;
+    let launchers = match clean.get("customLaunchers") {
+        Some(Value::Array(list)) if list.len() <= crate::launchers::MAX_LAUNCHERS => {
+            let mut seen = std::collections::HashSet::new();
+            let mut out = Vec::with_capacity(list.len());
+            for entry in list {
+                let launcher = backup_launcher(entry)?;
+                if !seen.insert(launcher.id.clone()) {
+                    bail!(
+                        "Backup lists the custom launcher \"{}\" twice.",
+                        launcher.name
+                    );
+                }
+                out.push(launcher);
+            }
+            Some(out)
+        }
+        Some(_) => bail!("Backup custom launchers are invalid."),
+        None => None,
+    };
     Ok(Backup {
         games,
         settings,
@@ -851,7 +897,20 @@ pub fn backup(value: &Value) -> Result<Backup> {
         game_notes,
         game_added,
         play_sessions,
+        launchers,
     })
+}
+
+/// One `customLaunchers` backup entry: known fields only, then every check of a save
+/// ([`crate::launchers::validate`]). The executable is trusted as the user's own (the backup was
+/// chosen in a native dialog) but must still be an absolute local `.exe`; an icon image is
+/// referenced by its file name only.
+pub fn backup_launcher(value: &Value) -> Result<crate::launchers::CustomLauncher> {
+    let launcher = decode(
+        strict(value, LAUNCHER_KEYS, "Custom launcher")?,
+        "Custom launcher",
+    )?;
+    crate::launchers::validate(launcher).map_err(|e| anyhow!("Backup custom launcher: {e:#}"))
 }
 
 #[cfg(test)]

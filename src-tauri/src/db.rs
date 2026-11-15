@@ -104,7 +104,8 @@ fn migrate(db: &Connection, file: Option<&Path>) -> Result<()> {
         CREATE INDEX IF NOT EXISTS game_memories_game ON game_memories(gameId,date);
         CREATE TABLE IF NOT EXISTS game_input(gameId TEXT PRIMARY KEY,support TEXT NOT NULL DEFAULT 'unknown',supportSource TEXT NOT NULL DEFAULT '',preferred TEXT NOT NULL DEFAULT '',notes TEXT NOT NULL DEFAULT '',updatedAt INTEGER NOT NULL,steamCheckedAt INTEGER NOT NULL DEFAULT 0);
         CREATE TABLE IF NOT EXISTS install_sizes(gameId TEXT NOT NULL,path TEXT NOT NULL,bytes INTEGER NOT NULL,measuredAt INTEGER NOT NULL,partial INTEGER NOT NULL DEFAULT 0,source TEXT NOT NULL DEFAULT 'scan',PRIMARY KEY(gameId,path));
-        CREATE TABLE IF NOT EXISTS game_added(gameId TEXT PRIMARY KEY,addedAt INTEGER NOT NULL,seen INTEGER NOT NULL DEFAULT 0);",
+        CREATE TABLE IF NOT EXISTS game_added(gameId TEXT PRIMARY KEY,addedAt INTEGER NOT NULL,seen INTEGER NOT NULL DEFAULT 0);
+        CREATE TABLE IF NOT EXISTS custom_launchers(id TEXT PRIMARY KEY,name TEXT NOT NULL,iconKind TEXT NOT NULL,iconValue TEXT NOT NULL,color TEXT NOT NULL,executable TEXT NOT NULL,argsTemplate TEXT NOT NULL DEFAULT '',targetKind TEXT NOT NULL,workingDir TEXT,sortOrder INTEGER NOT NULL DEFAULT 0,createdAt INTEGER NOT NULL);",
         GAMES_TABLE.replace("CREATE TABLE games", "CREATE TABLE IF NOT EXISTS games")
     ))?;
     let columns: HashSet<String> = db
@@ -501,6 +502,11 @@ fn persist_game(db: &Connection, game: &GamePatch) -> Result<GameRow> {
     Ok(row)
 }
 
+/// Saves one partial game without listing the library afterwards (for loops in a transaction).
+pub(crate) fn save_patch(db: &Connection, game: &GamePatch) -> Result<()> {
+    persist_game(db, game).map(drop)
+}
+
 pub fn save_game(db: &Connection, game: &GamePatch) -> Result<Vec<Game>> {
     persist_game(db, game)?;
     all_games(db)
@@ -811,7 +817,7 @@ pub fn reset_playtime(db: &mut Connection) -> Result<Vec<Game>> {
 }
 
 /// Deletes a game together with its play sessions and cached art.
-fn delete_game_rows(db: &Connection, id: &str) -> Result<()> {
+pub(crate) fn delete_game_rows(db: &Connection, id: &str) -> Result<()> {
     for sql in [
         "DELETE FROM play_sessions WHERE gameId=?",
         "DELETE FROM game_art WHERE gameId=?",
@@ -1601,7 +1607,7 @@ pub fn reconcile_local_root(
     })
 }
 
-/// Shortcuts the user confirmed: normalized `.lnk` path → (target, arguments) they saw.
+/// Shortcuts the user confirmed: normalized `.lnk` path â†’ (target, arguments) they saw.
 pub fn shortcut_confirmations(db: &Connection) -> Result<HashMap<String, (String, String)>> {
     let mut stmt = db.prepare("SELECT shortcutKey,target,arguments FROM local_shortcut_ok")?;
     let rows = stmt
@@ -1687,6 +1693,10 @@ pub fn restore_backup(db: &mut Connection, backup: &Backup) -> Result<usize> {
     }
     for emulator in backup.emulators.iter().flatten() {
         save_emulator(&tx, emulator)?;
+    }
+    // Validated by `validation::backup` (same checks as a save, apart from the picks).
+    for launcher in backup.launchers.iter().flatten() {
+        crate::launchers::save(&tx, launcher)?;
     }
     // Entries for games that aren't in the library are skipped.
     for entry in backup.game_page_custom.iter().flatten() {
@@ -2535,6 +2545,7 @@ mod tests {
             game_notes: None,
             game_added: None,
             play_sessions: None,
+            launchers: None,
         };
         let text = serde_json::to_string(&backup).unwrap();
         let raw: Value = serde_json::from_str(&text).unwrap();
@@ -2667,6 +2678,7 @@ mod tests {
             game_notes: None,
             game_added: None,
             play_sessions: None,
+            launchers: None,
         })
         .unwrap();
         let parsed = crate::validation::backup(&text).unwrap();

@@ -23,6 +23,10 @@ pub enum PickKind {
     GamesFolder,
     /// `roots_browse` for an `emulators` root.
     EmulatorsFolder,
+    /// `launchers_browse_executable`: a custom launcher's program.
+    LauncherExecutable,
+    /// `launchers_browse_folder`: a custom launcher's working folder.
+    LauncherFolder,
 }
 
 impl PickKind {
@@ -89,6 +93,21 @@ impl PickedPaths {
             .map(|p| p.path.clone())
     }
 
+    /// The latest recent pick of `kind` (as the picker returned it), for saves where the
+    /// renderer only says "use what I picked" and never sends the path itself.
+    pub fn latest(&self, kind: PickKind) -> Option<String> {
+        self.latest_at(kind, Instant::now())
+    }
+
+    fn latest_at(&self, kind: PickKind, now: Instant) -> Option<String> {
+        let mut picks = self.lock();
+        picks.retain(|p| now.saturating_duration_since(p.at) < PICK_LIFETIME);
+        picks
+            .iter()
+            .find(|p| p.kind == kind)
+            .map(|p| p.path.clone())
+    }
+
     /// Forgets a pick once it was used.
     pub fn forget(&self, kind: PickKind, path: &str) {
         if let Some(key) = normalize_path(path) {
@@ -148,6 +167,29 @@ mod tests {
         // Picks of other kinds are kept.
         picks.remember(PickKind::EmulatorsFolder, r"D:\Emulators");
         assert!(picks.find(PickKind::GamesFolder, r"D:\Roms").is_some());
+    }
+
+    #[test]
+    fn the_latest_pick_is_per_kind_and_expires() {
+        let picks = PickedPaths::default();
+        let start = Instant::now();
+        assert_eq!(picks.latest(PickKind::LauncherExecutable), None);
+        picks.remember_at(PickKind::LauncherExecutable, r"D:\Heroic\Heroic.exe", start);
+        picks.remember_at(PickKind::EmulatorExecutable, r"D:\Emu\mGBA.exe", start);
+        assert_eq!(
+            picks
+                .latest_at(PickKind::LauncherExecutable, start)
+                .as_deref(),
+            Some(r"D:\Heroic\Heroic.exe")
+        );
+        // An emulator pick is never a launcher pick, nor a launcher folder.
+        assert_eq!(picks.latest_at(PickKind::LauncherFolder, start), None);
+        assert!(picks
+            .latest_at(PickKind::LauncherExecutable, start + PICK_LIFETIME)
+            .is_none());
+        picks.remember(PickKind::LauncherFolder, r"D:\Mods");
+        picks.forget(PickKind::LauncherFolder, r"D:\Mods");
+        assert_eq!(picks.latest(PickKind::LauncherFolder), None);
     }
 
     #[test]

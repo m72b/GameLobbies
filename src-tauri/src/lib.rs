@@ -14,6 +14,8 @@ mod health_commands;
 mod igdb;
 mod importers;
 mod launch;
+mod launcher_commands;
+mod launchers;
 mod local;
 mod local_commands;
 mod localscan;
@@ -261,6 +263,13 @@ pub fn run() {
             health_commands::health_merge_routes,
             local_commands::library_set_emulator,
             local_commands::library_add_local_game,
+            launcher_commands::launchers_list,
+            launcher_commands::launchers_save,
+            launcher_commands::launchers_remove,
+            launcher_commands::launchers_browse_executable,
+            launcher_commands::launchers_browse_folder,
+            launcher_commands::launchers_choose_icon,
+            launcher_commands::launchers_add_game,
             commands::plugins_list,
             commands::plugins_install,
             commands::backup_export,
