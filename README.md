@@ -18,7 +18,7 @@ Game Lobby is local-first: your library, playtime, covers and settings stay on y
 
 ## Install
 
-Download the latest installer (`GameLobby_<version>_x64-setup.exe`) from the [releases page](https://github.com/m72b/GameLobby-releases/releases) and run it. It installs for your Windows user only and needs no administrator rights. Windows 10 and 11 already include the WebView2 runtime it uses.
+Download the latest installer (`Game Lobby_<version>_x64-setup.exe`) from the [releases page](https://github.com/m72b/GameLobby-releases/releases) and run it. It installs for your Windows user only and needs no administrator rights. Windows 10 and 11 already include the WebView2 runtime it uses.
 
 The installer isn't signed with a Windows code-signing certificate, so Windows SmartScreen may warn about an unrecognized app the first time; choose **More info → Run anyway** if you trust the download. App updates are separately signed and verified (see [Updates](#updates)).
 

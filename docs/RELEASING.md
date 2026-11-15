@@ -6,7 +6,7 @@ Game Lobby updates itself from the public repository [m72b/GameLobby-releases](h
 
 To cut a release:
 
-1. Bump `version` in `package.json` (the app and the installer take their version from it) and commit.
+1. Bump `version` in `package.json` (the app and the installer take their version from it) and in `src-tauri/Cargo.toml` to the same value, then commit. The release workflow refuses a tag that doesn't match both.
 2. Tag the commit with the same version and push the tag. An annotated tag's message becomes the release notes.
    ```bash
    git tag -a v0.4.0 -m "Release notes shown in the app"
