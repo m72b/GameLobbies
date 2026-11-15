@@ -11,6 +11,7 @@ The first public release.
 - Scans your own game folders and emulator / ROM folders, including hidden and system folders and a games folder that contains the emulators folder.
 - Emulator profiles with ROM routes; duplicate emulator entries show the ROM file name.
 - Custom games from folders, shortcuts and programs.
+- Custom launchers: your own launcher with its name, icon, colour, program and arguments, its own side-rail entry and library filter. Changes to its program or arguments are confirmed in a Windows dialog.
 - Storage view: install sizes per game, a total, and "Uninstall…" that hands off to the game's own launcher.
 - Recently added shelf for newly discovered games.
 - Library health: finds missing or moved files and duplicate games or launch routes, and helps repair them.
