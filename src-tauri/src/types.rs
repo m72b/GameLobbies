@@ -81,6 +81,14 @@ pub struct GameRoute {
     /// (`validation::check_renderer_routes`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launcher_id: Option<String>,
+    /// Added from the game page (`launchers_assign`). On a `launcher:<id>` route: the route was
+    /// made from another of the game's routes (its target is that route's file, folder or
+    /// store id). On any other route: its `launcherId` label was set there (a launcher without
+    /// a program). Unassigning removes exactly that route or label, and scans keep both. Set
+    /// only by Rust; the renderer can't add, change or remove it
+    /// (`validation::check_renderer_routes`). Older builds ignore it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assigned: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]

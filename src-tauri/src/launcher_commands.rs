@@ -539,3 +539,226 @@ async fn add_label_only_game(
     crate::steamgriddb::spawn_auto_fetch(app);
     Ok(Some(AddedLauncherGame { game_id, games }))
 }
+
+// ---------------------------------------------------------------------------
+// Assigning games already in the library (the game page's Launcher block)
+
+/// A way to pass a game to a launcher, from one of its routes (`launchers::AssignCandidate`).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssignTarget {
+    route_index: usize,
+    kind: &'static str,
+    target: String,
+}
+
+/// One launcher on a game's page: whether the game shows under it, whether that came from the
+/// game page (it can be removed there), and how the game would be passed to it.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssignmentOption {
+    launcher_id: String,
+    /// The game shows under this launcher (any way: Add game, a games folder, the game page).
+    listed: bool,
+    /// The game page added it (`launchers_unassign` removes it).
+    assigned: bool,
+    /// For a launcher with a program: the targets it can use (existing files and folders only),
+    /// the first being the default.
+    targets: Vec<AssignTarget>,
+    /// Why it can't be assigned, when it can't.
+    problem: Option<String>,
+}
+
+fn game_arg(value: &str) -> CmdResult<String> {
+    if value.is_empty() || value.chars().count() > 512 || value.chars().any(char::is_control) {
+        return Err("The game id is invalid.".into());
+    }
+    Ok(value.to_string())
+}
+
+fn route_arg(value: Option<i64>) -> CmdResult<Option<usize>> {
+    match value {
+        None => Ok(None),
+        Some(i) if (0..128).contains(&i) => Ok(Some(i as usize)),
+        Some(_) => Err("Launch route is invalid.".into()),
+    }
+}
+
+/// Every launcher, as seen from game `gameId`'s page (see [`AssignmentOption`]).
+#[tauri::command]
+pub async fn launchers_assignments(
+    state: State<'_, AppState>,
+    game_id: String,
+) -> CmdResult<Vec<AssignmentOption>> {
+    let game_id = game_arg(&game_id)?;
+    let (game, all) = {
+        let conn = state.db.lock();
+        let game = db::get_game(&conn, &game_id)
+            .map_err(err)?
+            .ok_or("Game not found.")?;
+        (game, launchers::list(&conn).map_err(err)?)
+    };
+    // Which files and folders exist is checked without the database lock.
+    let options = crate::platform::on_thread(move || {
+        all.iter()
+            .map(|l| assignment_option(l, &game))
+            .collect::<Vec<_>>()
+    })
+    .await
+    .map_err(err)?;
+    Ok(options)
+}
+
+/// [`AssignmentOption`] for one launcher. Touches the filesystem.
+fn assignment_option(l: &CustomLauncher, game: &Game) -> AssignmentOption {
+    let mine = |r: &crate::types::GameRoute| launchers::route_launcher(r) == Some(l.id.as_str());
+    let listed = game.routes.iter().any(mine);
+    let assigned = game
+        .routes
+        .iter()
+        .any(|r| launchers::is_assigned(r) && mine(r));
+    let mut targets = Vec::new();
+    let mut problem = launchers::assign_blocker(l, game);
+    if problem.is_none() && !launchers::is_label_only(l) {
+        targets = launchers::assign_candidates(l, game)
+            .into_iter()
+            .filter(launchers::candidate_exists)
+            .map(|c| AssignTarget {
+                route_index: c.route_index,
+                kind: c.kind.as_str(),
+                target: c.target,
+            })
+            .collect();
+        if targets.is_empty() {
+            problem = Some(launchers::no_candidate_reason(l, game));
+        }
+    }
+    AssignmentOption {
+        launcher_id: l.id.clone(),
+        listed,
+        assigned,
+        targets,
+        problem,
+    }
+}
+
+/// Assigns game `gameId` to launcher `launcherId` from the game page: the game shows under the
+/// launcher, and (for a launcher with a program) Play runs it through the launcher with a target
+/// taken from one of the game's own routes (`routeIndex` and `kind` choose which; the first that
+/// fits otherwise). The renderer names no path, program or argument. A new launch route is shown
+/// in a native dialog (program, exact arguments, working folder) and added only when the user
+/// confirms it; the game's other routes stay. A launcher without a program only labels a route
+/// (nothing new runs), without a dialog. Returns the library.
+#[tauri::command]
+pub async fn launchers_assign(
+    app: AppHandle,
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    game_id: String,
+    launcher_id: String,
+    route_index: Option<i64>,
+    kind: Option<String>,
+) -> CmdResult<Vec<Game>> {
+    let game_id = game_arg(&game_id)?;
+    let launcher_id = id_arg(&launcher_id)?;
+    let route_index = route_arg(route_index)?;
+    let kind = match kind.as_deref() {
+        None => None,
+        Some(raw) => Some(TargetKind::parse(raw).ok_or("That target kind is invalid.")?),
+    };
+    let (game, launcher) = {
+        let conn = state.db.lock();
+        let game = db::get_game(&conn, &game_id)
+            .map_err(err)?
+            .ok_or("Game not found.")?;
+        let launcher = launchers::get(&conn, &launcher_id)
+            .map_err(err)?
+            .ok_or("That launcher no longer exists.")?;
+        (game, launcher)
+    };
+    if let Some(reason) = launchers::assign_blocker(&launcher, &game) {
+        return Err(reason);
+    }
+    let candidate = if launchers::is_label_only(&launcher) {
+        None
+    } else {
+        if kind.is_some_and(|k| !launcher.allows(k)) {
+            return Err(format!("{}'s games don't use that.", launcher.name));
+        }
+        // The target comes from the stored route; files and folders must exist.
+        let candidates = launchers::assign_candidates(&launcher, &game);
+        let chosen = crate::platform::on_thread(move || {
+            candidates.into_iter().find(|c| {
+                route_index.is_none_or(|i| c.route_index == i)
+                    && kind.is_none_or(|k| c.kind == k)
+                    && launchers::candidate_exists(c)
+            })
+        })
+        .await
+        .map_err(err)?;
+        let Some(chosen) = chosen else {
+            return Err(launchers::no_candidate_reason(&launcher, &game));
+        };
+        let route = launchers::assigned_route(&launcher, &game, &chosen).map_err(err)?;
+        // The same checks as every launch, before anything is saved: a shortcut handed to the
+        // launcher must be one the user may run, and the program, arguments, target and working
+        // folder must be usable.
+        let confirmations = db::shortcut_confirmations(&state.db.lock()).map_err(err)?;
+        let target = chosen.target.clone();
+        crate::platform::on_thread(move || {
+            crate::launch::check_launcher_shortcut(&target, &confirmations)
+        })
+        .await
+        .map_err(err)?
+        .map_err(err)?;
+        launchers::prepare_launch(&launcher, &route).map_err(err)?;
+        let prompt = launchers::assign_prompt(&launcher, &game.title, &chosen).map_err(err)?;
+        if !confirm_natively(&window, "Confirm launcher", &prompt, "Use launcher").await {
+            return Err(format!(
+                "{} was not added to {}.",
+                game.title, launcher.name
+            ));
+        }
+        Some(chosen)
+    };
+    let games = {
+        let conn = state.db.lock();
+        // The dialog may have been open for a while: save only over what was confirmed.
+        let now_game = db::get_game(&conn, &game_id).map_err(err)?;
+        let now_launcher = launchers::get(&conn, &launcher_id).map_err(err)?;
+        if now_game.as_ref() != Some(&game) || now_launcher.as_ref() != Some(&launcher) {
+            return Err("The game or the launcher changed in the meantime. Try again.".into());
+        }
+        let routes =
+            launchers::assign(&launcher, &game, candidate.as_ref(), route_index).map_err(err)?;
+        db::set_routes(&conn, &game_id, routes).map_err(err)?;
+        db::all_games(&conn).map_err(err)?
+    };
+    notify_library(&app, &state);
+    Ok(games)
+}
+
+/// Removes what [`launchers_assign`] added for launcher `launcherId` to game `gameId` (its launch
+/// route, or its label), and nothing else. Returns the library.
+#[tauri::command]
+pub async fn launchers_unassign(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    game_id: String,
+    launcher_id: String,
+) -> CmdResult<Vec<Game>> {
+    let game_id = game_arg(&game_id)?;
+    let launcher_id = id_arg(&launcher_id)?;
+    let games = {
+        let conn = state.db.lock();
+        let game = db::get_game(&conn, &game_id)
+            .map_err(err)?
+            .ok_or("Game not found.")?;
+        let routes = launchers::unassign(&game, &launcher_id)
+            .ok_or("This game wasn't added to that launcher on its page.")?;
+        db::set_routes(&conn, &game_id, routes).map_err(err)?;
+        db::all_games(&conn).map_err(err)?
+    };
+    notify_library(&app, &state);
+    Ok(games)
+}

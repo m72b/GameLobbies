@@ -598,7 +598,56 @@ fn track_started_process(state: &AppState, game_id: &str, pid: u32, exe: &Path) 
     Ok(())
 }
 
-pub async fn launch_game(app: &AppHandle, game: &Game, route_index: usize) -> Result<()> {
+/// What a launch did.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(tag = "status", rename_all = "camelCase")]
+pub enum LaunchOutcome {
+    /// The game was started.
+    Started,
+    /// The game's custom launcher wasn't running: its program was started on its own and the
+    /// launch waits for the user's Continue (`library_launch_continue` with `pendingId`).
+    #[serde(rename_all = "camelCase")]
+    Waiting {
+        pending_id: String,
+        launcher_id: String,
+        launcher_name: String,
+    },
+}
+
+/// Whether to wait for a custom launcher that isn't running yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LauncherWait {
+    /// Start the launcher alone first when it isn't running ([`LaunchOutcome::Waiting`]).
+    IfNotRunning,
+    /// Launch now (the user confirmed the launcher is open).
+    Never,
+}
+
+/// Whether the launcher program is running now (by its exact executable path). When the process
+/// list can't be read, it counts as running: the game is launched as before.
+async fn launcher_program_running(program: &Path) -> bool {
+    if !cfg!(windows) {
+        return true;
+    }
+    match on_thread(crate::platform::running_processes).await {
+        Ok(Ok(processes)) => launchers::program_running(&processes, program),
+        Ok(Err(e)) => {
+            log::warn!("Could not check whether the launcher is running: {e:#}");
+            true
+        }
+        Err(e) => {
+            log::warn!("Could not check whether the launcher is running: {e:#}");
+            true
+        }
+    }
+}
+
+pub async fn launch_game(
+    app: &AppHandle,
+    game: &Game,
+    route_index: usize,
+    wait: LauncherWait,
+) -> Result<LaunchOutcome> {
     let route = game
         .routes
         .get(route_index)
@@ -618,9 +667,30 @@ pub async fn launch_game(app: &AppHandle, game: &Game, route_index: usize) -> Re
         on_thread(move || check_launcher_shortcut(&target, &confirmations)).await??;
         // Touches the filesystem: the database lock is already released.
         let launch = launchers::prepare_launch(&launcher, route)?;
+        // A launcher that isn't open yet is started on its own (no game arguments, nothing
+        // tracked); the game waits for the user's Continue, which only names this pending id.
+        if wait == LauncherWait::IfNotRunning && !launcher_program_running(&launch.program).await {
+            spawn_detached_in(&launch.program, &[], Some(&launch.cwd))
+                .map_err(|e| anyhow!("Could not start {}: {e}", launch.program.display()))?;
+            let pending_id = state
+                .pending_launches
+                .begin(crate::pending_launch::Pending {
+                    game_id: game.id.clone(),
+                    launcher_id: launcher.id.clone(),
+                    launcher_name: launcher.name.clone(),
+                    program: launcher.executable.clone(),
+                    route: route.clone(),
+                });
+            return Ok(LaunchOutcome::Waiting {
+                pending_id,
+                launcher_id: launcher.id,
+                launcher_name: launcher.name,
+            });
+        }
         let pid = spawn_detached_in(&launch.program, &launch.argv, Some(&launch.cwd))
             .map_err(|e| anyhow!("Could not start {}: {e}", launch.program.display()))?;
-        return track_started_process(&state, &game.id, pid, &launch.program);
+        track_started_process(&state, &game.id, pid, &launch.program)?;
+        return Ok(LaunchOutcome::Started);
     }
     if is_rom_route(route) {
         let (exe, argv, cwd) = {
@@ -632,7 +702,8 @@ pub async fn launch_game(app: &AppHandle, game: &Game, route_index: usize) -> Re
         };
         let pid = spawn_detached_in(&exe, &argv, Some(&cwd))
             .map_err(|e| anyhow!("Could not start {}: {e}", exe.display()))?;
-        return track_started_process(&state, &game.id, pid, &exe);
+        track_started_process(&state, &game.id, pid, &exe)?;
+        return Ok(LaunchOutcome::Started);
     }
     let target = route.launch_target.as_str();
     if route.source_id == local::LOCAL_SOURCE {
@@ -674,7 +745,7 @@ pub async fn launch_game(app: &AppHandle, game: &Game, route_index: usize) -> Re
             db::mark_game_played(&state.db.lock(), &game.id, now_ms())?;
         }
     }
-    Ok(())
+    Ok(LaunchOutcome::Started)
 }
 
 #[cfg(test)]

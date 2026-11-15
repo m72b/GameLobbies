@@ -31,6 +31,16 @@
 //!   covers folder by [`import_icon`] (magic-byte check, size cap, PNG/JPEG/WebP/GIF, never SVG)
 //!   and referenced by its bare file name only ([`icon_file_ok`]).
 //! - Colour: `#rrggbb` ([`check_color`]).
+//! - Assignments ([`assign`]): a game already in the library can be given to any launcher from
+//!   its page. The renderer names only the game, the launcher and which of the game's routes and
+//!   kinds to use; the target is that route's own file, install folder or store id
+//!   ([`assign_candidates`]), never text from the renderer. A launcher with a program gets a new
+//!   `launcher:<id>` route (shown in a native confirmation first, checked like any launch); a
+//!   label-only launcher only labels a route. Both are marked [`GameRoute::assigned`], kept by
+//!   scans, and removed exactly by [`unassign`].
+//! - Launching: when the launcher's program isn't running ([`program_running`], by exact
+//!   path), it is started alone first and the launch waits for the user (see
+//!   `pending_launch`).
 
 use crate::db;
 use crate::emulators::{drive_path_ok, executable_path_ok};
@@ -795,6 +805,276 @@ pub fn prepare_launch(l: &CustomLauncher, route: &GameRoute) -> Result<LauncherL
     Ok(LauncherLaunch { program, argv, cwd })
 }
 
+/// Whether the launcher program `program` is running now: one of `processes` has exactly that
+/// executable (compared as normalized paths, so case and `/` vs `\` don't matter; a program of
+/// the same name elsewhere doesn't count).
+pub fn program_running(processes: &[crate::platform::ProcessInfo], program: &Path) -> bool {
+    let Some(want) = crate::tracker::normalize_path(&program.to_string_lossy()) else {
+        return false;
+    };
+    processes
+        .iter()
+        .any(|p| crate::tracker::normalize_path(&p.path).as_deref() == Some(want.as_str()))
+}
+
+// ---------------------------------------------------------------------------
+// Assigning games that are already in the library (from the game page)
+//
+// The renderer names only a game, a launcher and (optionally) which of the game's routes and
+// which target kind to use. The target always comes from that stored route: its file, its
+// install folder or its store id. Nothing typed or picked is involved, so a launcher route made
+// here can't run anything the game didn't already point at; the native confirmation shows the
+// exact program and arguments before it is saved.
+
+/// One way a game can be passed to a launcher: route `route_index`'s `target`, of `kind`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssignCandidate {
+    pub route_index: usize,
+    pub kind: TargetKind,
+    pub target: String,
+}
+
+/// Whether a route (or its launcher label) was added on the game page.
+pub fn is_assigned(route: &GameRoute) -> bool {
+    route.assigned == Some(true)
+}
+
+/// What a route offers as a target of `kind`, by shape only (no disk access): its target as a
+/// file, its install folder (or a folder target) as a folder, its store id as an identifier.
+fn route_target_of(route: &GameRoute, kind: TargetKind) -> Vec<String> {
+    let text = |v: &Option<String>| v.as_deref().filter(|s| !s.is_empty()).map(str::to_owned);
+    let mut found = Vec::new();
+    match kind {
+        TargetKind::File => found.push(route.launch_target.clone()),
+        TargetKind::Folder => {
+            found.extend(text(&route.install_path));
+            found.push(route.launch_target.clone());
+        }
+        TargetKind::Identifier => {
+            // A store's own id (Steam app id, Epic app name, GOG id ...). Local, ROM and
+            // launcher file routes use a path key as app id, which is never an identifier.
+            found.extend(text(&route.app_id));
+            if is_launcher_route(route) {
+                found.push(route.launch_target.clone());
+            }
+        }
+    }
+    found.retain(|t| target_shape_ok(kind, t));
+    found
+}
+
+/// Every target the game's routes offer for the launcher's kinds, in route order and the
+/// launcher's kind order, without repeats. Routes added by an assignment are never a source.
+/// Shape only: call [`candidate_exists`] (disk access) before using one.
+pub fn assign_candidates(l: &CustomLauncher, game: &Game) -> Vec<AssignCandidate> {
+    let kinds = l.kinds().unwrap_or_default();
+    let mut out: Vec<AssignCandidate> = Vec::new();
+    for (route_index, route) in game.routes.iter().enumerate() {
+        if is_assigned(route) {
+            continue;
+        }
+        for kind in &kinds {
+            for target in route_target_of(route, *kind) {
+                if !out.iter().any(|c| c.kind == *kind && c.target == target) {
+                    out.push(AssignCandidate {
+                        route_index,
+                        kind: *kind,
+                        target,
+                    });
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Whether a candidate's file or folder exists (identifiers always do). Touches the filesystem.
+pub fn candidate_exists(c: &AssignCandidate) -> bool {
+    check_target(c.kind, &c.target).is_ok()
+}
+
+/// Why the game can't be assigned to the launcher at all, or `None`.
+pub fn assign_blocker(l: &CustomLauncher, game: &Game) -> Option<String> {
+    if game
+        .routes
+        .iter()
+        .any(|r| route_launcher(r) == Some(l.id.as_str()))
+    {
+        return Some(format!(
+            "{} is already listed under {}.",
+            game.title, l.name
+        ));
+    }
+    if game.routes.is_empty() {
+        return Some(format!(
+            "{} has no way to start yet, so there is nothing to give {}.",
+            game.title, l.name
+        ));
+    }
+    None
+}
+
+/// Why none of the game's targets fit the launcher (after [`assign_candidates`] and
+/// [`candidate_exists`] found none).
+pub fn no_candidate_reason(l: &CustomLauncher, game: &Game) -> String {
+    let nouns: Vec<&str> = l
+        .kinds()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|k| match k {
+            TargetKind::File => "a file",
+            TargetKind::Folder => "a folder",
+            TargetKind::Identifier => "a store id",
+        })
+        .collect();
+    format!(
+        "{} starts games from {}, and none of the ways {} starts now gives one (that exists on this PC). Let {} use other kinds of targets in Settings, or add the game to it with Add game.",
+        l.name,
+        nouns.join(" or "),
+        game.title,
+        l.name
+    )
+}
+
+/// The launcher route an assignment adds: like one from [`new_game_of_kind`], with the base
+/// route's install state, marked [`is_assigned`].
+pub fn assigned_route(l: &CustomLauncher, game: &Game, c: &AssignCandidate) -> Result<GameRoute> {
+    if is_label_only(l) {
+        bail!(
+            "{} has no program, so it doesn't get a route of its own.",
+            l.name
+        );
+    }
+    if !l.allows(c.kind) {
+        bail!("{}'s games don't use {}.", l.name, c.kind.noun());
+    }
+    let base = game
+        .routes
+        .get(c.route_index)
+        .filter(|r| !is_assigned(r))
+        .ok_or_else(|| anyhow!("That way to start the game no longer exists."))?;
+    if !route_target_of(base, c.kind).contains(&c.target) {
+        bail!("That target doesn't belong to this game.");
+    }
+    let path = Path::new(&c.target);
+    let (app_id, install_path) = match c.kind {
+        TargetKind::Identifier => (None, None),
+        TargetKind::File => (
+            Some(key_of(path)),
+            path.parent().map(|p| p.to_string_lossy().into_owned()),
+        ),
+        TargetKind::Folder => (Some(key_of(path)), Some(c.target.clone())),
+    };
+    Ok(GameRoute {
+        source_id: source_id(&l.id),
+        store: "Custom".into(),
+        app_id,
+        launch_target: c.target.clone(),
+        install_path,
+        installed: base.installed,
+        assigned: Some(true),
+        ..Default::default()
+    })
+}
+
+/// The game's routes after assigning it to launcher `l`. A launcher with a program gets a new
+/// route first in the list (so Play uses it), and the game's other routes stay as they are. A
+/// launcher without a program only labels one existing route (`route_index`, else the first
+/// one without a launcher), which keeps running as before.
+pub fn assign(
+    l: &CustomLauncher,
+    game: &Game,
+    candidate: Option<&AssignCandidate>,
+    route_index: Option<usize>,
+) -> Result<Vec<GameRoute>> {
+    if let Some(reason) = assign_blocker(l, game) {
+        bail!("{reason}");
+    }
+    let mut routes = game.routes.clone();
+    if is_label_only(l) {
+        let free = |r: &GameRoute| route_launcher(r).is_none() && !is_assigned(r);
+        let index = match route_index {
+            Some(i) => Some(i).filter(|i| routes.get(*i).is_some_and(free)),
+            None => routes.iter().position(free),
+        }
+        .ok_or_else(|| {
+            anyhow!(
+                "Every way to start {} already shows another launcher.",
+                game.title
+            )
+        })?;
+        routes[index].launcher_id = Some(l.id.clone());
+        routes[index].assigned = Some(true);
+        return Ok(routes);
+    }
+    let candidate = candidate.ok_or_else(|| anyhow!("{}", no_candidate_reason(l, game)))?;
+    routes.insert(0, assigned_route(l, game, candidate)?);
+    if routes.len() > 128 {
+        bail!("A game can have at most 128 launch routes.");
+    }
+    Ok(routes)
+}
+
+/// The game's routes without what assigning it to launcher `launcher_id` added: the assigned
+/// launcher route goes, an assigned label is taken off (the route stays). Routes the launcher's
+/// own Add game or games folders made are kept. `None` when there is nothing to remove.
+pub fn unassign(game: &Game, launcher_id: &str) -> Option<Vec<GameRoute>> {
+    let mut changed = false;
+    let mut routes = Vec::with_capacity(game.routes.len());
+    for route in &game.routes {
+        if !is_assigned(route) {
+            routes.push(route.clone());
+            continue;
+        }
+        if launcher_id_of(route) == Some(launcher_id) {
+            changed = true;
+            continue;
+        }
+        if !is_launcher_route(route) && route.launcher_id.as_deref() == Some(launcher_id) {
+            let mut next = route.clone();
+            next.launcher_id = None;
+            next.assigned = None;
+            routes.push(next);
+            changed = true;
+            continue;
+        }
+        routes.push(route.clone());
+    }
+    changed.then_some(routes)
+}
+
+/// The native confirmation text for an assignment that adds a launcher route: the game, the
+/// launcher's program, the exact argument list with this game's target, and the working folder.
+pub fn assign_prompt(l: &CustomLauncher, game_title: &str, c: &AssignCandidate) -> Result<String> {
+    let argv = build_argv(&l.args_template, &c.target)?;
+    let lines: Vec<String> = argv
+        .iter()
+        .enumerate()
+        .map(|(i, arg)| format!("  {}. {arg}", i + 1))
+        .collect();
+    let folder = match &l.working_dir {
+        Some(dir) => dir.clone(),
+        None => Path::new(&l.executable)
+            .parent()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+    };
+    let what = match c.kind {
+        TargetKind::File => "file",
+        TargetKind::Folder => "folder",
+        TargetKind::Identifier => "store id",
+    };
+    Ok(format!(
+        "Play \"{game_title}\" with {}?\n\nGame Lobby will run:\n  {}\n\nArguments (one per line; the game's {what} is {}):\n{}\n\nWorking folder:\n  {folder}\n\nPlay will use {} from now on. The game's current way to start stays under Play from, and you can remove {} from the game page at any time.",
+        l.name,
+        l.executable,
+        c.target,
+        lines.join("\n"),
+        l.name,
+        l.name
+    ))
+}
+
 // ---------------------------------------------------------------------------
 // Games
 
@@ -962,13 +1242,18 @@ pub fn remove(conn: &Connection, id: &str, mode: RemoveMode) -> Result<Option<Ve
             .routes
             .iter()
             .filter(|r| {
+                // A label assigned on the game page sits on a route of another store or folder:
+                // only the label goes, whatever the mode.
                 launcher_id_of(r) != Some(id)
-                    && (mode == RemoveMode::KeepGames || route_launcher(r) != Some(id))
+                    && (mode == RemoveMode::KeepGames
+                        || route_launcher(r) != Some(id)
+                        || is_assigned(r))
             })
             .cloned()
             .map(|mut r| {
                 if route_launcher(&r) == Some(id) {
                     r.launcher_id = None;
+                    r.assigned = None;
                     if let Some(states) = r.install_states.as_mut() {
                         states.retain(|k, _| !root_keys.contains(k));
                     }
@@ -1881,7 +2166,15 @@ mod tests {
             .expect("shortcut check");
         assert!(check < branch.find("launchers::prepare_launch").unwrap());
         assert!(branch.contains("spawn_detached_in(&launch.program, &launch.argv"));
-        assert!(branch.contains("return track_started_process"));
+        assert!(branch.contains("track_started_process(&state, &game.id, pid, &launch.program)"));
+        // A launcher that isn't open yet is started alone: its checked program, no arguments,
+        // only after every check, and before the game would start.
+        let alone = branch
+            .find("spawn_detached_in(&launch.program, &[], Some(&launch.cwd))")
+            .expect("launcher started alone");
+        assert!(alone > branch.find("launchers::prepare_launch").unwrap());
+        assert!(alone < branch.find("&launch.argv").unwrap());
+        assert!(branch.contains("state.pending_launches.begin("));
         for forbidden in [
             "shell_open",
             "spawn_detached(",
@@ -2272,5 +2565,424 @@ mod tests {
             );
         }
         assert_eq!(std::fs::read_dir(covers.path()).unwrap().count(), 2);
+    }
+
+    // -----------------------------------------------------------------------
+    // Assignments from the game page
+
+    fn named(id: &str, exe: &str, kinds: &[&str]) -> CustomLauncher {
+        let mut l = launcher(exe, kinds[0]);
+        l.id = id.into();
+        l.name = id.to_uppercase();
+        l.target_kinds = kinds.iter().map(|k| k.to_string()).collect();
+        validate(l).unwrap()
+    }
+
+    fn label_only(id: &str) -> CustomLauncher {
+        let mut l = launcher("", "file");
+        l.id = id.into();
+        l.name = id.to_uppercase();
+        l.args_template = String::new();
+        validate(l).unwrap()
+    }
+
+    fn local_route(exe: &Path) -> GameRoute {
+        GameRoute {
+            source_id: "local".into(),
+            store: "Custom".into(),
+            app_id: Some(key_of(exe)),
+            launch_target: exe.to_string_lossy().into_owned(),
+            install_path: exe.parent().map(|p| p.to_string_lossy().into_owned()),
+            installed: Some(true),
+            ..Default::default()
+        }
+    }
+
+    fn game_with(id: &str, routes: Vec<GameRoute>) -> Game {
+        Game {
+            id: id.into(),
+            title: "Hollow Knight".into(),
+            store: routes[0].store.clone(),
+            routes,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn assignments_take_the_target_from_the_game_and_never_from_the_renderer() {
+        let dir = TempDir::new("launcher-assign");
+        let exe = dir.file("Heroic/Heroic.exe");
+        let game_exe = dir.file("Games/Hollow Knight/hk.exe");
+        let l = named("heroic", &exe.to_string_lossy(), &["file"]);
+        let game = game_with("g", vec![steam_route(), local_route(&game_exe)]);
+
+        // Only the stored routes' targets are offered: the local route's file. A Steam link is
+        // no file.
+        let candidates = assign_candidates(&l, &game);
+        assert_eq!(
+            candidates,
+            [AssignCandidate {
+                route_index: 1,
+                kind: TargetKind::File,
+                target: game_exe.to_string_lossy().into_owned(),
+            }]
+        );
+        assert!(candidates.iter().all(candidate_exists));
+
+        // A target that isn't the route's own (what a forged request would carry) is refused,
+        // as is another route's index or a kind the launcher doesn't use.
+        for forged in [
+            AssignCandidate {
+                target: r"C:\Windows\System32\calc.exe".into(),
+                ..candidates[0].clone()
+            },
+            AssignCandidate {
+                route_index: 0,
+                ..candidates[0].clone()
+            },
+            AssignCandidate {
+                route_index: 9,
+                ..candidates[0].clone()
+            },
+            AssignCandidate {
+                kind: TargetKind::Identifier,
+                target: "400".into(),
+                route_index: 0,
+            },
+        ] {
+            assert!(assigned_route(&l, &game, &forged).is_err(), "{forged:?}");
+            assert!(
+                assign(&l, &game, Some(&forged), None).is_err(),
+                "{forged:?}"
+            );
+        }
+
+        // The added route comes first (Play uses it); the game's own routes stay unchanged.
+        let routes = assign(&l, &game, Some(&candidates[0]), None).unwrap();
+        assert_eq!(routes.len(), 3);
+        assert_eq!(routes[1..], game.routes[..]);
+        let added = &routes[0];
+        assert_eq!(added.source_id, "launcher:heroic");
+        assert_eq!(added.launch_target, game_exe.to_string_lossy());
+        assert!(is_assigned(added));
+        assert_eq!(added.installed, Some(true));
+        // It launches exactly like a route from Add game: the launcher's program, its template,
+        // this target as one argument.
+        let launch = prepare_launch(&l, added).unwrap();
+        assert_eq!(launch.program, exe);
+        assert_eq!(
+            launch.argv,
+            ["--start".to_string(), added.launch_target.clone()]
+        );
+        let prompt = assign_prompt(&l, &game.title, &candidates[0]).unwrap();
+        assert!(prompt.contains(&*exe.to_string_lossy()));
+        assert!(prompt.contains(&format!("  2. {}", game_exe.to_string_lossy())));
+
+        // The renderer can't add that route itself, nor mark or unmark a route as assigned.
+        let check = crate::validation::check_renderer_routes;
+        assert!(check(&game.routes, &routes).is_err(), "adding it");
+        assert!(check(&routes, &routes).is_ok(), "sending it back unchanged");
+        let mut unmarked = routes.clone();
+        unmarked[0].assigned = None;
+        assert!(check(&routes, &unmarked).is_err(), "unmarking it");
+        let mut marked = game.routes.clone();
+        marked[1].assigned = Some(true);
+        assert!(
+            check(&game.routes, &marked).is_err(),
+            "marking another route"
+        );
+        let mut link = game.routes.clone();
+        link[0].assigned = Some(true);
+        assert!(check(&game.routes, &link).is_err(), "even on a store link");
+
+        // Once listed under the launcher, it can't be assigned again.
+        let assigned = Game {
+            routes: routes.clone(),
+            ..game.clone()
+        };
+        assert!(assign_blocker(&l, &assigned).is_some());
+        assert!(assign(&l, &assigned, Some(&candidates[0]), None).is_err());
+        // A route made by an assignment is never the source of another one.
+        let other = named("playnite", &exe.to_string_lossy(), &["file"]);
+        assert!(assign_candidates(&other, &assigned)
+            .iter()
+            .all(|c| c.route_index != 0));
+    }
+
+    #[test]
+    fn a_target_kind_the_launcher_does_not_use_is_refused() {
+        let dir = TempDir::new("launcher-assign-kinds");
+        let exe = dir.file("Heroic/Heroic.exe");
+        let exe = exe.to_string_lossy();
+        // A Steam game: a link, an install folder that no longer exists, and a store id.
+        let mut steam = steam_route();
+        steam.install_path = Some(dir.path().join("gone").to_string_lossy().into_owned());
+        let game = game_with("g", vec![steam]);
+
+        let files = named("files", &exe, &["file"]);
+        assert!(assign_candidates(&files, &game).is_empty());
+        assert!(assign(&files, &game, None, None).is_err());
+        assert!(no_candidate_reason(&files, &game).contains("a file"));
+
+        // Folders: the install folder fits by shape, but it must exist.
+        let folders = named("folders", &exe, &["folder"]);
+        let found = assign_candidates(&folders, &game);
+        assert_eq!(found.len(), 1);
+        assert!(!candidate_exists(&found[0]));
+
+        // Identifiers: the Steam app id.
+        let ids = named("ids", &exe, &["identifier"]);
+        let found = assign_candidates(&ids, &game);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].target, "400");
+        assert_eq!(found[0].kind, TargetKind::Identifier);
+        let routes = assign(&ids, &game, Some(&found[0]), None).unwrap();
+        assert_eq!(routes[0].launch_target, "400");
+        assert_eq!(routes[0].app_id, None);
+
+        // Path keys used as app ids by local and ROM routes are never identifiers.
+        let game_exe = dir.file("Games/x/x.exe");
+        let local = game_with("l", vec![local_route(&game_exe)]);
+        assert!(assign_candidates(&ids, &local).is_empty());
+        let both = named("both", &exe, &["file", "identifier"]);
+        let found = assign_candidates(&both, &local);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].kind, TargetKind::File);
+    }
+
+    #[test]
+    fn unassigning_removes_only_what_the_game_page_added() {
+        let dir = TempDir::new("launcher-unassign");
+        let exe = dir.file("Heroic/Heroic.exe");
+        let exe = exe.to_string_lossy();
+        let own = named("heroic", &exe, &["identifier"]);
+        let ids = named("ids", &exe, &["identifier"]);
+        let app = label_only("app");
+        // A game Heroic's Add game made, which also has a Steam route.
+        let mut game = new_game(&own, "Hollow Knight", "hk").unwrap();
+        game.routes.push(steam_route());
+        let original = game.routes.clone();
+
+        // Assigned to another launcher with a program, and to a launcher without one.
+        let candidate = assign_candidates(&ids, &game)
+            .into_iter()
+            .find(|c| c.target == "400")
+            .unwrap();
+        game.routes = assign(&ids, &game, Some(&candidate), None).unwrap();
+        assert_eq!(game.routes.len(), 3);
+        game.routes = assign(&app, &game, None, None).unwrap();
+        // The label goes on the first route without a launcher (the Steam route), which keeps
+        // running as before.
+        let labelled = game.routes.iter().find(|r| r.source_id == "steam").unwrap();
+        assert_eq!(labelled.launcher_id.as_deref(), Some("app"));
+        assert!(is_assigned(labelled));
+        assert_eq!(game.routes.len(), 3);
+        // A launcher without a program never gets a route of its own.
+        assert!(game.routes.iter().all(|r| launcher_id_of(r) != Some("app")));
+
+        // Heroic's own route wasn't added on the game page: nothing to unassign.
+        assert_eq!(unassign(&game, "heroic"), None);
+        assert_eq!(unassign(&game, "nobody"), None);
+        let without_ids = unassign(&game, "ids").unwrap();
+        assert_eq!(without_ids.len(), 2);
+        assert!(without_ids.iter().all(|r| launcher_id_of(r) != Some("ids")));
+        let without_app = unassign(
+            &Game {
+                routes: without_ids,
+                ..game.clone()
+            },
+            "app",
+        )
+        .unwrap();
+        assert_eq!(without_app, original, "back to exactly what it was");
+
+        // A label from a games folder scan (not assigned) is never taken off.
+        let mut scanned = steam_route();
+        scanned.launcher_id = Some("app".into());
+        let found = game_with("s", vec![scanned]);
+        assert_eq!(unassign(&found, "app"), None);
+        assert!(assign(&app, &found, None, None).is_err(), "already listed");
+
+        // Deleting a launcher with "remove its games" never removes a store route it only
+        // labelled from the game page; the label goes.
+        let db = library_with(&[]);
+        {
+            let conn = db.lock();
+            save(&conn, &app).unwrap();
+            save(&conn, &ids).unwrap();
+            db::save_game(&conn, &GamePatch::from(&game)).unwrap();
+            assert_eq!(
+                remove(&conn, "app", RemoveMode::RemoveGames).unwrap(),
+                Some(vec![])
+            );
+            assert_eq!(
+                remove(&conn, "ids", RemoveMode::RemoveGames).unwrap(),
+                Some(vec![])
+            );
+            let left = db::get_game(&conn, &game.id).unwrap().unwrap();
+            assert_eq!(left.routes, original);
+        }
+    }
+
+    #[test]
+    fn rescans_and_backups_keep_assignments() {
+        let dir = TempDir::new("launcher-assign-rescan");
+        let exe = dir.file("Heroic/Heroic.exe");
+        let game_exe = dir.file("Games/Hollow Knight/hk.exe");
+        let files = named("files", &exe.to_string_lossy(), &["file"]);
+        let ids = named("ids", &exe.to_string_lossy(), &["identifier"]);
+        let app = label_only("app");
+        let mut game = game_with("g", vec![steam_route(), local_route(&game_exe)]);
+        let file = assign_candidates(&files, &game)[0].clone();
+        game.routes = assign(&files, &game, Some(&file), None).unwrap();
+        let id = assign_candidates(&ids, &game)
+            .into_iter()
+            .find(|c| c.kind == TargetKind::Identifier)
+            .unwrap();
+        game.routes = assign(&ids, &game, Some(&id), None).unwrap();
+        game.routes = assign(&app, &game, None, None).unwrap();
+        let assigned = game.routes.clone();
+        assert_eq!(assigned.iter().filter(|r| is_assigned(r)).count(), 3);
+
+        let db = library_with(&[]);
+        {
+            let mut conn = db.lock();
+            for l in [&files, &ids, &app] {
+                save(&conn, l).unwrap();
+            }
+            db::save_game(&conn, &GamePatch::from(&game)).unwrap();
+            // A Steam scan and a library folder scan find the game's own routes again (without
+            // labels or assignments: scans never set them).
+            let steam = steam_route();
+            let mut local = local_route(&game_exe);
+            local.install_states = Some([("root:r1".to_string(), true)].into());
+            let found = Game {
+                id: "scan".into(),
+                routes: vec![steam, local],
+                ..game_with("scan", vec![steam_route()])
+            };
+            db::upsert_imported_games(&mut conn, &[found]).unwrap();
+            let now = db::get_game(&conn, "g").unwrap().unwrap();
+            assert!(db::get_game(&conn, "scan").unwrap().is_none(), "merged");
+            assert_eq!(now.routes.len(), assigned.len());
+            for route in &assigned {
+                let kept = now
+                    .routes
+                    .iter()
+                    .find(|r| db::route_identity(r) == db::route_identity(route))
+                    .unwrap();
+                assert_eq!(kept.assigned, route.assigned, "{}", route.source_id);
+                assert_eq!(kept.launcher_id, route.launcher_id, "{}", route.source_id);
+                assert_eq!(kept.launch_target, route.launch_target);
+            }
+            // The store no longer lists the game as installed: its route stays (not
+            // installed) because the game has an assignment, and so do the assignments.
+            let other = Game {
+                id: "other".into(),
+                routes: vec![GameRoute {
+                    app_id: Some("1".into()),
+                    launch_target: "steam://rungameid/1".into(),
+                    install_states: Some([("steam-installed".to_string(), true)].into()),
+                    ..steam_route()
+                }],
+                ..game_with("other", vec![steam_route()])
+            };
+            db::upsert_imported_games(&mut conn, std::slice::from_ref(&other)).unwrap();
+            let mut steam_state = db::get_game(&conn, "g").unwrap().unwrap();
+            for r in steam_state
+                .routes
+                .iter_mut()
+                .filter(|r| r.source_id == "steam")
+            {
+                r.install_states = Some([("steam-installed".to_string(), true)].into());
+            }
+            db::set_routes(&conn, "g", steam_state.routes.clone()).unwrap();
+            db::reconcile_installed_source(&mut conn, "steam-installed", &[other]).unwrap();
+            let after = db::get_game(&conn, "g").unwrap().unwrap();
+            assert_eq!(after.routes.len(), assigned.len());
+            assert_eq!(after.routes.iter().filter(|r| is_assigned(r)).count(), 3);
+            let steam_now = after
+                .routes
+                .iter()
+                .find(|r| r.source_id == "steam")
+                .unwrap();
+            assert_eq!(steam_now.installed, Some(false));
+            // The library folder scan no longer finds the file: same.
+            let (marked, removed) =
+                db::mark_local_routes_missing(&mut conn, Some("root:r1"), &|_| true).unwrap();
+            assert_eq!((marked, removed), (1, 0));
+            let after = db::get_game(&conn, "g").unwrap().unwrap();
+            assert_eq!(after.routes.iter().filter(|r| is_assigned(r)).count(), 3);
+        }
+
+        // Backups carry assignments and restore them.
+        let backup = {
+            let conn = db.lock();
+            crate::types::Backup {
+                games: db::all_games(&conn).unwrap(),
+                settings: None,
+                emulators: None,
+                game_page_custom: None,
+                game_notes: None,
+                game_added: None,
+                play_sessions: None,
+                launchers: Some(list(&conn).unwrap()),
+            }
+        };
+        let json = serde_json::to_value(&backup).unwrap();
+        let games = json["games"].as_array().unwrap();
+        let g = games.iter().find(|g| g["id"] == "g").unwrap();
+        assert_eq!(
+            g["routes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|r| r["assigned"] == true)
+                .count(),
+            3
+        );
+        let parsed = crate::validation::backup(&json).unwrap();
+        let restored = Db::memory().unwrap();
+        db::restore_backup(&mut restored.lock(), &parsed).unwrap();
+        let conn = restored.lock();
+        let back = db::get_game(&conn, "g").unwrap().unwrap();
+        assert_eq!(back.routes.iter().filter(|r| is_assigned(r)).count(), 3);
+        assert_eq!(games_of(&conn, "app").unwrap(), ["g"]);
+    }
+
+    #[test]
+    fn the_running_launcher_is_matched_by_its_exact_path() {
+        use crate::platform::ProcessInfo;
+        let exe = Path::new(r"D:\Launchers\Heroic\Heroic.exe");
+        let p = |path: &str| ProcessInfo {
+            path: path.into(),
+            pid: 1,
+        };
+        assert!(program_running(
+            &[p(r"d:\launchers\heroic\heroic.exe")],
+            exe
+        ));
+        assert!(program_running(&[p("D:/Launchers/Heroic/Heroic.exe")], exe));
+        assert!(program_running(
+            &[
+                p(r"C:\Windows\explorer.exe"),
+                p(r"D:\Launchers\Heroic\Heroic.exe")
+            ],
+            exe
+        ));
+        for other in [
+            r"C:\Other\Heroic.exe",
+            r"D:\Launchers\Heroic\Heroic.exe.old",
+            r"D:\Launchers\Heroic\HeroicHelper.exe",
+            "Heroic.exe",
+            "",
+        ] {
+            assert!(!program_running(&[p(other)], exe), "{other}");
+        }
+        assert!(!program_running(&[], exe));
+        assert!(!program_running(
+            &[p("Heroic.exe")],
+            Path::new("Heroic.exe")
+        ));
     }
 }

@@ -20,6 +20,7 @@ mod local;
 mod local_commands;
 mod localscan;
 mod notes;
+mod pending_launch;
 mod picks;
 mod platform;
 mod redact;
@@ -187,6 +188,7 @@ pub fn run() {
                 covers: Default::default(),
                 igdb: Default::default(),
                 picks: Default::default(),
+                pending_launches: Default::default(),
             });
             scan::configure_schedule(app.handle(), hours);
             tracker::start(app.handle());
@@ -221,6 +223,9 @@ pub fn run() {
             commands::library_scan,
             commands::library_stores,
             commands::library_launch,
+            commands::library_launch_continue,
+            commands::library_launch_cancel,
+            commands::library_launch_pending,
             commands::library_save,
             commands::library_merge,
             commands::library_remove,
@@ -272,6 +277,9 @@ pub fn run() {
             launcher_commands::launchers_add_folder,
             launcher_commands::launchers_choose_icon,
             launcher_commands::launchers_add_game,
+            launcher_commands::launchers_assignments,
+            launcher_commands::launchers_assign,
+            launcher_commands::launchers_unassign,
             commands::plugins_list,
             commands::plugins_install,
             commands::backup_export,
