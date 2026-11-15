@@ -93,8 +93,15 @@ export function GamePage({ game, index, settings, launchers, running, libraryVer
   const logoSrc = art.logo[logoIdx] ? coverUrl(art.logo[logoIdx]) : undefined
   const cover = useCover(game)
   const route = game.routes[routeIdx]
-  // A launcher route reads as its launcher (Custom once the launcher is deleted).
-  const label = (item: GameRoute) => launcherOfRoute(item, launchers)?.name ?? routeLabel(item, game.routes)
+  // A route run by or labelled with a launcher reads as that launcher ("Play from: My Arcade";
+  // the store once the launcher is deleted), with the file when the launcher has several routes here.
+  const label = (item: GameRoute) => {
+    const launcher = launcherOfRoute(item, launchers)
+    if (!launcher) return routeLabel(item, game.routes)
+    const several = game.routes.filter(other => launcherOfRoute(other, launchers)?.id === launcher.id).length > 1
+    const file = item.launchTarget.split(/[\\/]/).filter(Boolean).pop()
+    return several && file ? launcher.name + ' · ' + file : launcher.name
+  }
   const labelTitle = (item: GameRoute) => { const launcher = launcherOfRoute(item, launchers); return launcher ? launcher.name + ' · ' + item.launchTarget : routeTitle(item, game.routes, systemLabel(item)) }
   const systemLabel = (item: GameRoute) => item.system ? catalog?.systems.find(system => system.id === item.system)?.name ?? item.system : undefined
   const launching = running?.state === 'launching'

@@ -33,6 +33,20 @@ function ExeItem({ item, apply, busy }: ItemProps<'ambiguous-exe'>) {
   </>
 }
 
+function UncertainRomItem({ item, apply, busy }: ItemProps<'uncertain-rom'>) {
+  const [emulator, setEmulator] = useState(item.details.emulators.length === 1 ? item.details.emulators[0].id : '')
+  const systems = item.details.systems.map(system => system.name).join(', ')
+  return <>
+    <p className="muted-text">This file’s type ({systems}) is used by several systems, so Game Lobby can’t tell which emulator plays it. Choose one; you can change it later on the game’s page.</p>
+    <div className="root-path" title={item.details.path}>{item.details.path}</div>
+    {item.details.emulators.length === 0
+      ? <p className="muted-text">None of your emulators runs {systems}. Add one (Settings → Emulators), then rescan.</p>
+      : <fieldset className="review-choices"><legend>Emulator for {item.details.title}</legend>
+        {item.details.emulators.map(option => <label key={option.id}><input type="radio" name={'emu-' + item.id} checked={emulator === option.id} onChange={() => setEmulator(option.id)} /> {option.name}{option.systems.length ? ' · ' + option.systems.map(id => item.details.systems.find(system => system.id === id)?.name ?? id).join(', ') : ''}</label>)}</fieldset>}
+    <div className="settings-actions"><button type="button" className="primary-button" disabled={busy || !emulator} onClick={() => apply({ action: 'choose-emulator', emulatorId: emulator })}>Use this emulator</button><button type="button" className="secondary-button" disabled={busy} onClick={() => apply({ action: 'ignore', path: item.details.path })}>Ignore file</button><button type="button" className="secondary-button" disabled={busy} onClick={() => apply({ action: 'dismiss' })}>Dismiss</button></div>
+  </>
+}
+
 function PathItem({ item, apply, busy }: ItemProps<'unsupported' | 'unreadable'>) {
   return <>
     <div className="root-path" title={item.details.path}>{item.details.path}</div>
@@ -50,8 +64,8 @@ function ShortcutItem({ item, apply, busy }: ItemProps<'shortcut'>) {
   </>
 }
 
-const kindLabels: Record<Exclude<ReviewItem['kind'], HealthKind>, string> = { duplicate: 'Possible duplicate', 'ambiguous-exe': 'Choose executable', unsupported: 'Unsupported', unreadable: 'Unreadable folder', shortcut: 'Confirm shortcut' }
-const itemTitle = (item: ReviewItem) => isHealthItem(item) ? healthTitle(item) : item.kind === 'duplicate' ? item.details.title + ' · ' + item.details.system : item.kind === 'ambiguous-exe' || item.kind === 'shortcut' ? item.details.title : item.details.path.split(/[\\/]/).filter(Boolean).pop() ?? item.details.path
+const kindLabels: Record<Exclude<ReviewItem['kind'], HealthKind>, string> = { duplicate: 'Possible duplicate', 'ambiguous-exe': 'Pick the target', unsupported: 'Unsupported', unreadable: 'Unreadable folder', shortcut: 'Confirm shortcut', 'uncertain-rom': 'Uncertain ROM match' }
+const itemTitle = (item: ReviewItem) => isHealthItem(item) ? healthTitle(item) : item.kind === 'duplicate' ? item.details.title + ' · ' + item.details.system : item.kind === 'ambiguous-exe' || item.kind === 'shortcut' || item.kind === 'uncertain-rom' ? item.details.title : item.details.path.split(/[\\/]/).filter(Boolean).pop() ?? item.details.path
 
 export function ReviewSection({ say }: { say(text: string): void }) {
   const [items, setItems] = useState<ReviewItem[]>([])
@@ -95,6 +109,7 @@ export function ReviewSection({ say }: { say(text: string): void }) {
         {item.kind === 'ambiguous-exe' && <ExeItem item={item} busy={busyId === item.id} apply={resolution => void apply(item.id, resolution)} />}
         {(item.kind === 'unsupported' || item.kind === 'unreadable') && <PathItem item={item} busy={busyId === item.id} apply={resolution => void apply(item.id, resolution)} />}
         {item.kind === 'shortcut' && <ShortcutItem item={item} busy={busyId === item.id} apply={resolution => void apply(item.id, resolution)} />}
+        {item.kind === 'uncertain-rom' && <UncertainRomItem item={item} busy={busyId === item.id} apply={resolution => void apply(item.id, resolution)} />}
       </div>)}
     </div>
     <div className="settings-card">

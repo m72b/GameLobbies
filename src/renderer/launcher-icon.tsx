@@ -25,8 +25,8 @@ export function LauncherIcon({ launcher, size = 12, className }: { launcher: Ico
   return <Icon className={classes} size={size} color={launcher.color} aria-hidden="true" />
 }
 
-/** A route's icon: its launcher's for launcher routes, the store's otherwise. */
-export function RouteIcon({ route, launchers, size = 12, className }: { route: Pick<GameRoute, 'sourceId' | 'store'>; launchers: readonly CustomLauncher[]; size?: number; className?: string }) {
+/** A route's icon: its launcher's for routes run by or labelled with a launcher, the store's otherwise. */
+export function RouteIcon({ route, launchers, size = 12, className }: { route: Pick<GameRoute, 'sourceId' | 'store' | 'launcherId'>; launchers: readonly CustomLauncher[]; size?: number; className?: string }) {
   const launcher = launcherOfRoute(route, launchers)
   return launcher ? <LauncherIcon launcher={launcher} size={size} className={className} /> : <StoreIcon store={route.store} size={size} className={className} />
 }

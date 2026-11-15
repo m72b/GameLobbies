@@ -252,7 +252,7 @@ export function SettingsApp() {
 
         {section === 'Library folders' && <LibraryFoldersSection scan={localScan} onOpenReview={() => setSection('Review')} say={say} />}
         {section === 'Emulators' && <EmulatorsSection scan={localScan} say={say} />}
-        {section === 'Custom launchers' && <LaunchersSection say={say} />}
+        {section === 'Custom launchers' && <LaunchersSection scan={localScan} say={say} />}
         {section === 'Review' && <ReviewSection say={say} />}
 
         {section === 'Appearance' && <>

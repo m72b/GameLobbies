@@ -17,7 +17,7 @@ export type Store = 'Steam' | 'Epic Games' | 'GOG' | 'EA app' | 'Battle.net' | '
  *   falls back to automatic. Change it with `library.setEmulator`.
  * - `system`: a `CatalogSystem.id` (`'ps2'`, `'switch'`, `'pc'`, ...).
  */
-export interface GameRoute { sourceId: string; store: Store; appId?: string; launchTarget: string; launchArgs?: string; installPath?: string; owned?: boolean; installed?: boolean; installStates?: Record<string, boolean>; playtimeMinutes?: number; lastPlayed?: number; emulatorId?: string; system?: string }
+export interface GameRoute { sourceId: string; store: Store; appId?: string; launchTarget: string; launchArgs?: string; installPath?: string; owned?: boolean; installed?: boolean; installStates?: Record<string, boolean>; playtimeMinutes?: number; lastPlayed?: number; emulatorId?: string; system?: string; /** A label only: the custom launcher whose games folder this local or ROM route was found in ("Play from" shows its name). Set by Game Lobby; saves must send it back unchanged. */ launcherId?: string }
 export interface Game { id: string; title: string; cover?: string; defaultCover?: string; store: Store; genre?: string; playtimeMinutes: number; playtimeSeconds?: number; lastPlayed?: number; hidden: boolean; favorite: boolean; routes: GameRoute[] }
 /** `library.scan()` result. `local` is the library folder part, present when any folder was scanned (store scans and folder scans run side by side). */
 export interface LibraryStats { total: number; imported?: number; errors?: string[]; scannedAt?: number; local?: LocalScanSummary }
@@ -113,7 +113,8 @@ export interface EmulatorScanCounts { added: number; updated: number; unavailabl
  * `removalsHeld`: routes that looked missing but were NOT marked missing, because more than half
  * of a root's games (and more than 20) vanished at once; see `RootScanOutcome.warning`.
  */
-export interface GameScanCounts { added: number; updated: number; removedOrUninstalled: number; skipped: number; failed: number; removalsHeld: number }
+/** `routesAdded`: routes a launcher games folder added to games already in the library. `romsMatched`: ROMs with an emulator that runs them. `needsReview`: review items left open for the scanned folders. */
+export interface GameScanCounts { added: number; updated: number; removedOrUninstalled: number; skipped: number; failed: number; removalsHeld: number; routesAdded?: number; romsMatched?: number; needsReview?: number }
 /**
  * One root in a scan.
  * - `ok: false`: the folder couldn't be read (e.g. offline drive); nothing in the library changed for it.
@@ -145,7 +146,8 @@ export interface RootScanResult extends Omit<RootScanOutcome, 'full'> { full?: b
  * Hidden/System attributes are ignored (such files and folders are scanned); links and junctions are
  * never followed. `path` is normalized (`D:\Roms`). `online`: the folder exists right now.
  */
-export interface LibraryRoot { id: string; kind: LibraryRootKind; path: string; enabled: boolean; addedAt: number; lastScanAt?: number; lastResult?: RootScanResult; online: boolean }
+/** `launcherId`: a custom launcher's games folder (a mixed app folder, listed with that launcher instead of under Library folders). */
+export interface LibraryRoot { id: string; kind: LibraryRootKind; path: string; enabled: boolean; addedAt: number; lastScanAt?: number; lastResult?: RootScanResult; online: boolean; launcherId?: string }
 /**
  * `library-scan:progress`, at most ~10 per second plus every phase change. `phase`: `emulators` or
  * `games` while a root is walked (`root` = its path, `processed` = entries seen in it so far,
@@ -155,7 +157,7 @@ export interface LibraryRoot { id: string; kind: LibraryRootKind; path: string; 
 export interface LocalScanProgress { phase: 'emulators' | 'games' | 'library' | 'done'; root: string; processed: number; total?: number; current?: string }
 /** Result of a library folder scan (also pushed as `library-scan:finished`). `review`: open review items afterwards. `unsupportedSamples`: up to 20 skipped paths with reasons. */
 export interface LocalScanSummary { roots: RootScanOutcome[]; emulators: EmulatorScanCounts; games: GameScanCounts; review: number; unsupportedSamples: string[]; durationMs: number }
-export interface ReviewItemBase { id: string; status: 'open' | 'resolved'; resolution?: 'kept-separate' | 'linked' | 'ignored' | 'exe-chosen' | 'shortcut-confirmed' | 'dismissed' | 'repaired' | 'route-removed' | 'merged-routes'; rootId?: string; createdAt: number; updatedAt: number }
+export interface ReviewItemBase { id: string; status: 'open' | 'resolved'; resolution?: 'kept-separate' | 'linked' | 'ignored' | 'exe-chosen' | 'shortcut-confirmed' | 'emulator-chosen' | 'dismissed' | 'repaired' | 'route-removed' | 'merged-routes'; rootId?: string; createdAt: number; updatedAt: number }
 /**
  * Something a scan won't decide on its own. `details` per `kind`:
  * - `duplicate`: different games with the same system and clean title (e.g. USA and Europe
@@ -169,6 +171,9 @@ export interface ReviewItemBase { id: string; status: 'open' | 'resolved'; resol
  *   (`confirm-shortcut`). `folder` is the game folder it was found in (null when the shortcut
  *   lies directly in the PC folder or was picked with `addLocalGame`); `rootId` is null for picked
  *   files.
+ * - `uncertain-rom`: a ROM in a launcher's games folder whose extension several systems use, with
+ *   no single emulator for them. `emulators` lists the profiles that run one of `systems`; the
+ *   user picks one (`choose-emulator`).
  * Rescans refresh open items instead of adding copies; resolved items stay resolved.
  */
 export type ReviewItem = ReviewItemBase & (
@@ -178,7 +183,8 @@ export type ReviewItem = ReviewItemBase & (
   | { kind: 'missing-file'; details: { gameId: string; title: string; routeId: string; sourceId: string; system: string | null; path: string; folder: boolean; status: 'missing' | 'offline'; drive: string | null; candidates: string[] } }
   | { kind: 'health-duplicate'; details: { reasons: ('title' | 'store-id' | 'same-file')[]; games: { gameId: string; title: string; store: string; playtimeMinutes: number; paths: string[] }[] } }
   | { kind: 'duplicate-route'; details: { gameId: string; title: string; routes: { store: string; target: string; installed?: boolean }[] } }
-  | { kind: 'shortcut'; details: { title: string; shortcut: string; target: string; arguments: string; folder: string | null; rootId: string | null } }
+  | { kind: 'shortcut'; details: { title: string; shortcut: string; target: string; arguments: string; folder: string | null; rootId: string | null; launcherId?: string } }
+  | { kind: 'uncertain-rom'; details: { title: string; path: string; systems: { id: string; name: string }[]; emulators: { id: string; name: string; systems: string[] }[]; rootId: string } }
 )
 /**
  * How to resolve a review item:
@@ -194,9 +200,11 @@ export type ReviewItem = ReviewItemBase & (
  * - `confirm-shortcut` (shortcut): the user accepts the shown target and arguments; the game is
  *   added and launches the `.lnk`. Rejected if the shortcut changed since the item was made
  *   (rescan to see the new values). Use `ignore` with `details.shortcut` to skip it for good.
+ * - `choose-emulator` (uncertain-rom): `emulatorId` must be one of `details.emulators`; the game is
+ *   added and plays with that emulator.
  * - `dismiss` (any kind): close without changes.
  */
-export type ReviewResolution = { action: 'keep-separate' } | { action: 'link'; targetGameId?: string } | { action: 'ignore'; path: string } | { action: 'choose-exe'; executable: string } | { action: 'confirm-shortcut' } | { action: 'dismiss' }
+export type ReviewResolution = { action: 'keep-separate' } | { action: 'link'; targetGameId?: string } | { action: 'ignore'; path: string } | { action: 'choose-exe'; executable: string } | { action: 'confirm-shortcut' } | { action: 'choose-emulator'; emulatorId: string } | { action: 'dismiss' }
 /** `library.addLocalGame()` result: the new (or already existing) game's id and the library. */
 export interface AddedLocalGame { gameId: string; games: Game[] }
 /**
@@ -229,7 +237,8 @@ export interface AddedLocalGame { gameId: string; games: Game[] }
  * - onProgress(cb) / onFinished(cb): folder scan events, also during `library.scan()` and
  *   `emulators.scan()`. Return an unsubscribe function.
  */
-export interface RootsAPI { list(): Promise<LibraryRoot[]>; add(kind: LibraryRootKind, path: string): Promise<LibraryRoot[]>; browse(kind: LibraryRootKind): Promise<string | null>; setEnabled(id: string, enabled: boolean): Promise<LibraryRoot[]>; remove(id: string): Promise<LibraryRoot[]>; rescan(id?: string, options?: { full?: boolean }): Promise<LocalScanSummary>; onProgress(callback: (progress: LocalScanProgress) => void): () => void; onFinished(callback: (summary: LocalScanSummary) => void): () => void }
+/** `remove(id, mode)`: a launcher's games folder needs `mode` (`keep` its games and routes, or `remove` the routes it found and games left without any). */
+export interface RootsAPI { list(): Promise<LibraryRoot[]>; add(kind: LibraryRootKind, path: string): Promise<LibraryRoot[]>; browse(kind: LibraryRootKind): Promise<string | null>; setEnabled(id: string, enabled: boolean): Promise<LibraryRoot[]>; remove(id: string, mode?: 'keep' | 'remove'): Promise<LibraryRoot[]>; rescan(id?: string, options?: { full?: boolean }): Promise<LocalScanSummary>; onProgress(callback: (progress: LocalScanProgress) => void): () => void; onFinished(callback: (summary: LocalScanSummary) => void): () => void }
 /**
  * Emulator profiles.
  * - list(): every profile with `available` / `needsConfiguration` computed.
@@ -251,15 +260,19 @@ export interface RootsAPI { list(): Promise<LibraryRoot[]>; add(kind: LibraryRoo
 export type LauncherTargetKind = 'file' | 'folder' | 'identifier'
 /**
  * A custom launcher (output of `launchers.list`). Its games have a route with `sourceId`
- * `launcher:<id>` and store `Custom`. `executable` and `workingDir` are shown, never sent back.
+ * `launcher:<id>` and store `Custom`, or (a launcher without a program: `executable` is empty)
+ * ordinary local and ROM routes found in its games folders with `launcherId` as a label.
+ * `executable` and `workingDir` are shown, never sent back. `targetKinds`: what its games may use
+ * (at least one); `targetKind` is the first of them.
  */
-export interface CustomLauncher { id: string; name: string; iconKind: 'builtin' | 'image'; /** A built-in icon name or an icon file name in the covers folder. */ iconValue: string; /** `#rrggbb`. */ color: string; executable: string; argsTemplate: string; targetKind: LauncherTargetKind; /** Absent = the executable's folder. */ workingDir?: string; sortOrder: number; createdAt: number; /** The executable exists right now. */ available: boolean }
+export interface CustomLauncher { id: string; name: string; iconKind: 'builtin' | 'image'; /** A built-in icon name or an icon file name in the covers folder. */ iconValue: string; /** `#rrggbb`. */ color: string; executable: string; argsTemplate: string; targetKind: LauncherTargetKind; targetKinds: LauncherTargetKind[]; /** Absent = the executable's folder. */ workingDir?: string; sortOrder: number; createdAt: number; /** The executable exists right now (always true without a program). */ available: boolean }
 /**
  * What `launchers.save` takes: never a path. `useExecutablePick` / `useFolderPick` use the file or
  * folder just chosen with `browseExecutable` / `browseFolder` (for up to 10 minutes); otherwise the
- * stored ones are kept. A new launcher needs an executable pick.
+ * stored ones are kept. A new launcher needs an executable pick, unless `noProgram` (no program,
+ * arguments or working folder: its games run directly).
  */
-export interface LauncherInput { id?: string; name: string; iconKind: 'builtin' | 'image'; iconValue: string; color: string; argsTemplate: string; targetKind: LauncherTargetKind; workingDir: 'executable' | 'folder'; useExecutablePick?: boolean; useFolderPick?: boolean }
+export interface LauncherInput { id?: string; name: string; iconKind: 'builtin' | 'image'; iconValue: string; color: string; argsTemplate: string; targetKinds: LauncherTargetKind[]; workingDir: 'executable' | 'folder'; useExecutablePick?: boolean; useFolderPick?: boolean; noProgram?: boolean }
 export interface AddedLauncherGame { gameId: string; games: Game[] }
 /**
  * Custom launchers. Calls reject with a user-facing message on invalid input.
@@ -268,10 +281,14 @@ export interface AddedLauncherGame { gameId: string; games: Game[] }
  *   file name (send it as `iconValue` with `iconKind: 'image'`), or null.
  * - remove(id, mode): `keep` = the launcher's games stay without its route; `remove` = games that
  *   only had its route are removed as well.
- * - addGame(launcherId, title, identifier): file/folder launchers open a native picker (pass
- *   `identifier: null`; null result = cancelled); identifier launchers take the typed identifier.
+ * - addGame(launcherId, title, identifier, kind): `kind` is what this game uses (needed when the
+ *   launcher allows several); files and folders open a native picker (pass `identifier: null`;
+ *   null result = cancelled); identifiers are typed. Without a program a game file is picked.
+ * - browseGamesFolder / addFolder(launcherId, path): pick a games folder natively, then add it
+ *   (only the path just picked is accepted); returns every library root. Scan it with
+ *   `roots.rescan(id)`; remove it with `roots.remove(id, mode)`.
  */
-export interface LaunchersAPI { list(): Promise<CustomLauncher[]>; save(launcher: LauncherInput): Promise<CustomLauncher[]>; remove(id: string, mode: 'keep' | 'remove'): Promise<CustomLauncher[]>; browseExecutable(): Promise<string | null>; browseFolder(): Promise<string | null>; chooseIcon(): Promise<string | null>; addGame(launcherId: string, title: string, identifier: string | null): Promise<AddedLauncherGame | null>; onChanged(callback: () => void): () => void }
+export interface LaunchersAPI { list(): Promise<CustomLauncher[]>; save(launcher: LauncherInput): Promise<CustomLauncher[]>; remove(id: string, mode: 'keep' | 'remove'): Promise<CustomLauncher[]>; browseExecutable(): Promise<string | null>; browseFolder(): Promise<string | null>; chooseIcon(): Promise<string | null>; addGame(launcherId: string, title: string, identifier: string | null, kind?: LauncherTargetKind): Promise<AddedLauncherGame | null>; browseGamesFolder(): Promise<string | null>; addFolder(launcherId: string, path: string): Promise<LibraryRoot[]>; onChanged(callback: () => void): () => void }
 export interface EmulatorsAPI { list(): Promise<EmulatorProfile[]>; save(profile: EmulatorProfile): Promise<EmulatorProfile[]>; remove(id: string): Promise<EmulatorProfile[]>; scan(): Promise<LocalScanSummary>; catalog(): Promise<EmulatorCatalog>; ignored(): Promise<IgnoredPath[]>; unignore(path: string): Promise<IgnoredPath[]>; browseExecutable(): Promise<string | null> }
 /**
  * Scan review.

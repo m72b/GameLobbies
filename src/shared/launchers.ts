@@ -1,4 +1,4 @@
-import type { CustomLauncher, Game, GameRoute } from './types'
+import type { CustomLauncher, Game, GameRoute, LauncherTargetKind, LibraryRoot, LocalScanSummary } from './types'
 
 /**
  * Pure helpers for custom launchers. The Rust side (`launchers.rs`) is the authority: these only
@@ -34,6 +34,14 @@ export function launcherIdOf(route: Pick<GameRoute, 'sourceId'>): string | undef
   return id || undefined
 }
 
+/**
+ * The launcher a route is run by (`launcher:<id>`) or labelled with (`launcherId`, a local or ROM
+ * route found in a launcher's games folder), or undefined.
+ */
+export function routeLauncherId(route: Pick<GameRoute, 'sourceId'> & { launcherId?: string }): string | undefined {
+  return launcherIdOf(route) ?? (route.launcherId || undefined)
+}
+
 export function launcherFilter(id: string): string {
   return LAUNCHER_FILTER_PREFIX + id
 }
@@ -47,14 +55,74 @@ export function filterLauncherId(filter: string): string | undefined {
 export function gameMatchesFilter(game: Pick<Game, 'store' | 'routes'>, filter: string): boolean {
   if (filter === 'All Games') return true
   const launcher = filterLauncherId(filter)
-  if (launcher) return game.routes.some(route => launcherIdOf(route) === launcher)
+  if (launcher) return game.routes.some(route => routeLauncherId(route) === launcher)
   return game.store === filter
 }
 
-/** The launcher of a route, when it still exists. */
-export function launcherOfRoute(route: Pick<GameRoute, 'sourceId'>, launchers: readonly CustomLauncher[]): CustomLauncher | undefined {
-  const id = launcherIdOf(route)
+/** The launcher of a route (running or labelling it), when it still exists. */
+export function launcherOfRoute(route: Pick<GameRoute, 'sourceId'> & { launcherId?: string }, launchers: readonly CustomLauncher[]): CustomLauncher | undefined {
+  const id = routeLauncherId(route)
   return id ? launchers.find(item => item.id === id) : undefined
+}
+
+export const TARGET_KIND_ORDER: readonly LauncherTargetKind[] = ['file', 'folder', 'identifier']
+
+/** A launcher's allowed target kinds (`targetKinds`, or `targetKind` from older data). */
+export function launcherKinds(launcher: Pick<CustomLauncher, 'targetKind'> & { targetKinds?: LauncherTargetKind[] }): LauncherTargetKind[] {
+  const kinds = launcher.targetKinds?.length ? launcher.targetKinds : [launcher.targetKind]
+  return TARGET_KIND_ORDER.filter(kind => kinds.includes(kind))
+}
+
+/**
+ * Turns a target kind on or off, keeping the canonical order (file, folder, identifier). The last
+ * kind can't be turned off (a launcher needs at least one), and `locked` kinds (used by its games)
+ * stay on.
+ */
+export function toggleKind(kinds: readonly LauncherTargetKind[], kind: LauncherTargetKind, locked: readonly LauncherTargetKind[] = []): LauncherTargetKind[] {
+  const on = kinds.includes(kind)
+  if (on && (kinds.length === 1 || locked.includes(kind))) return TARGET_KIND_ORDER.filter(item => kinds.includes(item))
+  const next = on ? kinds.filter(item => item !== kind) : [...kinds, kind]
+  return TARGET_KIND_ORDER.filter(item => next.includes(item))
+}
+
+/** A launcher without a program: only a label for the games found in its folders, which run directly. */
+export function isLabelOnly(launcher: Pick<CustomLauncher, 'executable'>): boolean {
+  return !launcher.executable
+}
+
+/** Whether a launcher's games folders can be scanned: no program, or it takes files or folders. */
+export function canScanFolders(launcher: Pick<CustomLauncher, 'executable' | 'targetKind'> & { targetKinds?: LauncherTargetKind[] }): boolean {
+  return isLabelOnly(launcher) || launcherKinds(launcher).some(kind => kind !== 'identifier')
+}
+
+/** A launcher's games folders. */
+export function launcherRoots(roots: readonly LibraryRoot[], launcherId: string): LibraryRoot[] {
+  return roots.filter(root => root.launcherId === launcherId)
+}
+
+/** Library folders proper (launcher games folders are listed with their launcher). */
+export function libraryRoots(roots: readonly LibraryRoot[]): LibraryRoot[] {
+  return roots.filter(root => !root.launcherId)
+}
+
+const plural = (n: number, one: string, many = one + 's') => n + ' ' + (n === 1 ? one : many)
+
+/**
+ * The end-of-scan summary as label/value lines: games added, routes added to existing games,
+ * emulators discovered, ROMs matched, items needing review, skipped items and errors.
+ */
+export function scanSummaryLines(summary: LocalScanSummary): Array<[string, string]> {
+  const g = summary.games
+  const errors = summary.roots.filter(root => !root.ok).length + g.failed
+  return [
+    ['Games added', String(g.added)],
+    ['Routes added to existing games', String(g.routesAdded ?? 0)],
+    ['Emulators discovered', String(summary.emulators.added) + (summary.emulators.updated ? ' (' + summary.emulators.updated + ' updated)' : '')],
+    ['ROMs matched to an emulator', String(g.romsMatched ?? 0)],
+    ['Needs review', summary.review === 0 ? 'Nothing' : plural(summary.review, 'item')],
+    ['Skipped', plural(g.skipped, 'item')],
+    ['Errors', errors === 0 ? 'None' : plural(errors, 'error')]
+  ]
 }
 
 /** The launcher a game is shown under: its first launcher route's (existing) launcher. */
@@ -142,6 +210,11 @@ export function previewArgv(template: string, target: string): string[] | null {
 /** One argument per entry, quoted when it has spaces, for showing a preview command line. */
 export function formatArgv(argv: readonly string[]): string {
   return argv.map(arg => arg === '' || /[\s"]/.test(arg) ? '"' + arg.replace(/"/g, '\\"') + '"' : arg).join(' ')
+}
+
+/** The target kinds' labels, in canonical order. */
+export function kindLabel(kind: LauncherTargetKind): string {
+  return kind === 'file' ? 'File' : kind === 'folder' ? 'Folder' : 'Identifier'
 }
 
 /** An example target for the preview, by target kind. */
