@@ -968,7 +968,12 @@ pub fn merge_routes(db: &Db, id: &str) -> Result<()> {
             .find(|&i| game.routes[i].installed == Some(true))
             .unwrap_or(indexes[0]);
         for &i in indexes.iter().filter(|&&i| i != keep) {
+            let name = routes[keep].name.clone();
             routes[keep] = db::merge_route(&game.routes[i], &routes[keep]);
+            // The kept route's own name wins (`merge_route` prefers the stored one for scans).
+            if name.is_some() {
+                routes[keep].name = name;
+            }
             drop.insert(i);
         }
     }
