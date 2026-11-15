@@ -71,12 +71,13 @@ See the [user guide](docs/USER-GUIDE.md) for emulators, custom launchers, play h
 
 ## Optional API keys
 
-Game Lobby works without any account. Two optional features use free keys that **you** create. They are stored on your PC, encrypted for your Windows user, and are never shared or included in backups. Game Lobby never ships a shared key.
+Game Lobby works without any account. Three optional features use free keys that **you** create. They are stored on your PC, encrypted for your Windows user, and are never shared or included in backups. Game Lobby never ships a shared key.
 
 | Feature | What you need | Where to enter it |
 | --- | --- | --- |
 | Cover art, heroes and logos | A free [SteamGridDB API key](https://www.steamgriddb.com/profile/preferences/api) | **Settings → Appearance → Cover art** |
 | Game details, screenshots and time to beat | Your own [Twitch developer application](https://dev.twitch.tv/console) (Client ID and Client Secret) for IGDB | **Settings → Playtime and Stats → Metadata provider** |
+| Steam games you own but haven't installed | A free [Steam Web API key](https://steamcommunity.com/dev/apikey) and your SteamID64, with your Steam profile's game details set to Public | **Settings → Libraries → Steam → Show games you own but haven't installed** |
 
 Keep your keys private: don't paste them into issues, screenshots or logs. **Copy diagnostics** in **Settings → About and Updates** leaves them out.
 
@@ -84,7 +85,7 @@ Keep your keys private: don't paste them into issues, screenshots or logs. **Cop
 
 | Store | How games are found |
 | --- | --- |
-| Steam | Installed games from `appmanifest_*.acf` files |
+| Steam | Installed games from `appmanifest_*.acf` files; optionally also owned games that aren't installed, from the Steam Web API with your own key |
 | Epic Games | Installed games from the Epic Games Launcher manifests |
 | GOG | Owned games from the local GOG Galaxy database, with install state |
 | EA app, Battle.net, Ubisoft Connect, Amazon Games | Installed games from Windows registry and uninstall records |

@@ -199,6 +199,12 @@ pub fn render(
         yes_no(flags.igdb_client_id),
         yes_no(flags.igdb_client_secret)
     ));
+    line(format!(
+        "Steam owned games import: {} (API key set: {}; SteamID set: {})",
+        yes_no(flags.steam_owned_key && flags.steam_owned_steam_id),
+        yes_no(flags.steam_owned_key),
+        yes_no(flags.steam_owned_steam_id)
+    ));
     line(String::new());
     line(format!("--- Last {} log lines ---", log_lines.len()));
     for l in log_lines {
@@ -256,6 +262,8 @@ mod tests {
     const FAKE_ID: &str = "tw1tchc1ientid0123456789abcdef";
     const FAKE_SECRET: &str = "tw1tchc1ientsecret9876543210zyx";
     const FAKE_BLOB: &[u8] = b"DPAPI-BLOB-0123456789-abcdefghijklmnopqrstuvwxyz";
+    const FAKE_STEAM_KEY: &str = "fedcba9876543210fedcba9876543210";
+    const FAKE_STEAM_ID: &str = "76561197960287930";
 
     fn environment() -> Environment {
         Environment {
@@ -285,13 +293,17 @@ mod tests {
                 "steamgriddb-api-key-dpapi",
                 "igdb-client-id-dpapi",
                 "igdb-client-secret-dpapi",
+                crate::secrets::STEAM_OWNED_API_KEY,
+                crate::secrets::STEAM_OWNED_STEAM_ID,
             ] {
                 db::write_secret(&conn, name, FAKE_BLOB).unwrap();
             }
             // Fake plaintext values in other places a bug might read them from.
             conn.execute(
                 "INSERT OR REPLACE INTO settings(key,value) VALUES('leak',?)",
-                [format!("{FAKE_KEY} {FAKE_ID} {FAKE_SECRET}")],
+                [format!(
+                    "{FAKE_KEY} {FAKE_ID} {FAKE_SECRET} {FAKE_STEAM_KEY} {FAKE_STEAM_ID}"
+                )],
             )
             .unwrap();
         }
@@ -311,6 +323,9 @@ mod tests {
             ),
             r"2026-11-15T10:00:03.000Z INFO  game_lobby_lib read C:\Users\Alice\Documents\x"
                 .to_string(),
+            format!(
+                "2026-11-15T10:00:04.000Z WARN  reqwest GET https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/?key={FAKE_STEAM_KEY}&steamid={FAKE_STEAM_ID}&include_appinfo=1"
+            ),
         ];
         let report = render(
             &environment(),
@@ -330,12 +345,21 @@ mod tests {
             "releases/latest/download/latest.json",
             "SteamGridDB API key set: yes",
             "IGDB credentials set: yes (Client ID set: yes; Client Secret set: yes)",
-            "--- Last 4 log lines ---",
+            "Steam owned games import: yes (API key set: yes; SteamID set: yes)",
+            "--- Last 5 log lines ---",
             "Library opened",
         ] {
             assert!(report.contains(fact), "missing {fact:?} in\n{report}");
         }
-        for secret in [FAKE_KEY, FAKE_ID, FAKE_SECRET, "DPAPI-BLOB", "Alice"] {
+        for secret in [
+            FAKE_KEY,
+            FAKE_ID,
+            FAKE_SECRET,
+            FAKE_STEAM_KEY,
+            FAKE_STEAM_ID,
+            "DPAPI-BLOB",
+            "Alice",
+        ] {
             assert!(!report.contains(secret), "{secret} leaked in\n{report}");
         }
         assert!(report.contains(r"Data folder: %USERPROFILE%\AppData\Roaming"));
@@ -351,6 +375,7 @@ mod tests {
         assert!(
             report.contains("IGDB credentials set: no (Client ID set: no; Client Secret set: no)")
         );
+        assert!(report.contains("Steam owned games import: no (API key set: no; SteamID set: no)"));
         assert!(report.contains("Games: 0"));
         assert!(report.contains("Stores: none"));
     }

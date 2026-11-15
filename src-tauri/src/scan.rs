@@ -260,9 +260,9 @@ async fn perform_stores(app: &AppHandle) -> Result<LibraryStats> {
     }
 
     let imported = c.discovered.len();
-    let errors = c.errors.clone();
+    let mut errors = c.errors.clone();
     let app_for_db = app.clone();
-    let total = blocking(move || {
+    blocking(move || {
         let state = app_for_db.state::<AppState>();
         let mut conn = state.db.lock();
         db::upsert_imported_games(&mut conn, &c.discovered)?;
@@ -270,9 +270,20 @@ async fn perform_stores(app: &AppHandle) -> Result<LibraryStats> {
             db::reconcile_installed_source(&mut conn, id, games)?;
         }
         db::put_store_detection(&conn, &c.detected)?;
-        db::game_count(&conn)
+        Ok(())
     })
     .await?;
+    // Optional owned-but-not-installed Steam games (only with a saved key; throttled). After
+    // the manifest scan, so installed games are known and keep their manifest state.
+    match crate::steam_owned::run_for_scan(app).await {
+        Ok(Some(problem)) => errors.push(problem),
+        Ok(None) => {}
+        Err(e) => {
+            log::warn!("Steam owned games could not be applied: {e:#}");
+            errors.push(format!("Steam owned games: {e:#}"));
+        }
+    }
+    let total = db::game_count(&state.db.lock())?;
     state.tracker.library_changed();
     let _ = app.emit("library:changed", ());
     Ok(LibraryStats {
