@@ -6,7 +6,6 @@ use crate::commands::pick_file;
 use crate::health::{self, HealthSummary};
 use crate::review::{self, ReviewItem};
 use crate::state::AppState;
-use crate::tracker;
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 use tauri_plugin_dialog::DialogExt;
 
@@ -207,28 +206,8 @@ pub async fn health_dismiss(
     open_items(&state)
 }
 
-/// "Merge" a pair of games into `target_game_id` (default: the first listed), like
-/// `library_merge`: playtime summed, sessions moved.
-#[tauri::command]
-pub async fn health_merge(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    id: String,
-    target_game_id: Option<String>,
-) -> CmdResult<Vec<ReviewItem>> {
-    let id = id_arg(&id)?;
-    {
-        // Session state before the database (see `tracker`): no poll runs in between.
-        let mut sessions = state.tracker.sessions();
-        let (target, source) =
-            health::merge_pair(&state.db, &id, target_game_id.as_deref()).map_err(err)?;
-        let tick = sessions.merge(&target, &source);
-        tracker::apply(&state.db.lock(), &mut sessions, tick.effects);
-    }
-    crate::covercache::clean_up(&state);
-    changed(&app, &state);
-    open_items(&state)
-}
+// Linking a duplicate pair goes through the review step (`link_commands::library_link` with
+// the item's id), never straight from the item.
 
 /// "Merge" duplicate routes of one game into one.
 #[tauri::command]

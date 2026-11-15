@@ -573,14 +573,21 @@ fn is_rom_route(route: &GameRoute) -> bool {
     route.source_id == local::ROM_SOURCE || route.emulator_id.is_some()
 }
 
-/// Starts a local PC executable in its own folder. Falls back to the shell when Windows
-/// requires elevation (error 740), so games that need administrator rights still start.
-async fn launch_local_exe(path: &Path) -> Result<()> {
-    match spawn_detached_in(path, &[], path.parent()) {
+/// Starts a local PC executable in its own folder with `args` (the route's checked launch
+/// options, each one argv entry; no shell). Falls back to the shell when Windows requires
+/// elevation (error 740), so games that need administrator rights still start; that way can't
+/// pass arguments, so a game with launch options is refused there instead of starting without
+/// them.
+async fn launch_local_exe(path: &Path, args: &[String]) -> Result<()> {
+    match spawn_detached_in(path, args, path.parent()) {
         Ok(_) => Ok(()),
-        Err(e) if e.raw_os_error() == Some(740) => {
+        Err(e) if e.raw_os_error() == Some(740) && args.is_empty() => {
             shell_open(path.to_string_lossy().into_owned()).await
         }
+        Err(e) if e.raw_os_error() == Some(740) => bail!(
+            "{} needs administrator rights, and Windows can't pass launch options that way. Remove this route's launch options on the game page, or start the game as administrator yourself.",
+            path.display()
+        ),
         Err(e) => Err(anyhow!("Could not start {}: {e}", path.display())),
     }
 }
@@ -707,11 +714,14 @@ pub async fn launch_game(
     }
     let target = route.launch_target.as_str();
     if route.source_id == local::LOCAL_SOURCE {
+        // Launch options (set on the game page) are checked again at every launch, wherever
+        // the route came from; they are only accepted on a route that starts its .exe.
+        let args = crate::links::checked_stored_args(route)?;
         let confirmations = db::shortcut_confirmations(&state.db.lock())?;
         let owned = target.to_string();
         let how = on_thread(move || local_launch(&owned, &confirmations)).await??;
         match how {
-            LocalLaunch::Exe(exe) => launch_local_exe(&exe).await?,
+            LocalLaunch::Exe(exe) => launch_local_exe(&exe, &args).await?,
             LocalLaunch::Shortcut(lnk) => shell_open(lnk.to_string_lossy().into_owned()).await?,
             LocalLaunch::Uri(uri) => shell_open(uri).await?,
         }

@@ -168,6 +168,8 @@ fn migrate(db: &Connection, file: Option<&Path>) -> Result<()> {
         db.execute_batch("ALTER TABLE library_roots ADD COLUMN launcherId TEXT;")?;
     }
     crate::launchers::migrate(db)?;
+    // Linked games (`links`): an added table, no `user_version` change (older builds ignore it).
+    crate::links::migrate(db)?;
     // Session history columns and tables. Sessions still open belong to a previous run that
     // ended without closing them (crash, power loss): they keep their last saved length, are
     // closed at that point and marked interrupted.
@@ -579,10 +581,12 @@ pub fn merge_route(existing: &GameRoute, incoming: &GameRoute) -> GameRoute {
     } else {
         incoming.assigned
     };
+    // A route name is the user's (scans never set one).
+    combined.name = existing.name.clone().or_else(|| incoming.name.clone());
     combined
 }
 
-fn merge_routes_into(routes: &mut Vec<GameRoute>, incoming: &[GameRoute]) {
+pub(crate) fn merge_routes_into(routes: &mut Vec<GameRoute>, incoming: &[GameRoute]) {
     for route in incoming {
         let identity = route_identity(route);
         match routes.iter().position(|r| route_identity(r) == identity) {
@@ -684,7 +688,7 @@ const LOCAL_ONLY_SOURCES: [&str; 6] = [
 /// Ids of games with a page customization (loaded once per reconcile).
 fn customized_game_ids(db: &Connection) -> Result<HashSet<String>> {
     let mut stmt = db
-        .prepare("SELECT gameId FROM game_page_custom UNION SELECT gameId FROM game_screenshots UNION SELECT gameId FROM game_notes UNION SELECT gameId FROM game_memories UNION SELECT gameId FROM game_input WHERE supportSource='user' OR preferred<>'' OR notes<>''")?;
+        .prepare("SELECT gameId FROM game_page_custom UNION SELECT gameId FROM game_links UNION SELECT gameId FROM game_screenshots UNION SELECT gameId FROM game_notes UNION SELECT gameId FROM game_memories UNION SELECT gameId FROM game_input WHERE supportSource='user' OR preferred<>'' OR notes<>''")?;
     let ids = stmt
         .query_map([], |row| row.get(0))?
         .collect::<rusqlite::Result<_>>()?;
@@ -711,6 +715,8 @@ fn has_user_data(row: &GameRow, customized: &HashSet<String>) -> bool {
         // A launcher assigned on the game page (scans never assign one): the route it was made
         // from stays when its store or folder no longer lists it.
         || row.routes.iter().any(|r| r.assigned == Some(true))
+        // A route the user named (or that got its name when games were linked).
+        || row.routes.iter().any(|r| r.name.is_some())
 }
 
 /// Applies an installed-games scan. An empty scan is ambiguous (client missing, drive
@@ -910,8 +916,10 @@ pub fn reset_playtime(db: &mut Connection) -> Result<Vec<Game>> {
     all_games(db)
 }
 
-/// Deletes a game together with its play sessions and cached art.
+/// Deletes a game together with its play sessions and cached art, and the rows of the entries
+/// linked into it (`links`).
 pub(crate) fn delete_game_rows(db: &Connection, id: &str) -> Result<()> {
+    crate::links::delete_members(db, id)?;
     for sql in [
         "DELETE FROM play_sessions WHERE gameId=?",
         "DELETE FROM game_art WHERE gameId=?",
@@ -935,89 +943,18 @@ pub fn remove_game(db: &Connection, id: &str) -> Result<Vec<Game>> {
     all_games(db)
 }
 
+/// Links `source_id` into `target_id` with the default choices (`links::link`): routes and
+/// sessions move over, playtime is summed, the target's title stays, and the details only the
+/// source has (cover, page art, an IGDB match the user chose, notes) are used; the rest of the
+/// source's details stay parked for unlinking.
 pub fn merge_games(db: &mut Connection, target_id: &str, source_id: &str) -> Result<Vec<Game>> {
     if target_id == source_id {
         bail!("Choose two different games to merge.");
     }
-    let (Some(target), Some(source)) = (get_game(db, target_id)?, get_game(db, source_id)?) else {
+    if get_game(db, target_id)?.is_none() || get_game(db, source_id)?.is_none() {
         bail!("One of the selected games no longer exists.");
-    };
-    let mut routes = target.routes.clone();
-    merge_routes_into(&mut routes, &source.routes);
-    let custom = |g: &Game| non_empty(&g.cover).is_some() && g.cover != g.default_cover;
-    let cover = if custom(&target) {
-        target.cover.clone()
-    } else if custom(&source) {
-        source.cover.clone()
-    } else {
-        target.cover.clone().or_else(|| source.cover.clone())
-    };
-    let seconds = target
-        .playtime_seconds
-        .unwrap_or(target.playtime_minutes * 60)
-        + source
-            .playtime_seconds
-            .unwrap_or(source.playtime_minutes * 60);
-    let last = target
-        .last_played
-        .unwrap_or(0)
-        .max(source.last_played.unwrap_or(0));
-    let tx = db.transaction()?;
-    persist_game(
-        &tx,
-        &GamePatch {
-            cover,
-            default_cover: target
-                .default_cover
-                .clone()
-                .or(source.default_cover.clone()),
-            genre: target.genre.clone().or(source.genre.clone()),
-            playtime_seconds: Some(seconds),
-            playtime_minutes: Some(seconds.div_euclid(60)),
-            last_played: (last != 0).then_some(last),
-            favorite: Some(target.favorite || source.favorite),
-            hidden: Some(target.hidden || source.hidden),
-            routes: Some(routes),
-            ..GamePatch::from(&target)
-        },
-    )?;
-    tx.execute(
-        "UPDATE play_sessions SET gameId=?1 WHERE gameId=?2",
-        params![target_id, source_id],
-    )?;
-    // The merged game's routes changed, so its art lookup may resolve differently: refetch.
-    tx.execute("DELETE FROM game_art WHERE gameId=?", [target_id])?;
-    // Page customization: the target's wins; otherwise the source's moves over.
-    tx.execute(
-        "UPDATE OR IGNORE game_page_custom SET gameId=?1 WHERE gameId=?2",
-        params![target_id, source_id],
-    )?;
-    // IGDB metadata: an automatic match is redone (the routes changed); a match the user
-    // chose is kept, and the source's chosen match moves over when the target has none.
-    tx.execute(
-        "DELETE FROM game_metadata WHERE gameId=? AND source<>'user'",
-        [target_id],
-    )?;
-    tx.execute(
-        "UPDATE OR IGNORE game_metadata SET gameId=?1 WHERE gameId=?2 AND source='user'",
-        params![target_id, source_id],
-    )?;
-    // Screenshots move over; a picture both games have is kept once (the target's row). The
-    // files stay where they are; unreferenced ones go with `screenshots::sweep_files`.
-    tx.execute(
-        "UPDATE OR IGNORE game_screenshots SET gameId=?1 WHERE gameId=?2",
-        params![target_id, source_id],
-    )?;
-    // Notes, memories and controller details: the target's win; memories all move over.
-    for sql in [
-        "UPDATE OR IGNORE game_notes SET gameId=?1 WHERE gameId=?2",
-        "UPDATE game_memories SET gameId=?1 WHERE gameId=?2",
-        "UPDATE OR IGNORE game_input SET gameId=?1 WHERE gameId=?2",
-    ] {
-        tx.execute(sql, params![target_id, source_id])?;
     }
-    delete_game_rows(&tx, source_id)?;
-    tx.commit()?;
+    crate::links::link(db, &[target_id.to_string(), source_id.to_string()], None)?;
     all_games(db)
 }
 
@@ -1300,9 +1237,12 @@ pub fn put_page_custom(db: &Connection, game_id: &str, custom: &GamePageCustom) 
     Ok(true)
 }
 
-/// Every stored customization (backups), by game id.
+/// Every customization of a game in the library (backups), by game id. Rows parked for a linked
+/// entry (`links`) aren't a game's and stay out.
 pub fn all_page_custom(db: &Connection) -> Result<Vec<GamePageCustomEntry>> {
-    let mut stmt = db.prepare("SELECT * FROM game_page_custom ORDER BY gameId")?;
+    let mut stmt = db.prepare(
+        "SELECT * FROM game_page_custom WHERE gameId IN (SELECT id FROM games) ORDER BY gameId",
+    )?;
     let rows = stmt
         .query_map([], |row| {
             Ok(GamePageCustomEntry::new(
@@ -1803,6 +1743,9 @@ pub fn restore_backup(db: &mut Connection, backup: &Backup) -> Result<usize> {
     crate::storage::restore_added(&tx, &ids, backup.game_added.as_deref())?;
     if let Some(sessions) = &backup.play_sessions {
         crate::sessions::restore(&tx, sessions, now_ms())?;
+    }
+    if let Some(links) = &backup.game_links {
+        crate::links::restore_records(&tx, links)?;
     }
     tx.commit()?;
     Ok(backup.games.len())
@@ -2616,6 +2559,60 @@ mod tests {
     }
 
     #[test]
+    fn existing_databases_gain_the_links_table_and_keep_routes_without_names() {
+        let conn = Connection::open_in_memory().unwrap();
+        // A library from before linked games and route names, at the current schema version.
+        conn.execute_batch(&format!(
+            "{GAMES_TABLE};
+             CREATE TABLE settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+             INSERT INTO games(id,title,store,routes) VALUES('a','A','Steam','[{{\"sourceId\":\"steam\",\"store\":\"Steam\",\"appId\":\"1\",\"launchTarget\":\"steam://rungameid/1\"}}]');"
+        ))
+        .unwrap();
+        conn.pragma_update(None, "user_version", SCHEMA_VERSION)
+            .unwrap();
+        migrate(&conn, None).unwrap();
+        let columns: Vec<String> = conn
+            .prepare("SELECT name FROM pragma_table_info('game_links')")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(columns, ["memberId", "gameId", "linkedAt", "snapshot"]);
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            version, SCHEMA_VERSION,
+            "an added table needs no new version"
+        );
+        let game = get_game(&conn, "a").unwrap().unwrap();
+        assert_eq!(game.routes[0].name, None);
+        // Named routes are stored as an extra JSON field that older builds ignore.
+        set_routes(
+            &conn,
+            "a",
+            vec![GameRoute {
+                name: Some("Demo".into()),
+                ..game.routes[0].clone()
+            }],
+        )
+        .unwrap();
+        let raw: String = conn
+            .query_row("SELECT routes FROM games WHERE id='a'", [], |r| r.get(0))
+            .unwrap();
+        assert!(raw.contains("\"name\":\"Demo\""));
+        // Migrating again changes nothing.
+        migrate(&conn, None).unwrap();
+        assert_eq!(
+            get_game(&conn, "a").unwrap().unwrap().routes[0]
+                .name
+                .as_deref(),
+            Some("Demo")
+        );
+    }
+
+    #[test]
     fn existing_databases_gain_the_page_custom_table() {
         let conn = Connection::open_in_memory().unwrap();
         // A library from before game page customization.
@@ -2695,9 +2692,11 @@ mod tests {
         remove_game(&conn, "e").unwrap();
         assert_eq!(page_custom(&conn, "e").unwrap(), GamePageCustom::default());
 
-        // Both customized: the target's row is kept, the source's is dropped.
+        // Both customized: the target's row is kept, the source's is parked for unlinking (not
+        // a game's, so not listed).
         merge_games(&mut conn, "a", "b").unwrap();
         assert_eq!(page_custom(&conn, "a").unwrap(), custom_hero("a"));
+        assert_eq!(page_custom(&conn, "b").unwrap(), custom_hero("b"));
         // Only the source customized: it moves to the target.
         merge_games(&mut conn, "c", "d").unwrap();
         assert_eq!(page_custom(&conn, "c").unwrap(), custom_hero("d"));
@@ -2730,6 +2729,7 @@ mod tests {
             game_notes: None,
             game_added: None,
             play_sessions: None,
+            game_links: None,
             launchers: None,
         };
         let text = serde_json::to_string(&backup).unwrap();
@@ -2863,6 +2863,7 @@ mod tests {
             game_notes: None,
             game_added: None,
             play_sessions: None,
+            game_links: None,
             launchers: None,
         })
         .unwrap();

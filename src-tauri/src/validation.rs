@@ -35,6 +35,7 @@ const ROUTE_KEYS: &[&str] = &[
     "system",
     "launcherId",
     "assigned",
+    "name",
 ];
 const GAME_KEYS: &[&str] = &[
     "id",
@@ -112,6 +113,7 @@ const BACKUP_KEYS: &[&str] = &[
     "gameAdded",
     "playSessions",
     "customLaunchers",
+    "gameLinks",
 ];
 const LAUNCHER_KEYS: &[&str] = &[
     "id",
@@ -300,7 +302,29 @@ fn route(value: &Value) -> Result<GameRoute> {
     }
     range(r.playtime_minutes, 0, 1_000_000_000, "Route playtime")?;
     range(r.last_played, 0, 8_640_000_000_000_000, "Route last played")?;
+    // A route name is display text from anywhere (the renderer, a backup file): always cleaned
+    // and cut to length here rather than refused, so an old or hand-edited backup still imports.
+    r.name = r.name.as_deref().and_then(stored_route_name);
     Ok(r)
+}
+
+/// A route name as it is stored: [`plain_text`], cut to [`crate::links::MAX_ROUTE_NAME`]
+/// characters (with an ellipsis), `None` when nothing is left.
+pub fn stored_route_name(raw: &str) -> Option<String> {
+    let text = display_text(raw, crate::links::MAX_ROUTE_NAME);
+    (!text.is_empty()).then_some(text)
+}
+
+/// A route name the user typed (`library_route_rename`): [`plain_text`]; empty clears the name
+/// (`None`); longer than [`crate::links::MAX_ROUTE_NAME`] characters is refused, so what is
+/// saved is exactly what was typed.
+pub fn route_name(raw: &str) -> Result<Option<String>> {
+    let text = plain_text(raw);
+    let max = crate::links::MAX_ROUTE_NAME;
+    if text.chars().count() > max {
+        bail!("A route name can be at most {max} characters.");
+    }
+    Ok((!text.is_empty()).then_some(text))
 }
 
 fn routes(value: Option<&Value>) -> Result<Option<Vec<GameRoute>>> {
@@ -951,6 +975,10 @@ pub fn backup(value: &Value) -> Result<Backup> {
         Some(_) => bail!("Backup custom launchers are invalid."),
         None => None,
     };
+    let game_links = clean
+        .get("gameLinks")
+        .map(crate::links::validate_backup)
+        .transpose()?;
     Ok(Backup {
         games,
         settings,
@@ -960,6 +988,7 @@ pub fn backup(value: &Value) -> Result<Backup> {
         game_added,
         play_sessions,
         launchers,
+        game_links,
     })
 }
 

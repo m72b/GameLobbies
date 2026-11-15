@@ -7,7 +7,7 @@ use crate::state::AppState;
 use crate::steamgriddb::{self, CoverPage, FetchSummary, KeyStatus, KeyTest};
 use crate::tracker::RunningGame;
 use crate::types::*;
-use crate::{art, covercache, db, igdb, notes, scan, secrets, theme, tracker, validation, windows};
+use crate::{art, covercache, db, igdb, notes, scan, secrets, theme, validation, windows};
 use base64::Engine;
 use regex::Regex;
 use serde_json::{json, Map, Value};
@@ -262,25 +262,6 @@ pub async fn library_save(
     {
         covercache::spawn_pass(&app, std::time::Duration::ZERO);
     }
-    state.tracker.library_changed();
-    Ok(games)
-}
-
-#[tauri::command]
-pub async fn library_merge(
-    state: State<'_, AppState>,
-    target_id: String,
-    source_id: String,
-) -> CmdResult<Vec<Game>> {
-    // Session state before the database (see `tracker`): no poll runs in between.
-    let games = {
-        let mut sessions = state.tracker.sessions();
-        let games = db::merge_games(&mut state.db.lock(), &target_id, &source_id).map_err(err)?;
-        let tick = sessions.merge(&target_id, &source_id);
-        tracker::apply(&state.db.lock(), &mut sessions, tick.effects);
-        games
-    };
-    covercache::clean_up(&state);
     state.tracker.library_changed();
     Ok(games)
 }
@@ -627,6 +608,8 @@ pub async fn backup_export(
                 .filter(|sessions| !sessions.is_empty()),
             launchers: Some(crate::launchers::list(&conn).map_err(err)?)
                 .filter(|launchers| !launchers.is_empty()),
+            game_links: Some(crate::links::backup_records(&conn).map_err(err)?)
+                .filter(|links| !links.is_empty()),
         }
     };
     std::fs::write(&path, serde_json::to_string_pretty(&backup).map_err(err)?).map_err(err)?;

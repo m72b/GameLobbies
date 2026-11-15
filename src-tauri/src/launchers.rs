@@ -2296,6 +2296,7 @@ mod tests {
                 game_notes: None,
                 game_added: None,
                 play_sessions: None,
+                game_links: None,
                 launchers: Some(list(&conn).unwrap()),
             }
         };
@@ -2942,6 +2943,7 @@ mod tests {
                 game_notes: None,
                 game_added: None,
                 play_sessions: None,
+                game_links: None,
                 launchers: Some(list(&conn).unwrap()),
             }
         };

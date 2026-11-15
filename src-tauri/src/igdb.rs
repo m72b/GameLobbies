@@ -3364,7 +3364,11 @@ mod tests {
         db::merge_games(&mut db.lock(), "keep", "dupe").unwrap();
         let c = db::cached_metadata(&db.lock(), "keep").unwrap().unwrap();
         assert_eq!((c.igdb_id, c.source.as_str()), (Some(2), "user"));
-        assert_eq!(db::cached_metadata(&db.lock(), "dupe").unwrap(), None);
+        // The kept game's own (automatic) row is parked under the linked entry's id until it is
+        // unlinked (`links`); no game shows it meanwhile.
+        let parked = db::cached_metadata(&db.lock(), "dupe").unwrap().unwrap();
+        assert_eq!((parked.igdb_id, parked.source.as_str()), (Some(1), "auto"));
+        assert!(db::get_game(&db.lock(), "dupe").unwrap().is_none());
     }
 
     #[test]

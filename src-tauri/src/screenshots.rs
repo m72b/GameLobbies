@@ -1133,19 +1133,25 @@ mod tests {
         db::merge_games(&mut db.lock(), "keep", "dupe").unwrap();
         let kept = list(&db.lock(), &root.0, "keep").unwrap();
         assert_eq!(kept.len(), 2, "the duplicate picture is kept once");
-        assert!(list(&db.lock(), &root.0, "dupe").unwrap().is_empty());
+        // The linked entry's copy of the shared picture is parked for unlinking (`links`).
+        assert_eq!(list(&db.lock(), &root.0, "dupe").unwrap().len(), 1);
         sweep_files(&db.lock(), &root.0).unwrap();
         // The moved picture still points at an existing file.
         for shot in &kept {
             let (dir, file) = valid_relative(&shot.src[SHOT_PREFIX.len()..]).unwrap();
             assert!(root.0.join(dir).join(file).is_file());
         }
-        assert_eq!(files_in(&root.0).len(), 3);
+        assert_eq!(files_in(&root.0).len(), 4);
 
         db::remove_game(&db.lock(), "gone").unwrap();
         assert!(list(&db.lock(), &root.0, "gone").unwrap().is_empty());
         assert_eq!(sweep_files(&db.lock(), &root.0).unwrap(), 1);
-        assert_eq!(files_in(&root.0).len(), 2);
+        assert_eq!(files_in(&root.0).len(), 3);
+        // Removing the linked game removes the parked copy too.
+        db::remove_game(&db.lock(), "keep").unwrap();
+        assert!(list(&db.lock(), &root.0, "dupe").unwrap().is_empty());
+        assert_eq!(sweep_files(&db.lock(), &root.0).unwrap(), 3);
+        assert_eq!(files_in(&root.0).len(), 0);
     }
 
     #[test]

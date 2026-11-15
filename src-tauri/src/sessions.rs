@@ -1447,6 +1447,7 @@ mod tests {
                 game_notes: None,
                 game_added: None,
                 play_sessions: Some(export_all(&conn).unwrap()),
+                game_links: None,
                 launchers: None,
             }
         };
