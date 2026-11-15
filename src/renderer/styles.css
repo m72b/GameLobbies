@@ -410,3 +410,27 @@
 .modal .toggle-row input{width:16px;height:16px}
 .modal .review-choices label{margin:0;color:var(--text)}
 .modal .review-choices .link-custom-title{margin-top:0;padding:6px 9px}
+/* "Link to launcher": one row per custom launcher, one click links. */
+.link-launcher-modal{width:min(480px,92vw)}
+.link-launcher-list{max-height:50vh}
+.link-launcher-row{padding:9px 8px;border-bottom:1px solid #ffffff0c;box-shadow:inset 3px 0 0 color-mix(in srgb,var(--launcher-color,var(--accent)) 70%,transparent)}
+.link-launcher-row.linked{background:#ffffff08}
+.link-launcher-row.disabled .link-launcher-icon,.link-launcher-row.disabled b{opacity:.55}
+.link-launcher-line{display:flex;align-items:center;gap:10px}
+.link-launcher-icon{flex:0 0 30px;height:30px;border-radius:8px;display:grid;place-items:center;background:color-mix(in srgb,var(--launcher-color,var(--accent)) 16%,#111316)}
+.link-launcher-text{flex:1;min-width:0}
+.link-launcher-text b{display:block;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.link-launcher-text small{display:block;color:var(--muted);font-size:10px;line-height:1.45;margin-top:3px}
+.link-launcher-line .primary-button,.link-launcher-line .secondary-button{height:28px;padding:0 12px;font-size:11px;flex:none}
+.link-launcher-state{color:var(--accent);font-size:10px;font-weight:700}
+.link-launcher-choose{display:block;margin:6px 0 0 40px;font-size:10px}
+.link-launcher-pick{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:8px 0 0 40px}
+.link-launcher-pick select{flex:1;min-width:160px;padding:6px 8px;border:1px solid #ffffff17;border-radius:7px;background:#111316;color:var(--text);font-size:11px}
+.link-launcher-pick .secondary-button{height:28px;font-size:11px}
+.link-launcher-pick .link-button{margin-left:0}
+.link-launcher-done{display:flex;align-items:center;gap:8px;margin:4px 0 8px;padding:9px 11px;border-radius:8px;background:color-mix(in srgb,var(--accent) 12%,transparent);color:var(--text);font-size:11px;line-height:1.45}
+.link-launcher-done svg{flex:none;color:var(--accent)}
+.link-launcher-done span{flex:1}
+.link-launcher-done .link-button{margin-left:0;flex:none}
+.link-modal>p.link-launcher-note{margin:10px 0 0;font-size:10px}
+.gp-launcher-add .secondary-button{display:inline-flex;gap:6px}

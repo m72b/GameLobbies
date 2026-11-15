@@ -17,7 +17,7 @@ import { SessionHistory } from './session-history'
 import { formatRange } from '../shared/sessions'
 import { elapsedSeconds, formatClock, formatDate, formatSession, formatTime, formatTotal, useNow } from './format'
 import { LaunchOptionsDialog, RouteToolPanel, type RouteTool } from './route-tools'
-import type { ArgsPreview, CustomLauncher, EmulatorCatalog, EmulatorProfile, Game, GamePageArt, GameRoute, LauncherTargetKind, PlaySession, PlayStats, RunningGame, Settings, UnlinkPreview } from '../shared/types'
+import type { ArgsPreview, CustomLauncher, EmulatorCatalog, EmulatorProfile, Game, GamePageArt, GameRoute, PlaySession, PlayStats, RunningGame, Settings, UnlinkPreview } from '../shared/types'
 
 export interface GamePageActions {
   back(): void
@@ -31,9 +31,9 @@ export interface GamePageActions {
   openFolder(game: Game): void
   remove(game: Game): void
   setEmulator(game: Game, routeIndex: number, emulatorId: string | null): Promise<void>
-  /** Lists the game under a custom launcher, optionally with launch options text (Rust checks it and confirms the new launch route natively, in one dialog). */
-  assignLauncher(game: Game, launcherId: string, routeIndex?: number, kind?: LauncherTargetKind, options?: string): Promise<void>
-  /** Removes only what `assignLauncher` added. */
+  /** Opens "Link to launcher" for the game. */
+  linkLauncher(game: Game): void
+  /** Removes only what linking the game to that launcher added. */
   unassignLauncher(game: Game, launcherId: string): Promise<void>
   /** Names a route (display only); empty clears it. */
   renameRoute(game: Game, routeIndex: number, name: string): Promise<void>
@@ -167,6 +167,7 @@ export function GamePage({ game, index, settings, launchers, running, libraryVer
     ['Find cover on SteamGridDB', () => actions.findCover(game)],
     ['Find details on IGDB', () => setIgdbPicking(true)],
     ['Link other games…', () => actions.link(game)],
+    ...(launchers.length > 0 ? [['Link to launcher…', () => actions.linkLauncher(game)] as [string, () => void]] : []),
     [game.hidden ? 'Unhide' : 'Hide', () => actions.toggleHidden(game)],
     ['Open install folder', () => actions.openFolder(game)],
     ['Remove from library', () => actions.remove(game)]
@@ -317,7 +318,7 @@ export function GamePage({ game, index, settings, launchers, running, libraryVer
           })}
           {emuError && <div className="form-error" role="alert">{emuError}</div>}
         </div>
-        <LauncherBlock game={game} launchers={launchers} libraryVersion={libraryVersion} onAssign={(launcherId, routeIndex, kind, options) => actions.assignLauncher(game, launcherId, routeIndex, kind, options)} onUnassign={launcherId => actions.unassignLauncher(game, launcherId)} />
+        <LauncherBlock game={game} launchers={launchers} libraryVersion={libraryVersion} onOpenLink={() => actions.linkLauncher(game)} onUnassign={launcherId => actions.unassignLauncher(game, launcherId)} />
         <GenreBlock game={game} view={igdb} />
         <YourScore gameId={game.id} />
         <IgdbRatings view={igdb} />

@@ -1,7 +1,7 @@
 // Run with `npm run test:web` (Node strips the TypeScript types of launchers.ts).
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { LAUNCHER_ICONS, assignTargetLabel, assignedLauncherIds, canScanFolders, isAssignedRoute, playLauncher, displayStore, filterLauncherId, formatArgv, gameLauncher, gameMatchesFilter, identifierProblem, isHexColor, isLabelOnly, launcherFilter, launcherIdOf, launcherKinds, launcherOfRoute, launcherRoots, libraryRoots, previewArgv, routeLauncherId, scanSummaryLines, toggleKind, tokenizeTemplate } from './launchers.ts'
+import { LAUNCHER_ICONS, assignTargetLabel, assignedLauncherIds, canScanFolders, isAssignedRoute, playLauncher, displayStore, filterLauncherId, formatArgv, gameLauncher, gameMatchesFilter, identifierProblem, isHexColor, isLabelOnly, launcherFilter, linkedMessage, launcherIdOf, launcherKinds, launcherOfRoute, launcherRoots, libraryRoots, previewArgv, routeLauncherId, scanSummaryLines, toggleKind, tokenizeTemplate } from './launchers.ts'
 
 const heroic = { id: 'abc', name: 'Heroic', iconKind: 'builtin', iconValue: 'rocket', color: '#4f8cff' }
 const route = (sourceId, extra = {}) => ({ sourceId, store: 'Custom', launchTarget: 'x', ...extra })
@@ -158,4 +158,12 @@ test('assignment targets read as their kind and value', () => {
   assert.equal(assignTargetLabel({ routeIndex: 1, kind: 'file', target: 'D:\\Games\\HK\\hk.exe' }, routes), 'File · hk.exe')
   assert.equal(assignTargetLabel({ routeIndex: 1, kind: 'folder', target: 'D:\\Games\\HK' }, routes), 'Folder · HK')
   assert.equal(assignTargetLabel({ routeIndex: 9, kind: 'identifier', target: 'x' }, routes), 'Store id · x')
+})
+
+test('linking to a launcher says what Play does now', () => {
+  assert.equal(linkedMessage({ name: 'Heroic', executable: 'C:\\Heroic\\Heroic.exe' }), 'Linked to Heroic. Play now starts it through Heroic.')
+  assert.equal(linkedMessage({ name: 'Emulators', executable: '' }), 'Listed under Emulators. It keeps starting the same way.')
+  const long = linkedMessage({ name: 'x'.repeat(200), executable: 'C:\\x.exe' })
+  assert.ok(long.startsWith('Linked to ' + 'x'.repeat(63) + '\u2026. '))
+  assert.ok(long.length < 200)
 })

@@ -296,6 +296,8 @@ export interface AssignTarget { routeIndex: number; kind: LauncherTargetKind; ta
  * launcher with a program, what it can be given (existing files and folders only; the first is the
  * default). `problem`: why it can't be assigned (already listed, or no target fits its kinds).
  */
+/** What `launchers.link` did: the library, and what the new launch route passes to the launcher (null for a launcher without a program). */
+export interface LinkedGame { games: Game[]; target: AssignTarget | null }
 export interface AssignmentOption { launcherId: string; listed: boolean; assigned: boolean; targets: AssignTarget[]; problem?: string | null }
 /**
  * What `library.launch` did. `waiting`: the game's custom launcher wasn't running, so its program
@@ -316,9 +318,13 @@ export interface PendingLaunchStatus { pending: boolean; launcherRunning: boolea
  *   library.
  * - assignCheck(gameId, launcherId, routeIndex?, kind?, options): checks launch options for an
  *   assignment without saving: what would run, or rejects with the reason.
- * - unassign(gameId, launcherId): removes only what `assign` added. Returns the library.
+ * - link(gameId, launcherId): "Link to launcher": `assign` with nothing else. Rust picks the target
+ *   from the game's own routes and adds no launch options; a launcher whose command was confirmed
+ *   on this PC links without a dialog, otherwise one native dialog asks first (rejects when
+ *   cancelled or refused, with the reason).
+ * - unassign(gameId, launcherId): removes only what `assign` or `link` added. Returns the library.
  */
-export interface LauncherAssignAPI { assignments(gameId: string): Promise<AssignmentOption[]>; assign(gameId: string, launcherId: string, routeIndex?: number, kind?: LauncherTargetKind, options?: string): Promise<Game[]>; assignCheck(gameId: string, launcherId: string, routeIndex: number | undefined, kind: LauncherTargetKind | undefined, options: string): Promise<ArgsPreview>; unassign(gameId: string, launcherId: string): Promise<Game[]> }
+export interface LauncherAssignAPI { assignments(gameId: string): Promise<AssignmentOption[]>; assign(gameId: string, launcherId: string, routeIndex?: number, kind?: LauncherTargetKind, options?: string): Promise<Game[]>; link(gameId: string, launcherId: string): Promise<LinkedGame>; assignCheck(gameId: string, launcherId: string, routeIndex: number | undefined, kind: LauncherTargetKind | undefined, options: string): Promise<ArgsPreview>; unassign(gameId: string, launcherId: string): Promise<Game[]> }
 export interface LaunchersAPI extends LauncherAssignAPI { list(): Promise<CustomLauncher[]>; save(launcher: LauncherInput): Promise<CustomLauncher[]>; remove(id: string, mode: 'keep' | 'remove'): Promise<CustomLauncher[]>; browseExecutable(): Promise<string | null>; browseFolder(): Promise<string | null>; chooseIcon(): Promise<string | null>; addGame(launcherId: string, title: string, identifier: string | null, kind?: LauncherTargetKind): Promise<AddedLauncherGame | null>; browseGamesFolder(launcherId: string): Promise<string | null>; addFolder(launcherId: string, path: string): Promise<LibraryRoot[]>; onChanged(callback: () => void): () => void }
 export interface EmulatorsAPI { list(): Promise<EmulatorProfile[]>; save(profile: EmulatorProfile): Promise<EmulatorProfile[]>; remove(id: string): Promise<EmulatorProfile[]>; scan(): Promise<LocalScanSummary>; catalog(): Promise<EmulatorCatalog>; ignored(): Promise<IgnoredPath[]>; unignore(path: string): Promise<IgnoredPath[]>; browseExecutable(): Promise<string | null> }
 /**

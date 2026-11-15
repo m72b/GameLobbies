@@ -1,57 +1,46 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Plus, X } from 'lucide-react'
+import { Check, Link2, X } from 'lucide-react'
 import { LauncherIcon } from './launcher-icon'
-import { assignTargetLabel, isLabelOnly } from '../shared/launchers'
-import { LaunchOptionsField } from './route-tools'
-import type { AssignmentOption, CustomLauncher, Game, LauncherTargetKind } from '../shared/types'
+import { assignTargetLabel, isLabelOnly, linkedMessage } from '../shared/launchers'
+import type { AssignmentOption, CustomLauncher, Game } from '../shared/types'
 
-/**
- * The game page's LAUNCHERS block: the custom launchers this game shows under, and a picker to add
- * it to another one. Only ids go to Rust (game, launcher, which of the game's routes and kinds);
- * the target is always taken from the game's own route, and a new launch route is confirmed in a
- * native dialog, together with optional launch options for it (text only; Rust checks it as it is
- * typed and again on save). Built-in stores can't take a game from elsewhere; ROMs choose their
- * emulator in the emulator picker above.
- */
-export function LauncherBlock({ game, launchers, libraryVersion, onAssign, onUnassign }: {
-  game: Game
-  launchers: CustomLauncher[]
-  libraryVersion: number
-  onAssign(launcherId: string, routeIndex?: number, kind?: LauncherTargetKind, options?: string): Promise<void>
-  onUnassign(launcherId: string): Promise<void>
-}) {
-  const [options, setOptions] = useState<AssignmentOption[]>([])
-  const [choice, setChoice] = useState('')
-  const [target, setTarget] = useState(0)
-  const [optionsText, setOptionsText] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
+/** The launchers as seen from a game (`launchers.assignments`), loaded again when its routes change. */
+function useAssignments(game: Game, launchers: CustomLauncher[], libraryVersion = 0): AssignmentOption[] | null {
+  const [options, setOptions] = useState<AssignmentOption[] | null>(null)
   const routesKey = game.routes.map(route => route.sourceId + '|' + route.launchTarget + '|' + (route.launcherId ?? '') + '|' + (route.assigned ? 1 : 0)).join('\n')
   useEffect(() => {
     let live = true
     window.lobby.launchers.assignments(game.id).then(next => { if (live) setOptions(next) }).catch(() => { if (live) setOptions([]) })
     return () => { live = false }
   }, [game.id, routesKey, libraryVersion, launchers])
-  useEffect(() => { setChoice(''); setTarget(0); setOptionsText(''); setError('') }, [game.id])
+  return options
+}
+
+/**
+ * The game page's LAUNCHERS block: the custom launchers this game shows under (the ones linked on
+ * the game page can be removed here), and "Link to launcher…", which opens {@link LinkLauncherDialog}.
+ * Launch options for a launcher route are set later with the route's own Launch options control.
+ */
+export function LauncherBlock({ game, launchers, libraryVersion, onOpenLink, onUnassign }: {
+  game: Game
+  launchers: CustomLauncher[]
+  libraryVersion: number
+  onOpenLink(): void
+  onUnassign(launcherId: string): Promise<void>
+}) {
+  const options = useAssignments(game, launchers, libraryVersion) ?? []
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  useEffect(() => { setError('') }, [game.id])
 
   const byId = useMemo(() => new Map(launchers.map(launcher => [launcher.id, launcher])), [launchers])
   const listed = options.filter(option => option.listed && byId.has(option.launcherId))
-  const available = options.filter(option => !option.listed && byId.has(option.launcherId))
-  const chosen = available.find(option => option.launcherId === choice)
-  const chosenLauncher = chosen ? byId.get(chosen.launcherId) : undefined
-  const targets = chosen?.targets ?? []
+  const canLink = options.some(option => !option.listed && byId.has(option.launcherId))
 
-  const run = async (work: () => Promise<void>) => {
+  const remove = async (launcherId: string) => {
     setBusy(true); setError('')
-    try { await work() } catch (e) { setError(e instanceof Error ? e.message : 'Something went wrong') } finally { setBusy(false) }
+    try { await onUnassign(launcherId) } catch (e) { setError(e instanceof Error ? e.message : 'Something went wrong') } finally { setBusy(false) }
   }
-  const add = () => run(async () => {
-    if (!chosen || !chosenLauncher) return
-    const picked = targets[target]
-    const takesOptions = !isLabelOnly(chosenLauncher)
-    await onAssign(chosen.launcherId, picked?.routeIndex, picked?.kind, takesOptions ? optionsText : undefined)
-    setChoice(''); setTarget(0); setOptionsText('')
-  })
 
   if (launchers.length === 0) return null
   return <div className="gp-side-block gp-launchers"><div className="detail-label">LAUNCHERS</div>
@@ -61,25 +50,101 @@ export function LauncherBlock({ game, launchers, libraryVersion, onAssign, onUna
       return <div className="gp-route-row" key={option.launcherId}>
         <span className="store-badge small"><LauncherIcon launcher={launcher} /></span>
         <span className="route-name"><span className="route-label">{launcher.name}</span><small>{option.assigned ? (isLabelOnly(launcher) ? 'Listed here' : 'Plays through ' + launcher.name) : 'Added in the launcher'}</small></span>
-        {option.assigned && <button type="button" className="gp-launcher-remove" disabled={busy} title={'Remove from ' + launcher.name} aria-label={'Remove from ' + launcher.name} onClick={() => void run(() => onUnassign(option.launcherId))}><X size={13} /></button>}
+        {option.assigned && <button type="button" className="gp-launcher-remove" disabled={busy} title={'Unlink from ' + launcher.name} aria-label={'Unlink from ' + launcher.name} onClick={() => void remove(option.launcherId)}><X size={13} /></button>}
       </div>
     })}
-    {available.length > 0 && <div className="gp-launcher-add">
-      <select aria-label="Add to a launcher" value={choice} disabled={busy} onChange={event => { setChoice(event.target.value); setTarget(0); setOptionsText(''); setError('') }}>
-        <option value="">Add to a launcher…</option>
-        {available.map(option => <option key={option.launcherId} value={option.launcherId}>{byId.get(option.launcherId)!.name}{option.problem ? ' (can’t take this game)' : ''}</option>)}
-      </select>
-      {chosen && !chosen.problem && targets.length > 1 && <select aria-label={'What ' + chosenLauncher?.name + ' gets'} value={target} disabled={busy} onChange={event => setTarget(Number(event.target.value))}>
-        {targets.map((item, i) => <option key={item.kind + item.target} value={i} title={item.target}>{assignTargetLabel(item, game.routes)}</option>)}
-      </select>}
-      {chosen && !chosen.problem && targets.length === 1 && <div className="muted-text gp-path" title={targets[0].target}>{assignTargetLabel(targets[0], game.routes)}</div>}
-      {chosen?.problem && <div className="inline-warning">{chosen.problem}</div>}
-      {chosen && !chosen.problem && chosenLauncher && !isLabelOnly(chosenLauncher) && <LaunchOptionsField value={optionsText} onChange={setOptionsText} disabled={busy} launcher={chosenLauncher.name}
-        checkKey={chosen.launcherId + '|' + target + '|' + (targets[target]?.target ?? '')}
-        check={text => window.lobby.launchers.assignCheck(game.id, chosen.launcherId, targets[target]?.routeIndex, targets[target]?.kind, text)} />}
-      {chosen && !chosen.problem && <button type="button" className="secondary-button" disabled={busy} onClick={() => void add()}><Plus size={14} /> {chosenLauncher && isLabelOnly(chosenLauncher) ? 'List under ' + chosenLauncher.name : 'Play with ' + chosenLauncher?.name}</button>}
-    </div>}
+    {canLink && <div className="gp-launcher-add"><button type="button" className="secondary-button" onClick={onOpenLink}><Link2 size={14} /> Link to launcher…</button></div>}
     {error && <div className="form-error" role="alert">{error}</div>}
+  </div>
+}
+
+/**
+ * "Link to launcher": every custom launcher, and one click links the game to it. Only ids go to
+ * Rust (`launchers.link`): it picks the target from the game's own routes and asks in a native
+ * dialog only when the launcher's command wasn't confirmed on this PC yet. Launchers that can't
+ * take the game are shown disabled with the reason; linked ones can be unlinked. When the game
+ * offers the launcher several targets, "Choose which file…" picks one (`launchers.assign`).
+ */
+export function LinkLauncherDialog({ game, launchers, onGames, onClose }: {
+  game: Game
+  launchers: CustomLauncher[]
+  /** The library after a change. */
+  onGames(games: Game[]): void
+  onClose(): void
+}) {
+  const options = useAssignments(game, launchers)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [done, setDone] = useState<{ launcherId: string; message: string } | null>(null)
+  const [choosing, setChoosing] = useState<{ launcherId: string; index: number } | null>(null)
+  const byId = useMemo(() => new Map(launchers.map(launcher => [launcher.id, launcher])), [launchers])
+  const shown = (options ?? []).filter(option => byId.has(option.launcherId))
+
+  const run = async (work: () => Promise<void>) => {
+    setBusy(true); setError('')
+    try { await work() } catch (e) { setError(e instanceof Error ? e.message : 'Something went wrong') } finally { setBusy(false) }
+  }
+  const linked = (launcher: CustomLauncher) => { setChoosing(null); setDone({ launcherId: launcher.id, message: linkedMessage(launcher) }) }
+  const link = (launcher: CustomLauncher) => run(async () => {
+    const result = await window.lobby.launchers.link(game.id, launcher.id)
+    onGames(result.games)
+    linked(launcher)
+  })
+  const linkChosen = (launcher: CustomLauncher, option: AssignmentOption, index: number) => run(async () => {
+    const target = option.targets[index]
+    onGames(await window.lobby.launchers.assign(game.id, launcher.id, target?.routeIndex, target?.kind))
+    linked(launcher)
+  })
+  const unlink = (launcherId: string) => run(async () => {
+    onGames(await window.lobby.launchers.unassign(game.id, launcherId))
+    setDone(null)
+  })
+
+  return <div className="modal-scrim" onMouseDown={event => { if (event.target === event.currentTarget && !busy) onClose() }}>
+    <div className="modal link-modal link-launcher-modal" role="dialog" aria-modal="true" aria-labelledby="link-launcher-title">
+      <div className="modal-head"><h2 id="link-launcher-title">Link to launcher</h2><button type="button" aria-label="Close" disabled={busy} onClick={onClose}><X size={17} /></button></div>
+      <p>Choose the launcher that starts <b>{game.title}</b>. Its other ways to start stay under Play from.</p>
+      {done && <div className="link-launcher-done" role="status">
+        <Check size={15} /><span>{done.message}</span>
+        <button type="button" className="link-button" disabled={busy} onClick={() => void unlink(done.launcherId)}>Undo</button>
+      </div>}
+      <div className="link-game-list link-launcher-list">
+        {options === null && <div className="empty-inline">Loading launchers…</div>}
+        {options !== null && shown.length === 0 && <div className="empty-inline">No custom launchers yet. Add one in Settings → Custom launchers.</div>}
+        {shown.map(option => {
+          const launcher = byId.get(option.launcherId)!
+          const ownGame = option.listed && !option.assigned
+          const blocked = !option.listed && !!option.problem
+          const status = option.assigned ? (isLabelOnly(launcher) ? 'Listed here' : 'Plays through ' + launcher.name)
+            : ownGame ? 'Added in the launcher'
+            : option.problem ? option.problem
+            : isLabelOnly(launcher) ? 'Lists the game here; it keeps starting the same way'
+            : option.targets[0] ? 'Gets ' + assignTargetLabel(option.targets[0], game.routes) : ''
+          const picking = choosing?.launcherId === option.launcherId ? choosing : null
+          const style = { '--launcher-color': launcher.color } as React.CSSProperties
+          return <div className={'link-launcher-row' + (blocked || ownGame ? ' disabled' : '') + (option.assigned ? ' linked' : '')} key={option.launcherId} style={style}>
+            <div className="link-launcher-line">
+              <span className="link-launcher-icon"><LauncherIcon launcher={launcher} size={17} /></span>
+              <span className="link-launcher-text"><b>{launcher.name}</b><small title={status}>{status}</small></span>
+              {option.assigned
+                ? <><span className="link-launcher-state">Linked</span><button type="button" className="secondary-button" disabled={busy} onClick={() => void unlink(option.launcherId)}>Unlink</button></>
+                : !option.listed && !option.problem && <button type="button" className="primary-button" disabled={busy} aria-label={'Link ' + game.title + ' to ' + launcher.name} onClick={() => void link(launcher)}>Link</button>}
+            </div>
+            {!option.listed && !option.problem && option.targets.length > 1 && !picking && <button type="button" className="link-button link-launcher-choose" disabled={busy} onClick={() => setChoosing({ launcherId: option.launcherId, index: 0 })}>Choose which file…</button>}
+            {picking && <div className="link-launcher-pick">
+              <select aria-label={'What ' + launcher.name + ' gets'} value={picking.index} disabled={busy} onChange={event => setChoosing({ launcherId: option.launcherId, index: Number(event.target.value) })}>
+                {option.targets.map((item, i) => <option key={item.kind + item.target} value={i} title={item.target}>{assignTargetLabel(item, game.routes)}</option>)}
+              </select>
+              <button type="button" className="secondary-button" disabled={busy} onClick={() => void linkChosen(launcher, option, picking.index)}>Link with this</button>
+              <button type="button" className="link-button" disabled={busy} onClick={() => setChoosing(null)}>Cancel</button>
+            </div>}
+          </div>
+        })}
+      </div>
+      {error && <div className="form-error" role="alert">{error}</div>}
+      <p className="link-launcher-note">Launch options for the launcher can be added afterwards with Launch options under Play from.</p>
+      <div className="modal-actions"><button type="button" className="primary-button" disabled={busy} onClick={onClose}>Done</button></div>
+    </div>
   </div>
 }
 

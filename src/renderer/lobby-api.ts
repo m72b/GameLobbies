@@ -93,6 +93,7 @@ const api: LobbyAPI = {
     addFolder: (launcherId, path) => call('launchers_add_folder', { launcherId, path }),
     assignments: gameId => call('launchers_assignments', { gameId }),
     assign: (gameId, launcherId, routeIndex, kind, options) => call('launchers_assign', { gameId, launcherId, routeIndex: routeIndex ?? null, kind: kind ?? null, options: options?.trim() ? options : null }),
+    link: (gameId, launcherId) => call('launchers_link', { gameId, launcherId }),
     assignCheck: (gameId, launcherId, routeIndex, kind, options) => call('launchers_assign_check', { gameId, launcherId, routeIndex: routeIndex ?? null, kind: kind ?? null, options }),
     unassign: (gameId, launcherId) => call('launchers_unassign', { gameId, launcherId }),
     onChanged: callback => subscribe('launchers:changed', () => callback())

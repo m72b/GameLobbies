@@ -245,6 +245,14 @@ export function assignTargetLabel(target: AssignTarget, routes: readonly Pick<Ga
   return (target.kind === 'file' ? 'File · ' : 'Folder · ') + base
 }
 
+/** What "Link to launcher" says once a game is linked to `launcher` (its name cut to 64 characters). */
+export function linkedMessage(launcher: Pick<CustomLauncher, 'name' | 'executable'>): string {
+  const name = launcher.name.length > 64 ? launcher.name.slice(0, 63) + '…' : launcher.name
+  return isLabelOnly(launcher)
+    ? 'Listed under ' + name + '. It keeps starting the same way.'
+    : 'Linked to ' + name + '. Play now starts it through ' + name + '.'
+}
+
 /**
  * The launcher a Play button runs through (a `launcher:<id>` route of a launcher with a program),
  * to name it on the button; undefined for every other route.

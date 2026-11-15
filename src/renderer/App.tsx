@@ -18,7 +18,7 @@ import { routeRef } from '../shared/routes'
 import { SessionHistory } from './session-history'
 import { elapsedSeconds, formatClock, useNow } from './format'
 import { LauncherIcon, useLaunchers } from './launcher-icon'
-import { LauncherWaitDialog, type WaitingLaunch } from './launcher-assign'
+import { LauncherWaitDialog, LinkLauncherDialog, type WaitingLaunch } from './launcher-assign'
 import { displayStore, filterLauncherId, gameLauncher, gameMatchesFilter, identifierProblem, isLabelOnly, kindLabel, launcherFilter, launcherKinds } from '../shared/launchers'
 
 type View = 'All Games' | 'Favorites' | 'Recently Played' | 'Hidden'
@@ -35,7 +35,7 @@ function storedSort(): SortBy {
 function rememberSort(value: SortBy) {
   try { window.localStorage.setItem(SORT_KEY, value) } catch { /* not persisted */ }
 }
-type MenuAction = 'Play' | 'Edit metadata' | 'Set custom cover' | 'Find cover on SteamGridDB' | 'Hide' | 'Unhide' | 'Add to collection' | 'Link another game' | 'Open install folder' | 'Remove'
+type MenuAction = 'Play' | 'Edit metadata' | 'Set custom cover' | 'Find cover on SteamGridDB' | 'Hide' | 'Unhide' | 'Add to collection' | 'Link another game' | 'Link to launcher' | 'Open install folder' | 'Remove'
 
 // Saves from the UI leave launch routes alone: program and file routes can only be changed by
 // scans and the native pickers, and a stale copy would be refused.
@@ -61,6 +61,7 @@ export default function App() {
   const [linkPicked, setLinkPicked] = useState<string[]>([])
   const [linkReview, setLinkReview] = useState<string[] | null>(null)
   const [menu, setMenu] = useState<{ x: number; y: number; game: Game } | null>(null)
+  const [launcherLinkId, setLauncherLinkId] = useState<string | null>(null)
   const [scanBusy, setScanBusy] = useState(false)
   const [localBusy, setLocalBusy] = useState(false)
   const [toast, setToast] = useState('')
@@ -193,6 +194,7 @@ export default function App() {
     if (action === 'Set custom cover') return setCover(game)
     if (action === 'Find cover on SteamGridDB') return findCover(game)
     if (action === 'Link another game') return linkAnotherGame(game)
+    if (action === 'Link to launcher') return setLauncherLinkId(game.id)
     if (action === 'Hide' || action === 'Unhide') {
       const nextGames = await window.lobby.library.save({ ...withoutRoutes(game), hidden: action === 'Hide' })
       setGames(nextGames)
@@ -297,8 +299,9 @@ export default function App() {
         return
       }
       if (event.key === 'Escape') {
-        if (!menu && !adding && !editingGame && !sgdbGame && !linkingGame && !linkReview) setOpenId(null)
+        if (!menu && !adding && !editingGame && !sgdbGame && !linkingGame && !linkReview && !launcherLinkId) setOpenId(null)
         setMenu(null)
+        setLauncherLinkId(null)
         setAdding(false)
         setEditingGame(null)
         setSgdbGame(null)
@@ -336,7 +339,7 @@ export default function App() {
       observer.disconnect()
       window.removeEventListener('keydown', key)
     }
-  }, [openId, menu, adding, editingGame, sgdbGame, linkingGame, linkReview])
+  }, [openId, menu, adding, editingGame, sgdbGame, linkingGame, linkReview, launcherLinkId])
 
   useEffect(() => { applyTheme(settings.theme, settings) }, [settings])
   useEffect(() => {
@@ -419,12 +422,14 @@ export default function App() {
     if (focusedId && !ordered.some(game => game.id === focusedId)) setFocusedId(null)
   }, [ordered, focusedId])
 
+  const launcherLinkGame = launcherLinkId ? games.find(game => game.id === launcherLinkId) : undefined
   const menuOptions: Array<{ action: MenuAction; label: string; disabled?: boolean }> = [
     { action: 'Play', label: 'Play' },
     { action: 'Edit metadata', label: 'Edit metadata' },
     { action: 'Set custom cover', label: 'Set custom cover' },
     { action: 'Find cover on SteamGridDB', label: 'Find cover on SteamGridDB' },
     { action: 'Link another game', label: 'Link another game' },
+    ...(launchers.length > 0 ? [{ action: 'Link to launcher' as const, label: 'Link to launcher…' }] : []),
     { action: menu?.game.hidden ? 'Unhide' : 'Hide', label: menu?.game.hidden ? 'Unhide' : 'Hide' },
     { action: 'Add to collection', label: 'Add to collection · Coming soon', disabled: true },
     { action: 'Open install folder', label: 'Open install folder' },
@@ -443,7 +448,7 @@ export default function App() {
     openFolder: game => void window.lobby.library.chooseInstallFolder(game.id).catch(error => notice(error instanceof Error ? error.message : 'Could not open install folder')),
     remove: game => void menuAction('Remove', game),
     setEmulator: async (game, routeIndex, emulatorId) => { setGames(await window.lobby.library.setEmulator(game.id, routeIndex, emulatorId)) },
-    assignLauncher: async (game, launcherId, routeIndex, kind, options) => { setGames(await window.lobby.launchers.assign(game.id, launcherId, routeIndex, kind, options)) },
+    linkLauncher: game => setLauncherLinkId(game.id),
     unassignLauncher: async (game, launcherId) => { setGames(await window.lobby.launchers.unassign(game.id, launcherId)) },
     renameRoute: async (game, index, name) => { setGames(await window.lobby.library.renameRoute(game.id, routeRef(game.routes[index], index), name)) },
     setRouteArgs: async (game, index, args) => { setGames(await window.lobby.library.setRouteArgs(game.id, routeRef(game.routes[index], index), args)) },
@@ -544,7 +549,7 @@ export default function App() {
       </section>
       </>}
     </main>
-    {menu && <><div className="menu-dismiss" onMouseDown={() => setMenu(null)} /><div className="context-menu" style={{ left: Math.min(menu.x, window.innerWidth - 230), top: Math.min(menu.y, window.innerHeight - 330) }}>
+    {menu && <><div className="menu-dismiss" onMouseDown={() => setMenu(null)} /><div className="context-menu" style={{ left: Math.min(menu.x, window.innerWidth - 230), top: Math.min(menu.y, window.innerHeight - 365) }}>
       {menuOptions.map(option => <button key={option.action} disabled={option.disabled} className={(option.action === 'Remove' ? 'danger ' : '') + (option.disabled ? 'menu-item-disabled' : '')} onClick={() => { if (!option.disabled) void menuAction(option.action, menu.game) }}>{option.label}</button>)}
     </div></>}
     {historyOpen && <SessionHistory running={running} onClose={() => setHistoryOpen(false)} />}
@@ -599,6 +604,7 @@ export default function App() {
       </div>
       <div className="modal-actions"><button className="secondary-button" onClick={() => setLinkingGame(null)}>Cancel</button><button className="primary-button" disabled={linkPicked.length === 0} onClick={() => setLinkReview([linkingGame.id, ...linkPicked])}>Review link{linkPicked.length > 1 ? ' (' + (linkPicked.length + 1) + ' games)' : ''}…</button></div>
     </div></div>}
+    {launcherLinkGame && <LinkLauncherDialog game={launcherLinkGame} launchers={launchers} onGames={setGames} onClose={() => setLauncherLinkId(null)} />}
     {linkReview && <LinkReview gameIds={linkReview} onClose={() => setLinkReview(null)} onLinked={linked} />}
     {sgdbGame && <div className="modal-scrim"><div className="modal sgdb-modal" role="dialog" aria-label={'Find cover for ' + sgdbGame.title}>
       <div className="modal-head"><h2>{sgdbGame.title}</h2><button type="button" aria-label="Close" onClick={closeFindCover}><X size={17} /></button></div>
