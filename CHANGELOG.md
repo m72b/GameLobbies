@@ -2,7 +2,7 @@
 
 All notable changes to Game Lobby are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.5.0] — 2026-11-16
 
 ### Library
 - Optional: Steam games you own but haven't installed. Add your own free Steam Web API key and SteamID64 under **Settings → Libraries → Steam** and they show under All, marked not installed. Without a key Steam stays installed-games only. Installed state from the local scan wins, nothing you changed is overwritten, Steam is asked at most every 30 minutes, and a failed check (offline, private profile, rejected key) keeps the previous list and explains why. The key and SteamID are encrypted by Windows and left out of backups, logs and diagnostics; **Remove** clears them and the games they added.
