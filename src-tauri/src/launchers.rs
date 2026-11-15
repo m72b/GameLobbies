@@ -720,7 +720,7 @@ pub fn confirmation_prompt(l: &CustomLauncher) -> Result<String> {
             .unwrap_or_default(),
     };
     Ok(format!(
-        "Save the launcher \"{}\"?\n\nProgram:\n  {}\n\nArguments (one per line; {TARGET} is {what}):\n{}\n\nWorking folder:\n  {folder}\n\nGame Lobby runs exactly this whenever you play one of this launcher's games. Save it only if you set it up yourself.",
+        "Save the launcher \"{}\"?\n\nProgram:\n  {}\n\nArguments (one per line; {TARGET} is {what}):\n{}\n\nWorking folder:\n  {folder}\n\nGame Lobby runs exactly this whenever you play one of this launcher's games. If you give the launcher games folders, they are also searched for emulators, which are added to your emulator list with their standard settings. Save it only if you set it up yourself.",
         l.name,
         l.executable,
         lines.join("\n")
@@ -1722,6 +1722,7 @@ mod tests {
             text.contains("{target} is the game's file or identifier"),
             "{text}"
         );
+        assert!(text.contains("searched for emulators"), "{text}");
     }
 
     #[test]
