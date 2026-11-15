@@ -126,11 +126,15 @@ pub fn scan(configured: &str) -> Result<Vec<Game>> {
         if product_id.is_empty() || title.is_empty() {
             bail!("GOG release {release} has no readable title.");
         }
-        let installed = installed_paths.contains_key(&product_id);
         let install_path = installed_paths
             .get(&product_id)
             .filter(|p| !p.is_empty())
             .cloned();
+        // A folder with nothing to launch (only DLLs and data) is owned but not installed.
+        let installed = installed_paths.contains_key(&product_id)
+            && install_path
+                .as_deref()
+                .is_none_or(|path| super::has_launchable(Path::new(path)));
         let (launch_target, launch_args) = match &client {
             Some(exe) => (
                 exe.to_string_lossy().into_owned(),

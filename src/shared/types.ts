@@ -397,7 +397,7 @@ export interface TrackingAPI { status(): Promise<RunningGame[]>; onChanged(callb
  * Game page art: candidate image URLs in priority order. Try `hero[0]`, and on an image load
  * error the next one, and so on; an empty array means no art (show a fallback).
  * Order: the user's custom hero/logo if set (see `GamePageCustom`), then Steam's
- * `library_hero.jpg` / `logo.png` (games with a Steam route), then SteamGridDB heroes/logos (when a
+ * `library_hero_2x.jpg` (404 on older apps, so the next entry, `library_hero.jpg`, is the fallback) / `logo.png` (games with a Steam route), then SteamGridDB heroes/logos (when a
  * key is saved; filtered by the steamGridDbAnimated/Nsfw/Humor settings, cached for 30 days).
  * No URL appears twice. Never rejects for missing art (no key, no match, offline).
  * Entries may be `lobby-cover://<name>` (a file chosen with chooseHeroFile/chooseLogoFile):

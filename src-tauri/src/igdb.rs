@@ -1824,7 +1824,31 @@ pub async fn search(
     Ok(candidates.iter().map(SearchResult::from).collect())
 }
 
-/// Stores the user's choice of IGDB game (it always wins over automatic matches).
+/// Renames the game to the IGDB game's name after a manual match. Returns whether the title
+/// changed. Library scans never overwrite the title of a game that already exists, so the new
+/// name survives later scans just like a rename made in the editor.
+fn rename_to_match(conn: &rusqlite::Connection, game_id: &str, name: &str) -> Result<bool> {
+    let Some(name) = clean_name(name) else {
+        return Ok(false);
+    };
+    let Some(game) = db::get_game(conn, game_id)? else {
+        return Ok(false);
+    };
+    if game.title == name {
+        return Ok(false);
+    }
+    db::save_patch(
+        conn,
+        &crate::types::GamePatch {
+            title: Some(name),
+            ..crate::types::GamePatch::new(game_id.to_string())
+        },
+    )?;
+    Ok(true)
+}
+
+/// Stores the user's choice of IGDB game (it always wins over automatic matches) and renames
+/// the game to the IGDB name.
 pub async fn choose(app: &AppHandle, game_id: &str, igdb_id: u64) -> Result<MetadataView> {
     if igdb_id == 0 || igdb_id > i64::MAX as u64 {
         bail!("That IGDB game id is not valid.");
@@ -1840,11 +1864,13 @@ pub async fn choose(app: &AppHandle, game_id: &str, igdb_id: u64) -> Result<Meta
         .map_err(|e| anyhow!(api.redact(e.to_string())))?
         .ok_or_else(|| anyhow!("IGDB has no game with that id."))?;
     let row = entry(Some(&metadata), "user", now_ms())?;
+    let renamed;
     let cached = {
         let conn = state.db.lock();
         if !db::put_metadata(&conn, game_id, &row)? {
             bail!("Game not found.");
         }
+        renamed = rename_to_match(&conn, game_id, &metadata.name)?;
         db::cached_metadata(&conn, game_id)?
     };
     state.igdb.set_failed(game_id, false);
@@ -1855,6 +1881,9 @@ pub async fn choose(app: &AppHandle, game_id: &str, igdb_id: u64) -> Result<Meta
         .unwrap_or_else(|p| p.into_inner())
         .remove(game_id);
     emit_metadata(app, game_id, true);
+    if renamed {
+        let _ = app.emit("library:changed", ());
+    }
     let view = resolved_view(&state, cached, true, false);
     spawn_image_cache(app, game_id, &view);
     Ok(view)
@@ -2039,6 +2068,33 @@ mod tests {
     use crate::types::GameRoute;
     use serde_json::json;
     use std::sync::Arc;
+
+    #[test]
+    fn manual_match_renames_the_game_once_and_scans_keep_the_name() {
+        let db = db::Db::memory().unwrap();
+        let mut conn = db.lock();
+        let game = |title: &str| Game {
+            id: "steam:1".into(),
+            title: title.into(),
+            store: "Steam".into(),
+            routes: vec![GameRoute {
+                source_id: "steam".into(),
+                app_id: Some("1".into()),
+                launch_target: "steam://rungameid/1".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        db::upsert_imported_games(&mut conn, &[game("ugly_name_v2")]).unwrap();
+        assert!(rename_to_match(&conn, "steam:1", "Pretty Name").unwrap());
+        // Same name again: nothing to do.
+        assert!(!rename_to_match(&conn, "steam:1", "Pretty Name").unwrap());
+        assert!(!rename_to_match(&conn, "missing", "Pretty Name").unwrap());
+        db::upsert_imported_games(&mut conn, &[game("ugly_name_v2")]).unwrap();
+        let games = db::all_games(&conn).unwrap();
+        assert_eq!(games.len(), 1);
+        assert_eq!(games[0].title, "Pretty Name");
+    }
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     // -- local HTTP server -------------------------------------------------

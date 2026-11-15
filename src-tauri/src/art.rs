@@ -64,6 +64,12 @@ pub fn steam_art(app_id: &str) -> (String, String) {
     )
 }
 
+/// Steam's double-size hero (3840x1240). Newer apps have it; older ones answer 404, and the
+/// page then falls back to the next candidate, the 1920x620 `library_hero.jpg`.
+fn steam_hero_2x(app_id: &str) -> String {
+    format!("https://cdn.akamai.steamstatic.com/steam/apps/{app_id}/library_hero_2x.jpg")
+}
+
 /// Whether a cache entry can be used without refetching.
 pub fn is_fresh(cached: &CachedArt, prefs_key: &str, now: i64) -> bool {
     cached.prefs == prefs_key
@@ -76,6 +82,7 @@ pub fn combine(game: &Game, sgdb: Option<(Vec<String>, Vec<String>)>) -> GameArt
     let mut art = GameArt::default();
     if let Some(app_id) = steam_app_id(game) {
         let (hero, logo) = steam_art(app_id);
+        art.hero.push(steam_hero_2x(app_id));
         art.hero.push(hero);
         art.logo.push(logo);
     }
@@ -362,6 +369,7 @@ mod tests {
         assert_eq!(
             art.hero,
             [
+                "https://cdn.akamai.steamstatic.com/steam/apps/400/library_hero_2x.jpg",
                 "https://cdn.akamai.steamstatic.com/steam/apps/400/library_hero.jpg",
                 "https://cdn2.steamgriddb.com/hero/1.png",
                 "https://cdn2.steamgriddb.com/hero/2.png"
@@ -451,6 +459,7 @@ mod tests {
             art.hero,
             [
                 "https://cdn2.steamgriddb.com/hero/2.png",
+                "https://cdn.akamai.steamstatic.com/steam/apps/400/library_hero_2x.jpg",
                 "https://cdn.akamai.steamstatic.com/steam/apps/400/library_hero.jpg",
                 "https://cdn2.steamgriddb.com/hero/1.png",
             ]
@@ -468,7 +477,7 @@ mod tests {
         let plain = with_custom(combine(&g, Some(sgdb)), GamePageCustom::default());
         assert_eq!(
             plain.hero[0],
-            "https://cdn.akamai.steamstatic.com/steam/apps/400/library_hero.jpg"
+            "https://cdn.akamai.steamstatic.com/steam/apps/400/library_hero_2x.jpg"
         );
         let json = serde_json::to_value(&plain).unwrap();
         assert_eq!(
