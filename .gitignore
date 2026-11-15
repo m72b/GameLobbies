@@ -20,3 +20,6 @@ Thumbs.db
 *.sqlite
 *.sqlite-*
 *.bak
+
+# Extra build folder used when target/ is locked by a running copy
+/src-tauri/target-dist/
