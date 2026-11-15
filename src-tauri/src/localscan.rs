@@ -786,7 +786,15 @@ impl GameWalker<'_> {
                 }
                 continue;
             }
-            if self.inputs.emulator_dirs.contains(&key) || holds_emulator(&item.path) {
+            // The classification below lists folders too: charged to the entry budget, so a
+            // wide tree can't run past the cap.
+            let mut listed = 0;
+            let emulator =
+                self.inputs.emulator_dirs.contains(&key) || holds_emulator(&item.path, &mut listed);
+            if !self.count_entries(listed) {
+                return;
+            }
+            if emulator {
                 self.out.emulator_folders += 1;
                 self.top.entry(child_top.into()).or_default().0 += 1;
                 continue;
@@ -801,7 +809,12 @@ impl GameWalker<'_> {
             } else if holds_nested_emulator {
                 None
             } else {
-                mixed_pick(&item.path, &item.name).map(Some)
+                let mut listed = 0;
+                let pick = mixed_pick(&item.path, &item.name, &mut listed);
+                if !self.count_entries(listed) {
+                    return;
+                }
+                pick.map(Some)
             };
             match game {
                 Some(pick) => {
@@ -869,9 +882,10 @@ fn generic_exe_folder(path: &Path) -> bool {
         .is_some_and(|n| GENERIC_EXE_FOLDERS.contains(&n.to_string_lossy().to_lowercase().as_str()))
 }
 
-/// A known emulator executable directly in `dir`.
-fn holds_emulator(dir: &Path) -> bool {
+/// A known emulator executable directly in `dir`. Adds the entries listed to `listed`.
+fn holds_emulator(dir: &Path, listed: &mut usize) -> bool {
     list_dir(dir).is_ok_and(|listing| {
+        *listed += listing.items.len();
         listing
             .items
             .iter()
@@ -881,11 +895,11 @@ fn holds_emulator(dir: &Path) -> bool {
 
 /// A folder of a mixed app folder as one PC game: its pick when its executables sit in it or in
 /// plainly named subfolders (`bin`, `x64`, two levels down at most), `None` when it is a container
-/// of other games (or of nothing usable).
-pub fn mixed_pick(folder: &Path, name: &str) -> Option<Pick> {
+/// of other games (or of nothing usable). Adds every entry it listed to `listed`.
+pub fn mixed_pick(folder: &Path, name: &str, listed: &mut usize) -> Option<Pick> {
     let own =
         |p: &PathBuf| p.parent() == Some(folder) || p.parent().is_some_and(generic_exe_folder);
-    match pick_executable(folder, name) {
+    match pick_executable_counted(folder, name, listed) {
         Pick::One(p) => own(&p).then_some(Pick::One(p)),
         Pick::Ambiguous(c) => {
             let game = c.iter().any(|p| p.parent() == Some(folder)) || c.iter().all(own);
@@ -895,13 +909,14 @@ pub fn mixed_pick(folder: &Path, name: &str) -> Option<Pick> {
             // `Game\bin\x64\game.exe`: the ranking looks one level deep; look inside the plainly
             // named subfolders once more.
             let listing = list_dir(folder).ok()?;
+            *listed += listing.items.len();
             for sub in listing
                 .items
                 .iter()
                 .filter(|i| i.is_dir && generic_exe_folder(&i.path))
             {
                 if let found @ (Pick::One(_) | Pick::Ambiguous(_)) =
-                    pick_executable(&sub.path, name)
+                    pick_executable_counted(&sub.path, name, listed)
                 {
                     return Some(found);
                 }
@@ -1102,7 +1117,13 @@ pub enum Pick {
 /// A PC game folder's executable: a single candidate, or a best-named one that clearly
 /// beats the rest. Without any `.exe`, a single shortcut in the folder.
 pub fn pick_executable(folder: &Path, name: &str) -> Pick {
-    let Ok(ranked) = crate::importers::registry::ranked_executables(folder, name) else {
+    pick_executable_counted(folder, name, &mut 0)
+}
+
+/// [`pick_executable`], adding the number of entries it listed to `listed`.
+pub fn pick_executable_counted(folder: &Path, name: &str, listed: &mut usize) -> Pick {
+    let Ok(ranked) = crate::importers::registry::ranked_executables_counted(folder, name, listed)
+    else {
         return Pick::Unreadable;
     };
     let ranked: Vec<(PathBuf, usize)> = ranked
@@ -1129,6 +1150,7 @@ pub fn pick_executable(folder: &Path, name: &str) -> Pick {
         Ok(listing) if listing.complete => listing,
         _ => return Pick::Unreadable,
     };
+    *listed += listing.items.len();
     let shortcuts: Vec<PathBuf> = listing
         .items
         .into_iter()
@@ -1853,6 +1875,35 @@ pub(crate) mod tests {
         let result = scan(&dir);
         assert_eq!(rom_names(&result), ["gba:inside.gba"]);
         std::fs::remove_dir(&link).unwrap();
+    }
+
+    #[test]
+    fn mixed_folder_classification_counts_toward_the_entry_cap() {
+        let dir = TempDir::new("mixed-cap");
+        // 40 game folders of 5 files each: the walk itself lists only 40 entries, but telling
+        // each folder apart lists 200 more.
+        for i in 0..40 {
+            for f in ["game.exe", "a.dll", "b.dll", "c.pak", "d.pak"] {
+                dir.file(&format!("Game {i:02}/{f}"));
+            }
+        }
+        let mut inputs = ScanInputs {
+            mixed: true,
+            limits: ScanLimits {
+                max_depth: 8,
+                max_entries: 100,
+            },
+            ..Default::default()
+        };
+        let capped = scan_games(dir.path(), &inputs, &mut |_, _| {}).unwrap();
+        assert!(capped.truncated, "the cap holds");
+        assert!(capped.visited <= 100 + 10, "stopped near the cap: {}", capped.visited);
+        assert!(capped.pcs.len() < 40, "{}", capped.pcs.len());
+        inputs.limits.max_entries = 10_000;
+        let full = scan_games(dir.path(), &inputs, &mut |_, _| {}).unwrap();
+        assert!(!full.truncated);
+        assert_eq!(full.pcs.len(), 40);
+        assert!(full.visited >= 40 + 40 * 5, "classification is counted: {}", full.visited);
     }
 
     #[test]
