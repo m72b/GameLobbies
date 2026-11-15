@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { CheckCircle2, CloudDownload, Gamepad2, RefreshCw } from 'lucide-react'
+import { CheckCircle2, ClipboardCopy, CloudDownload, FolderOpen, Gamepad2, RefreshCw } from 'lucide-react'
 import type { UpdateInfo, UpdateProgress } from '../shared/types'
 import packageInfo from '../../package.json'
 
@@ -19,6 +19,54 @@ function DownloadProgress({ progress }: { progress: UpdateProgress | null }) {
       {percent === null ? <span className="indeterminate" /> : <span style={{ width: percent + '%' }} />}
     </div>
     <div className="scan-line"><b>Downloading update</b><span>{percent !== null ? percent + '%' : progress ? formatBytes(progress.downloaded) : 'Starting…'}</span></div>
+  </div>
+}
+
+/** Copies text with the async clipboard API, falling back to a hidden textarea. */
+async function copyText(text: string) {
+  try { await navigator.clipboard.writeText(text); return }
+  catch { /* fall through */ }
+  const area = document.createElement('textarea')
+  area.value = text
+  area.setAttribute('readonly', '')
+  area.style.position = 'fixed'
+  area.style.opacity = '0'
+  document.body.appendChild(area)
+  area.select()
+  const copied = document.execCommand('copy')
+  area.remove()
+  if (!copied) throw new Error('The clipboard is not available')
+}
+
+/** Settings → About: copy a redacted diagnostics report, open the logs folder. */
+function SupportCard() {
+  const [status, setStatus] = useState<{ text: string; error: boolean } | null>(null)
+  const [busy, setBusy] = useState(false)
+  const copyDiagnostics = async () => {
+    setBusy(true)
+    setStatus(null)
+    try {
+      await copyText(await window.lobby.diagnostics.report())
+      setStatus({ text: 'Copied', error: false })
+    } catch (reason) { setStatus({ text: message(reason, 'Could not copy the diagnostics'), error: true }) }
+    finally { setBusy(false) }
+  }
+  const openLogs = async () => {
+    setStatus(null)
+    try { await window.lobby.diagnostics.openLogs() }
+    catch (reason) { setStatus({ text: message(reason, 'Could not open the logs folder'), error: true }) }
+  }
+  return <div className="settings-card">
+    <div className="card-heading">
+      <div><h3>Support</h3><p>Copy a report with your versions, library size and recent log lines to include in a bug report. API keys, tokens and your user folder name are left out.</p></div>
+    </div>
+    <div className="settings-actions">
+      <button type="button" className="secondary-button" disabled={busy} onClick={() => void copyDiagnostics()}><ClipboardCopy size={14} /> Copy diagnostics</button>
+      <button type="button" className="secondary-button" onClick={() => void openLogs()}><FolderOpen size={14} /> Open logs folder</button>
+    </div>
+    {status && (status.error
+      ? <div className="form-error" role="alert">{status.text}</div>
+      : <div className="update-status" role="status"><CheckCircle2 size={15} /> {status.text}</div>)}
   </div>
 }
 
@@ -86,5 +134,6 @@ export function UpdatesSection({ autoCheck, onAutoCheckChange }: { autoCheck: bo
       </div>}
       <div className="toggle-row"><div><b>Automatically check for updates</b><small>Check once a day, shortly after Game Lobby starts. Updates are never installed without your click.</small></div><input type="checkbox" checked={autoCheck} onChange={event => onAutoCheckChange(event.target.checked)} /></div>
     </div>
+    <SupportCard />
   </>
 }

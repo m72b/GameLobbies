@@ -271,13 +271,13 @@ pub async fn get(state: &AppState, game_id: &str) -> Result<GameArt> {
                     fetched_at: now,
                 };
                 if let Err(e) = db::put_cached_art(&state.db.lock(), game_id, &entry) {
-                    eprintln!("Could not cache game art: {e:#}");
+                    log::warn!("Could not cache game art: {e:#}");
                 }
                 Some((entry.hero, entry.logo))
             }
             Ok(None) => stale.map(|c| (c.hero, c.logo)),
             Err(e) => {
-                eprintln!("SteamGridDB art lookup failed: {e:#}");
+                log::warn!("SteamGridDB art lookup failed: {e:#}");
                 stale.map(|c| (c.hero, c.logo))
             }
         },

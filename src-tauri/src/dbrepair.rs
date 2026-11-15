@@ -894,7 +894,7 @@ pub fn open_or_repair(
     if findings.is_empty() {
         return Ok((conn, None));
     }
-    eprintln!(
+    log::error!(
         "The library failed its quick check:\n  {}",
         findings.join("\n  ")
     );
@@ -917,7 +917,7 @@ pub fn open_or_repair(
     let copy = sibling(format!(".damaged-{stamp}"));
     match backup_to(&conn, &copy) {
         Ok(()) => notice.damaged_copy = Some(copy),
-        Err(e) => eprintln!("Could not copy the damaged library: {e:#}"),
+        Err(e) => log::warn!("Could not copy the damaged library: {e:#}"),
     }
     let repaired = sibling(format!(".repaired-{stamp}"));
     let options = RepairOptions {
@@ -932,7 +932,7 @@ pub fn open_or_repair(
         }
     };
     notice.summary = report.summary();
-    eprintln!("Library repair:\n{}", notice.summary);
+    log::info!("Library repair:\n{}", notice.summary);
     if !report.healthy() {
         notice.error = Some(format!(
             "the repaired copy failed its check ({})",

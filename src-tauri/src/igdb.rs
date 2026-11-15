@@ -1704,7 +1704,7 @@ fn spawn_refresh(app: &AppHandle, game: Game) -> bool {
             }
             Err(e) => {
                 state.igdb.set_failed(&game.id, true);
-                eprintln!("IGDB metadata lookup failed: {e:#}");
+                log::warn!("IGDB metadata lookup failed: {e:#}");
                 emit_metadata(&app, &game.id, false);
             }
         }
@@ -1792,7 +1792,7 @@ fn spawn_image_cache(app: &AppHandle, game_id: &str, view: &MetadataView) {
             match crate::covercache::adopt(&conn, &state.covers_dir(), &url, Some(&file)) {
                 Ok(value) if value != url => cached_any = true,
                 Ok(_) => {}
-                Err(e) => eprintln!("Could not record an IGDB image: {e:#}"),
+                Err(e) => log::warn!("Could not record an IGDB image: {e:#}"),
             }
         }
         if cached_any {

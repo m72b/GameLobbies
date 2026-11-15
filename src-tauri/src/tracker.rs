@@ -874,7 +874,7 @@ pub fn apply(conn: &Connection, sessions: &mut Sessions, effects: Vec<Effect>) {
             } => db::close_session(conn, session_id, ended_at, seconds),
         };
         if let Err(e) = result {
-            eprintln!("Could not save play session: {e:#}");
+            log::error!("Could not save play session: {e:#}");
         }
     }
 }
@@ -969,7 +969,7 @@ impl Tracker {
                 }
                 Err(e) => {
                     self.targets_current.store(false, Ordering::SeqCst);
-                    eprintln!("Game process tracking could not read the library: {e:#}");
+                    log::warn!("Game process tracking could not read the library: {e:#}");
                 }
             }
         }
@@ -1065,9 +1065,9 @@ async fn poll(app: &AppHandle, last_emit: &mut i64) {
                 Ok(Ok(processes)) => processes,
                 // Skip this poll rather than treat every game as stopped.
                 Ok(Err(e)) => {
-                    return eprintln!("Game process tracking could not read processes: {e}")
+                    return log::warn!("Game process tracking could not read processes: {e}")
                 }
-                Err(e) => return eprintln!("Game process tracking failed: {e}"),
+                Err(e) => return log::warn!("Game process tracking failed: {e}"),
             };
             // Windows are only enumerated when some process could belong to a game.
             let with_window = if targets.candidates(&processes, tracker.guard()).is_empty() {
@@ -1075,7 +1075,7 @@ async fn poll(app: &AppHandle, last_emit: &mut i64) {
             } else {
                 match tauri::async_runtime::spawn_blocking(processes_with_play_windows).await {
                     Ok(pids) => pids,
-                    Err(e) => return eprintln!("Game window check failed: {e}"),
+                    Err(e) => return log::warn!("Game window check failed: {e}"),
                 }
             };
             let mut seen = targets.attribute(&processes, tracker.guard(), &with_window);

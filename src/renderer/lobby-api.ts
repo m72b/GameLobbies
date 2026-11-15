@@ -174,6 +174,10 @@ const api: LobbyAPI = {
     onReady: callback => subscribe('updates:ready', () => callback())
   },
   app: { quit: () => call('app_quit') },
+  diagnostics: {
+    report: () => call('diagnostics_report'),
+    openLogs: () => call('diagnostics_open_logs')
+  },
   storage: {
     list: () => call('storage_list'),
     rescan: () => call('storage_rescan'),

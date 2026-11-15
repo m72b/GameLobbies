@@ -110,3 +110,18 @@ pub fn open_settings_at(app: &AppHandle, section: Option<&str>) -> tauri::Result
         None => create_page(app, true, section),
     }
 }
+
+/// Brings the main window to the front: shown, unminimized and focused. Used when a second
+/// copy of Game Lobby is started. Creates the window if it has been closed.
+pub fn focus_main(app: &AppHandle) -> tauri::Result<()> {
+    match app.get_webview_window(MAIN) {
+        Some(window) => {
+            window.show()?;
+            if window.is_minimized().unwrap_or(false) {
+                window.unminimize()?;
+            }
+            window.set_focus()
+        }
+        None => create(app, false),
+    }
+}

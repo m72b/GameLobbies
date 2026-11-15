@@ -147,7 +147,7 @@ pub async fn library_save(
         let games = db::save_game(&conn, &patch).map_err(err)?;
         if patch.cover.is_some() || patch.default_cover.is_some() {
             if let Err(e) = covercache::sweep(&conn, &covers) {
-                eprintln!("Could not clean up the cover cache: {e:#}");
+                log::warn!("Could not clean up the cover cache: {e:#}");
             }
         }
         games
@@ -326,7 +326,7 @@ pub async fn library_set_cover(
         )
         .map_err(err)?;
         if let Err(e) = covercache::sweep(&conn, &state.covers_dir()) {
-            eprintln!("Could not clean up the cover cache: {e:#}");
+            log::warn!("Could not clean up the cover cache: {e:#}");
         }
         games
     };
