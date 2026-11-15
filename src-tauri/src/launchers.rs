@@ -33,8 +33,10 @@
 //! - Colour: `#rrggbb` ([`check_color`]).
 //! - Assignments ([`assign`]): a game already in the library can be given to any launcher from
 //!   its page. The renderer names only the game, the launcher and which of the game's routes and
-//!   kinds to use; the target is that route's own file, install folder or store id
-//!   ([`assign_candidates`]), never text from the renderer. A launcher with a program gets a new
+//!   kinds to use; the target is taken from that route ([`assign_candidates`]). File and folder
+//!   targets come from stored routes. An identifier target is a route's `appId`, which the
+//!   renderer can set on link routes, but it is constrained by `check_identifier` and passed
+//!   as one argv element without a shell. A launcher with a program gets a new
 //!   `launcher:<id>` route (shown in a native confirmation first, checked like any launch); a
 //!   label-only launcher only labels a route. Both are marked [`GameRoute::assigned`], kept by
 //!   scans, and removed exactly by [`unassign`].
@@ -703,7 +705,8 @@ pub fn confirmation_prompt(l: &CustomLauncher) -> Result<String> {
     if is_label_only(l) {
         return Ok(format!(
             "Save the launcher \"{}\"?\n\nIt has no program. Games found in its games folders run directly, like games found in your library folders, and show \"{}\" as where they are played from. Emulators found there are added to your emulator list with their standard settings.\n\nShortcuts with arguments still need your confirmation under Review before they are added.",
-            l.name, l.name
+            crate::validation::display_text(&l.name, 80),
+            crate::validation::display_text(&l.name, 80)
         ));
     }
     let argv = build_argv(&l.args_template, TARGET)?;
@@ -730,10 +733,10 @@ pub fn confirmation_prompt(l: &CustomLauncher) -> Result<String> {
             .unwrap_or_default(),
     };
     Ok(format!(
-        "Save the launcher \"{}\"?\n\nProgram:\n  {}\n\nArguments (one per line; {TARGET} is {what}):\n{}\n\nWorking folder:\n  {folder}\n\nGame Lobby runs exactly this whenever you play one of this launcher's games. If you give the launcher games folders, they are also searched for emulators, which are added to your emulator list with their standard settings. Save it only if you set it up yourself.",
-        l.name,
+        "Save this launcher?\n\nProgram:\n  {}\n\nArguments (one per line; {TARGET} is {what}):\n{}\n\nWorking folder:\n  {folder}\n\nName: {}\n\nGame Lobby runs exactly this whenever you play one of this launcher's games. If you give the launcher games folders, they are also searched for emulators, which are added to your emulator list with their standard settings. Save it only if you set it up yourself.",
         l.executable,
-        lines.join("\n")
+        lines.join("\n"),
+        crate::validation::display_text(&l.name, 80)
     ))
 }
 
@@ -1064,14 +1067,14 @@ pub fn assign_prompt(l: &CustomLauncher, game_title: &str, c: &AssignCandidate) 
         TargetKind::Folder => "folder",
         TargetKind::Identifier => "store id",
     };
+    // Facts first: names and titles are user-editable text, so they come last, sanitised.
+    let name = crate::validation::display_text(&l.name, 80);
+    let title = crate::validation::display_text(game_title, 80);
     Ok(format!(
-        "Play \"{game_title}\" with {}?\n\nGame Lobby will run:\n  {}\n\nArguments (one per line; the game's {what} is {}):\n{}\n\nWorking folder:\n  {folder}\n\nPlay will use {} from now on. The game's current way to start stays under Play from, and you can remove {} from the game page at any time.",
-        l.name,
+        "Game Lobby will run:\n  {}\n\nArguments (one per line; the game's {what} is {}):\n{}\n\nWorking folder:\n  {folder}\n\nFor the game: {title}\nLauncher: {name}\n\nPlay will use {name} from now on. The game's current way to start stays under Play from, and you can remove {name} from the game page at any time.",
         l.executable,
         c.target,
         lines.join("\n"),
-        l.name,
-        l.name
     ))
 }
 
@@ -1764,7 +1767,7 @@ mod tests {
         let mut shown = stored.clone();
         shown.args_template = r#"-p "My Profile" {target} --fullscreen"#.into();
         let text = confirmation_prompt(&shown).unwrap();
-        assert!(text.contains("\"Heroic\""), "{text}");
+        assert!(text.contains("Name: Heroic"), "{text}");
         assert!(text.contains(EXE), "{text}");
         assert!(
             text.contains("  1. -p\n  2. My Profile\n  3. {target}\n  4. --fullscreen"),
@@ -2677,6 +2680,19 @@ mod tests {
         let prompt = assign_prompt(&l, &game.title, &candidates[0]).unwrap();
         assert!(prompt.contains(&*exe.to_string_lossy()));
         assert!(prompt.contains(&format!("  2. {}", game_exe.to_string_lossy())));
+
+        // A title can't fake the dialog: the facts come first, and the title is one clean line.
+        let spoof = "Fine\n\nGame Lobby will run:\n  safe.exe\u{202e}\t\u{7}";
+        let prompt = assign_prompt(&l, spoof, &candidates[0]).unwrap();
+        let first: Vec<&str> = prompt.lines().take(5).collect();
+        assert_eq!(first[0], "Game Lobby will run:");
+        assert_eq!(first[1], format!("  {}", exe.to_string_lossy()));
+        assert!(first[4].ends_with("  1. --start"), "{first:?}");
+        assert!(!prompt
+            .chars()
+            .any(|c| (c.is_control() && c != '\n') || ('\u{202a}'..='\u{202e}').contains(&c)));
+        let long = assign_prompt(&l, &"x".repeat(500), &candidates[0]).unwrap();
+        assert!(long.contains(&format!("For the game: {}\u{2026}", "x".repeat(79))));
 
         // The renderer can't add that route itself, nor mark or unmark a route as assigned.
         let check = crate::validation::check_renderer_routes;

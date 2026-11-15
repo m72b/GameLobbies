@@ -389,10 +389,10 @@ pub fn confirmation_prompt(p: &EmulatorProfile) -> Result<String> {
         .map(|(i, arg)| format!("  {}. {arg}", i + 1))
         .collect();
     Ok(format!(
-        "Save the emulator \"{}\"?\n\nProgram:\n  {}\n\nArguments (one per line; {{rom}} is the game file, {{romdir}} its folder, {{romname}} its name):\n{}\n\nGame Lobby runs exactly this whenever you play a game with this emulator. Save it only if you set it up yourself.",
-        p.name,
+        "Save this emulator?\n\nProgram:\n  {}\n\nArguments (one per line; {{rom}} is the game file, {{romdir}} its folder, {{romname}} its name):\n{}\n\nName: {}\n\nGame Lobby runs exactly this whenever you play a game with this emulator. Save it only if you set it up yourself.",
         p.executable,
-        lines.join("\n")
+        lines.join("\n"),
+        crate::validation::display_text(&p.name, 80)
     ))
 }
 
@@ -949,7 +949,7 @@ mod tests {
         shown.args = r#"-L "cores\a b.dll" --fullscreen"#.into();
         let text = confirmation_prompt(&shown).unwrap();
         assert!(
-            text.contains("\"mgba\"") && text.contains(r"D:\Emu\mGBA\mGBA.exe"),
+            text.contains("Name: mgba") && text.contains(r"D:\Emu\mGBA\mGBA.exe"),
             "{text}"
         );
         assert!(

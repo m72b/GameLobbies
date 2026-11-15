@@ -173,6 +173,32 @@ fn decode<T: DeserializeOwned>(value: Value, what: &str) -> Result<T> {
     serde_json::from_value(value).map_err(|e| anyhow!("{what} is invalid: {e}"))
 }
 
+/// Plain one-line text: control characters and bidi or other hidden format characters dropped,
+/// every run of whitespace (line breaks and tabs included) collapsed to one space. Used for
+/// titles when they are saved and for every name shown in a native confirmation, so text can't
+/// fake lines or reorder what the user reads.
+pub fn plain_text(raw: &str) -> String {
+    let text: String = raw
+        .chars()
+        .map(|c| if c.is_whitespace() { ' ' } else { c })
+        .filter(|c| {
+            !c.is_control()
+                && !matches!(c, '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{feff}')
+        })
+        .collect();
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// [`plain_text`] cut to `max` characters, with an ellipsis when it was longer.
+pub fn display_text(raw: &str, max: usize) -> String {
+    let text = plain_text(raw);
+    if text.chars().count() <= max {
+        return text;
+    }
+    let cut: String = text.chars().take(max.saturating_sub(1)).collect();
+    format!("{}\u{2026}", cut.trim_end())
+}
+
 fn short_text(value: &mut String, max: usize, what: &str) -> Result<()> {
     *value = value.trim().to_string();
     let len = value.chars().count();
@@ -256,6 +282,13 @@ fn route(value: &Value) -> Result<GameRoute> {
         if !id.is_empty() && crate::launchers::check_id(id).ok().as_deref() != Some(id) {
             bail!("A launch route's launcher label is invalid.");
         }
+    }
+    // Only a launcher route, or a route labelled with a launcher, can be an assignment.
+    if r.assigned == Some(true)
+        && !crate::launchers::is_launcher_route(&r)
+        && r.launcher_id.as_deref().is_none_or(str::is_empty)
+    {
+        r.assigned = None;
     }
     max_len(&r.launch_args, 8_192, "Launch arguments")?;
     max_len(&r.install_path, 8_192, "Install path")?;
@@ -437,6 +470,8 @@ pub fn game_patch(value: &Value) -> Result<GamePatch> {
     g.routes = routes;
     short_text(&mut g.id, 512, "Game ID")?;
     if let Some(title) = g.title.as_mut() {
+        // Control characters are stripped, not rejected, so old backups with tabs still import.
+        *title = plain_text(title);
         short_text(title, 300, "Title")?;
     }
     if let Some(s) = &g.store {
@@ -1381,6 +1416,41 @@ mod tests {
         let manifest = json!({ "id": "sample-library", "name": "Sample", "version": "1.2.3", "kind": "library", "store": "Custom" });
         assert_eq!(plugin_manifest(&manifest).unwrap().name, "Sample");
         assert!(plugin_manifest(&with(manifest, "id", json!("../bad"))).is_err());
+    }
+
+    #[test]
+    fn assigned_is_kept_only_on_launcher_routes() {
+        let routes = |extra: Value| {
+            let mut r = route();
+            for (k, v) in extra.as_object().unwrap() {
+                r.as_object_mut().unwrap().insert(k.clone(), v.clone());
+            }
+            let g = with(game_json(), "routes", json!([r]));
+            backup(&json!({ "games": [g] })).unwrap().games[0]
+                .routes
+                .clone()
+        };
+        assert_eq!(routes(json!({ "assigned": true }))[0].assigned, None);
+        assert_eq!(
+            routes(json!({ "assigned": true, "launcherId": "heroic" }))[0].assigned,
+            Some(true)
+        );
+        let launcher = routes(json!({
+            "assigned": true, "sourceId": "launcher:heroic", "launchTarget": r"C:\Games\g.exe"
+        }));
+        assert_eq!(launcher[0].assigned, Some(true));
+    }
+
+    #[test]
+    fn titles_lose_control_characters_instead_of_failing() {
+        let g = with(game_json(), "title", json!("Dota\t2\n\u{202e}x\u{7}"));
+        let parsed = backup(&json!({ "games": [g] })).unwrap();
+        assert_eq!(parsed.games[0].title, "Dota 2 x");
+        let database = crate::db::Db::memory().unwrap();
+        let mut conn = database.lock();
+        assert_eq!(crate::db::restore_backup(&mut conn, &parsed).unwrap(), 1);
+        let stored = crate::db::get_game(&conn, "steam:570").unwrap().unwrap();
+        assert_eq!(stored.title, "Dota 2 x");
     }
 
     #[test]

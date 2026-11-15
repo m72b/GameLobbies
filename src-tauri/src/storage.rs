@@ -381,6 +381,7 @@ fn uninstall_info(game: &Game) -> Option<UninstallInfo> {
 
 /// The native confirmation text: which game, which launcher, and that nothing is deleted here.
 pub fn handoff_prompt(title: &str, h: &Handoff) -> String {
+    let title = crate::validation::display_text(title, 80);
     let what = match h.kind {
         "uninstall" => format!("Open {}'s uninstall dialog for {title}?", h.launcher),
         "library" => format!(
