@@ -447,6 +447,7 @@ export default function App() {
     unassignLauncher: async (game, launcherId) => { setGames(await window.lobby.launchers.unassign(game.id, launcherId)) },
     renameRoute: async (game, index, name) => { setGames(await window.lobby.library.renameRoute(game.id, routeRef(game.routes[index], index), name)) },
     setRouteArgs: async (game, index, args) => { setGames(await window.lobby.library.setRouteArgs(game.id, routeRef(game.routes[index], index), args)) },
+    routeArgsPending: (game, index) => window.lobby.library.routeArgsPending(game.id, routeRef(game.routes[index], index)),
     unlinkPreview: (game, index) => window.lobby.library.unlinkPreview(game.id, routeRef(game.routes[index], index)),
     unlink: async (game, index) => {
       const result = await window.lobby.library.unlink(game.id, routeRef(game.routes[index], index))

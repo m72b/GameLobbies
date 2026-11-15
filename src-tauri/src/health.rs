@@ -382,6 +382,10 @@ fn relocated(
         }
         route.launch_target = new_text;
         route.install_path = install.map(|p| p.to_string_lossy().into_owned());
+        // Launch options were confirmed for the old file, not for whatever is there now.
+        if route.source_id == crate::local::LOCAL_SOURCE {
+            route.launch_args = None;
+        }
     }
     route.installed = Some(true);
     // The root the file belonged to no longer vouches for it; the root it lies in now does.
@@ -1432,6 +1436,24 @@ mod tests {
         );
         assert_eq!(moved.app_id, Some(key_of(&game_dir)));
         assert_eq!(moved.launch_target, new.to_string_lossy());
+    }
+
+    #[test]
+    fn relocating_a_file_drops_its_launch_options() {
+        let dir = TempDir::new("health-args");
+        let old = dir.path().join("Old").join("game.exe");
+        let new = dir.file(r"New\game.exe");
+        let route = GameRoute {
+            launch_args: Some(r#"["-x"]"#.into()),
+            ..pc(&old)
+        };
+        let subject = subject_of(&route).unwrap();
+        let moved = relocated(&route, &subject, &new, None, &[]);
+        assert_eq!(moved.launch_target, new.to_string_lossy());
+        assert_eq!(
+            moved.launch_args, None,
+            "confirmed for the old file, not the new one"
+        );
     }
 
     #[test]

@@ -538,10 +538,22 @@ pub fn route_identity(route: &GameRoute) -> String {
 pub fn merge_route(existing: &GameRoute, incoming: &GameRoute) -> GameRoute {
     let mut combined = incoming.clone();
     combined.app_id = incoming.app_id.clone().or_else(|| existing.app_id.clone());
+    // Launch options of a local route belong to the .exe they were confirmed for: they carry
+    // over only when both routes start the same file.
+    let same_program = !incoming
+        .source_id
+        .eq_ignore_ascii_case(crate::local::LOCAL_SOURCE)
+        || matches!(
+            (
+                crate::tracker::normalize_path(&existing.launch_target),
+                crate::tracker::normalize_path(&incoming.launch_target),
+            ),
+            (Some(a), Some(b)) if a == b
+        );
     combined.launch_args = incoming
         .launch_args
         .clone()
-        .or_else(|| existing.launch_args.clone());
+        .or_else(|| existing.launch_args.clone().filter(|_| same_program));
     combined.install_path = incoming
         .install_path
         .clone()
@@ -2607,6 +2619,14 @@ mod tests {
             .collect::<rusqlite::Result<_>>()
             .unwrap();
         assert_eq!(columns, ["memberId", "gameId", "linkedAt", "snapshot"]);
+        let confirmed: Vec<String> = conn
+            .prepare("SELECT name FROM pragma_table_info('launch_args_confirmed')")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(confirmed, ["exeKey", "argv", "confirmedAt"]);
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
@@ -2705,6 +2725,52 @@ mod tests {
             hero: Some(format!("https://cdn2.steamgriddb.com/hero/{n}.png")),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn merged_local_routes_keep_launch_options_only_for_the_same_exe() {
+        let with_args = GameRoute {
+            source_id: "local".into(),
+            store: "Custom".into(),
+            app_id: Some(r"c:\games\g".into()),
+            launch_target: r"C:\Games\G\g.exe".into(),
+            launch_args: Some(r#"["-x"]"#.into()),
+            ..Default::default()
+        };
+        // Same identity (the folder), another .exe: the options were confirmed for g.exe.
+        let other = GameRoute {
+            launch_target: r"C:\Games\G\other.exe".into(),
+            launch_args: None,
+            ..with_args.clone()
+        };
+        assert_eq!(route_identity(&other), route_identity(&with_args));
+        assert_eq!(merge_route(&with_args, &other).launch_args, None);
+        let mut routes = vec![with_args.clone()];
+        merge_routes_into(&mut routes, std::slice::from_ref(&other));
+        assert_eq!(routes[0].launch_target, other.launch_target);
+        assert_eq!(routes[0].launch_args, None);
+        // The same file spelled differently keeps them.
+        let same = GameRoute {
+            launch_target: "c:/games/g/G.EXE".into(),
+            launch_args: None,
+            ..with_args.clone()
+        };
+        assert_eq!(
+            merge_route(&with_args, &same).launch_args,
+            with_args.launch_args
+        );
+        // Other stores' arguments aren't launch options confirmed for a file.
+        let gog = GameRoute {
+            source_id: "gog".into(),
+            launch_target: r"C:\GOG\Galaxy.exe".into(),
+            ..with_args.clone()
+        };
+        let moved = GameRoute {
+            launch_target: r"D:\GOG\Galaxy.exe".into(),
+            launch_args: None,
+            ..gog.clone()
+        };
+        assert_eq!(merge_route(&gog, &moved).launch_args, gog.launch_args);
     }
 
     #[test]

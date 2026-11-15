@@ -48,6 +48,7 @@ const api: LobbyAPI = {
     unlink: (gameId, route) => call('library_unlink', { gameId, route }),
     renameRoute: (gameId, route, name) => call('library_route_rename', { gameId, route, name }),
     setRouteArgs: (gameId, route, args) => call('library_route_args', { gameId, route, args }),
+    routeArgsPending: (gameId, route) => call('library_route_args_pending', { gameId, route }),
     resetPlaytime: () => call('library_reset_playtime'),
     setCover: (id, dataUrl) => call('library_set_cover', { id, dataUrl }),
     chooseCover: id => call('library_choose_cover', { id }),

@@ -715,8 +715,9 @@ pub async fn launch_game(
     let target = route.launch_target.as_str();
     if route.source_id == local::LOCAL_SOURCE {
         // Launch options (set on the game page) are checked again at every launch, wherever
-        // the route came from; they are only accepted on a route that starts its .exe.
-        let args = crate::links::checked_stored_args(route)?;
+        // the route came from; they are only accepted on a route that starts its .exe, and only
+        // when the user confirmed exactly these options for exactly this .exe.
+        let args = crate::links::checked_stored_args(&state.db.lock(), route)?;
         let confirmations = db::shortcut_confirmations(&state.db.lock())?;
         let owned = target.to_string();
         let how = on_thread(move || local_launch(&owned, &confirmations)).await??;

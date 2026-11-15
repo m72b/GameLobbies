@@ -33,7 +33,10 @@
 //! - **Launch options** ([`prepare_args`]) are only accepted where Game Lobby itself starts the
 //!   game's `.exe` without a shell (local PC routes). They get the checks every program Game
 //!   Lobby starts with arguments gets (`launch::check_arguments`), are confirmed natively with the
-//!   exact program and argv, and are checked again at every launch ([`checked_stored_args`]).
+//!   exact program and argv, and are checked again at every launch ([`checked_stored_args`]):
+//!   they only run on the `.exe` they were confirmed for (`launch_args_confirmed`, written only
+//!   after that dialog), so options from a backup, a merge or an older version stay inert until
+//!   the user confirms them on the game page.
 //!   Store links (`steam://`, `shell:AppsFolder\…`), launchers and emulators start the game
 //!   themselves, so their routes don't take options here.
 
@@ -51,13 +54,19 @@ pub const MAX_ROUTE_NAME: usize = 60;
 /// Most entries linked in one go.
 pub const MAX_LINK_GAMES: usize = 16;
 /// Longest launch options text, in characters.
-pub const MAX_ARGS_CHARS: usize = 2_000;
+pub const MAX_ARGS_CHARS: usize = 1_000;
+/// Most launch options (argv entries) on one route.
+pub const MAX_ARGS: usize = 24;
+/// Longest single launch option, in characters.
+pub const MAX_ARG_CHARS: usize = 200;
 
-/// The links table (idempotent; older builds ignore it). Called from `db::migrate`.
+/// The links table and the launch options the user confirmed (idempotent added tables, no
+/// `user_version` change; older builds ignore them). Called from `db::migrate`.
 pub fn migrate(db: &Connection) -> Result<()> {
     db.execute_batch(
         "CREATE TABLE IF NOT EXISTS game_links(memberId TEXT PRIMARY KEY,gameId TEXT NOT NULL,linkedAt INTEGER NOT NULL,snapshot TEXT NOT NULL);
-         CREATE INDEX IF NOT EXISTS game_links_game ON game_links(gameId);",
+         CREATE INDEX IF NOT EXISTS game_links_game ON game_links(gameId);
+         CREATE TABLE IF NOT EXISTS launch_args_confirmed(exeKey TEXT NOT NULL,argv TEXT NOT NULL,confirmedAt INTEGER NOT NULL,PRIMARY KEY(exeKey,argv));",
     )?;
     Ok(())
 }
@@ -719,6 +728,12 @@ pub fn prepare_args(route: &GameRoute, text: &str) -> Result<Option<Vec<String>>
     }
     crate::launch::check_arguments(text, exe, &[], "game", r"config\settings.ini")?;
     let argv = crate::launch::tokenize_arguments(text, "game")?;
+    if argv.len() > MAX_ARGS {
+        bail!("A route can have at most {MAX_ARGS} launch options.");
+    }
+    if argv.iter().any(|a| a.chars().count() > MAX_ARG_CHARS) {
+        bail!("A launch option can be at most {MAX_ARG_CHARS} characters.");
+    }
     if args_text(&argv).is_none() {
         bail!("A launch option can't contain both kinds of quotes.");
     }
@@ -726,8 +741,9 @@ pub fn prepare_args(route: &GameRoute, text: &str) -> Result<Option<Vec<String>>
 }
 
 /// The stored launch options of `route`, checked again (a route may come from a backup or an
-/// older version): the same rules as [`prepare_args`]. Empty when it has none.
-pub fn checked_stored_args(route: &GameRoute) -> Result<Vec<String>> {
+/// older version): the same rules as [`prepare_args`]. Empty when it has none. Whether the user
+/// confirmed them is checked by [`checked_stored_args`].
+pub fn valid_stored_args(route: &GameRoute) -> Result<Vec<String>> {
     if non_empty(&route.launch_args).is_none() {
         return Ok(Vec::new());
     }
@@ -740,6 +756,58 @@ pub fn checked_stored_args(route: &GameRoute) -> Result<Vec<String>> {
         None if argv.is_empty() => Ok(argv),
         _ => bail!("This game's launch options can't be used. Edit them on its page."),
     }
+}
+
+/// What a confirmation is for: the route's `.exe` (`tracker::normalize_path`) and the exact
+/// argv (JSON).
+fn args_key(route: &GameRoute, argv: &[String]) -> Result<(String, String)> {
+    let exe = args_exe(route)?;
+    let key = crate::tracker::normalize_path(exe).ok_or_else(|| {
+        anyhow!("Only a game started from its own .exe can have launch options here.")
+    })?;
+    Ok((key, serde_json::to_string(argv)?))
+}
+
+/// Whether the user confirmed `argv` for the program `route` starts, in the native dialog.
+pub fn args_confirmed(conn: &Connection, route: &GameRoute, argv: &[String]) -> Result<bool> {
+    let (exe, argv) = args_key(route, argv)?;
+    Ok(conn
+        .query_row(
+            "SELECT 1 FROM launch_args_confirmed WHERE exeKey=? AND argv=?",
+            params![exe, argv],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some())
+}
+
+/// Remembers that the user confirmed `argv` for the program `route` starts. Only called by
+/// `link_commands::library_route_args` after the native dialog and its compare-and-save; the
+/// table is never part of a backup, so restored options stay inert until confirmed there.
+pub fn confirm_args(conn: &Connection, route: &GameRoute, argv: &[String]) -> Result<()> {
+    let (exe, argv) = args_key(route, argv)?;
+    conn.execute(
+        "INSERT OR REPLACE INTO launch_args_confirmed(exeKey,argv,confirmedAt) VALUES(?,?,?)",
+        params![exe, argv, now_ms()],
+    )?;
+    Ok(())
+}
+
+/// The launch options `route` runs with: [`valid_stored_args`], and only ones the user confirmed
+/// for exactly this program. Options from a backup, a merge or an older version, or confirmed
+/// for another `.exe`, are refused until they are confirmed on the game page.
+pub fn checked_stored_args(conn: &Connection, route: &GameRoute) -> Result<Vec<String>> {
+    let argv = valid_stored_args(route)?;
+    if !argv.is_empty() && !args_confirmed(conn, route, &argv)? {
+        bail!("Confirm this route's launch options again on its game page.");
+    }
+    Ok(argv)
+}
+
+/// The route has launch options that would be refused at launch ([`checked_stored_args`]): the
+/// game page shows them as needing confirmation.
+pub fn args_need_confirmation(conn: &Connection, route: &GameRoute) -> bool {
+    non_empty(&route.launch_args).is_some() && checked_stored_args(conn, route).is_err()
 }
 
 /// The native confirmation for new launch options: the program, the exact argv and the
@@ -756,8 +824,10 @@ pub fn args_prompt(game_title: &str, route: &GameRoute, argv: &[String]) -> Resu
         .map(|(i, arg)| format!("  {}. {arg}", i + 1))
         .collect();
     Ok(format!(
-        "Game Lobby will run:\n  {exe}\n\nArguments (one per line):\n{}\n\nWorking folder:\n  {folder}\n\nFor the game: {}\nLaunch route: {}\n\nPlay runs exactly this from now on when this route is chosen. Save only options you trust.",
+        "Game Lobby will run:\n  {}\n\nArguments (one per line):\n{}\n\nWorking folder:\n  {}\n\nFor the game: {}\nLaunch route: {}\n\nPlay runs exactly this from now on when this route is chosen. Save only options you trust.",
+        validation::escape_for_prompt(exe),
         lines.join("\n"),
+        validation::escape_for_prompt(&folder),
         display_text(game_title, 80),
         route_display(route),
     ))
@@ -2236,10 +2306,10 @@ mod tests {
             ..route("local", "Custom", exe)
         };
         assert_eq!(
-            checked_stored_args(&ok).unwrap(),
+            valid_stored_args(&ok).unwrap(),
             ["-width", "1920", r"cfg\a b.ini"]
         );
-        assert!(checked_stored_args(&route("local", "Custom", exe))
+        assert!(valid_stored_args(&route("local", "Custom", exe))
             .unwrap()
             .is_empty());
         // From a crafted backup: refused at launch.
@@ -2252,13 +2322,13 @@ mod tests {
                 launch_args: Some(bad.into()),
                 ..route("local", "Custom", exe)
             };
-            assert!(checked_stored_args(&r).is_err(), "{bad}");
+            assert!(valid_stored_args(&r).is_err(), "{bad}");
         }
         let lnk = GameRoute {
             launch_args: Some(r#"["-x"]"#.into()),
             ..route("local", "Custom", r"C:\G\x.lnk")
         };
-        assert!(checked_stored_args(&lnk).is_err());
+        assert!(valid_stored_args(&lnk).is_err());
     }
 
     #[test]
@@ -2297,7 +2367,13 @@ mod tests {
         let argv = prepare_args(&g.routes[0], "-width 1920").unwrap().unwrap();
         set_args(&conn, "local:x", &rref(&g, 0), Some(&argv)).unwrap();
         let saved = db::get_game(&conn, "local:x").unwrap().unwrap();
-        assert_eq!(checked_stored_args(&saved.routes[0]).unwrap(), argv);
+        // Stored but never confirmed: refused at launch, shown as needing confirmation.
+        assert!(checked_stored_args(&conn, &saved.routes[0]).is_err());
+        assert!(args_need_confirmation(&conn, &saved.routes[0]));
+        // Confirming (only `library_route_args`, after the dialog) writes the row.
+        confirm_args(&conn, &saved.routes[0], &argv).unwrap();
+        assert_eq!(checked_stored_args(&conn, &saved.routes[0]).unwrap(), argv);
+        assert!(!args_need_confirmation(&conn, &saved.routes[0]));
         assert_eq!(args_text(&argv).as_deref(), Some("-width 1920"));
         // The renderer can't change them through a library save.
         let mut sent = saved.routes.clone();
@@ -2889,5 +2965,91 @@ mod tests {
         assert_eq!(notes_of(&conn, "b").as_deref(), Some("notes of b"));
         db::remove_game(&conn, "a").unwrap();
         assert_eq!(notes_of(&conn, "b").as_deref(), Some("notes of b"));
+    }
+
+    #[test]
+    fn launch_options_only_run_on_the_exe_they_were_confirmed_for() {
+        let exe = r"C:\Games\Doom\gzdoom.exe";
+        let db = db::Db::memory().unwrap();
+        let mut conn = db.lock();
+        let g = local_game(&mut conn, exe);
+        let argv = prepare_args(&g.routes[0], "-width 1920").unwrap().unwrap();
+        set_args(&conn, "local:x", &rref(&g, 0), Some(&argv)).unwrap();
+        let saved = db::get_game(&conn, "local:x").unwrap().unwrap();
+        confirm_args(&conn, &saved.routes[0], &argv).unwrap();
+        assert_eq!(checked_stored_args(&conn, &saved.routes[0]).unwrap(), argv);
+        // The same spelling of the path in other case or slashes is the same program.
+        let same = GameRoute {
+            launch_target: "c:/games/doom/GZDOOM.EXE".into(),
+            ..saved.routes[0].clone()
+        };
+        assert_eq!(checked_stored_args(&conn, &same).unwrap(), argv);
+        // Another .exe, or other options: not confirmed.
+        let other = GameRoute {
+            launch_target: r"C:\Games\Doom\other.exe".into(),
+            ..saved.routes[0].clone()
+        };
+        let err = checked_stored_args(&conn, &other).unwrap_err().to_string();
+        assert!(
+            err.contains("Confirm this route's launch options again"),
+            "{err}"
+        );
+        let more = GameRoute {
+            launch_args: Some(r#"["-width","1920","-fast"]"#.into()),
+            ..saved.routes[0].clone()
+        };
+        assert!(checked_stored_args(&conn, &more).is_err());
+        // Restored from a backup into another library: kept as data, inert until confirmed.
+        let json = full_backup(&conn);
+        let fresh = db::Db::memory().unwrap();
+        let mut restored = fresh.lock();
+        restore(&mut restored, &json);
+        let r = db::get_game(&restored, "local:x").unwrap().unwrap().routes[0].clone();
+        assert_eq!(r.launch_args, saved.routes[0].launch_args);
+        assert!(checked_stored_args(&restored, &r).is_err());
+        assert!(args_need_confirmation(&restored, &r));
+        confirm_args(&restored, &r, &argv).unwrap();
+        assert_eq!(checked_stored_args(&restored, &r).unwrap(), argv);
+        // No options: nothing to confirm.
+        assert!(!args_need_confirmation(&restored, &g.routes[1]));
+    }
+
+    #[test]
+    fn launch_options_are_limited_in_count_and_length() {
+        let local = route("local", "Custom", r"C:\Games\Doom\gzdoom.exe");
+        let many = |n: usize| {
+            (0..n)
+                .map(|i| format!("-o{i}"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        assert_eq!(prepare_args(&local, &many(24)).unwrap().unwrap().len(), 24);
+        assert!(prepare_args(&local, &many(25)).is_err());
+        assert!(prepare_args(&local, &"a".repeat(200)).is_ok());
+        assert!(prepare_args(&local, &"a".repeat(201)).is_err());
+        // 20 options of 60 characters: each fine, together too long.
+        let long = (0..20)
+            .map(|_| "b".repeat(60))
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(prepare_args(&local, &long).is_err());
+        // The same limits apply at launch.
+        let stored = GameRoute {
+            launch_args: Some(serde_json::to_string(&vec!["-x"; 25]).unwrap()),
+            ..local.clone()
+        };
+        assert!(valid_stored_args(&stored).is_err());
+    }
+
+    #[test]
+    fn launch_options_prompt_escapes_the_program_and_folder() {
+        let exe = "C:\\Games\\\u{202e}gnp.exe\\game.exe";
+        let r = route("local", "Custom", exe);
+        let prompt = args_prompt("Doom", &r, &["-x".into()]).unwrap();
+        assert!(!prompt.contains('\u{202e}'), "{prompt}");
+        assert!(
+            prompt.starts_with("Game Lobby will run:\n  C:\\Games\\<U+202E>gnp.exe\\game.exe\n")
+        );
+        assert!(prompt.contains("Working folder:\n  C:\\Games\\<U+202E>gnp.exe\n"));
     }
 }

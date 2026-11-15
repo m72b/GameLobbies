@@ -12,12 +12,14 @@ export type RouteTool = 'name' | 'args' | 'unlink'
  * confirmed in a Windows dialog by Game Lobby; only for games started from their own .exe) and
  * unlinking it into a game of its own (with a preview first).
  */
-export function RouteToolPanel({ tool, route, canUnlink, onRename, onArgs, onUnlinkPreview, onUnlink, onClose }: {
+export function RouteToolPanel({ tool, route, canUnlink, onRename, onArgs, onArgsPending, onUnlinkPreview, onUnlink, onClose }: {
   tool: RouteTool
   route: GameRoute
   canUnlink: boolean
   onRename(name: string): Promise<void>
   onArgs(args: string): Promise<void>
+  /** Whether the stored options need confirming before they run (Rust decides). */
+  onArgsPending(): Promise<boolean>
   onUnlinkPreview(): Promise<UnlinkPreview>
   onUnlink(): Promise<void>
   onClose(): void
@@ -25,9 +27,17 @@ export function RouteToolPanel({ tool, route, canUnlink, onRename, onArgs, onUnl
   const [name, setName] = useState(route.name ?? '')
   const [args, setArgs] = useState(argsText(route.launchArgs))
   const [preview, setPreview] = useState<UnlinkPreview | null>(null)
+  const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const support = argsSupport(route)
+
+  useEffect(() => {
+    if (tool !== 'args' || !route.launchArgs) { setPending(false); return }
+    let live = true
+    onArgsPending().then(next => { if (live) setPending(next) }).catch(() => { if (live) setPending(false) })
+    return () => { live = false }
+  }, [tool, route.sourceId, route.launchTarget, route.launchArgs]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (tool !== 'unlink' || !canUnlink) return
@@ -52,9 +62,10 @@ export function RouteToolPanel({ tool, route, canUnlink, onRename, onArgs, onUnl
     </form>}
     {tool === 'args' && (support.ok
       ? <form onSubmit={event => { event.preventDefault(); void run(() => onArgs(args), 'Could not save the launch options') }}>
-        <label>Launch options<input value={args} maxLength={2000} placeholder="-windowed -width 1920" autoFocus onChange={event => setArgs(event.target.value)} /></label>
-        <p className="muted-text">Passed to the game’s .exe as separate arguments, without a command prompt. Quote parts with spaces. Files must be inside the game’s folder. Windows asks you to confirm exactly what will run before anything is saved.</p>
-        <div className="settings-actions"><button className="primary-button" disabled={busy}>Save options…</button><button type="button" className="secondary-button" onClick={onClose}>Cancel</button></div>
+        <label>Launch options<input value={args} maxLength={1000} placeholder="-windowed -width 1920" autoFocus onChange={event => setArgs(event.target.value)} /></label>
+        {pending && args === argsText(route.launchArgs) && <p className="form-error" role="status"><b>Needs confirmation.</b> These options came from a backup or an older version, or the game’s .exe changed, so Play won’t use them until you confirm them. Clear the box to remove them instead.</p>}
+        <p className="muted-text">Passed to the game’s .exe as separate arguments, without a command prompt. At most 24 options of 200 characters. Quote parts with spaces. Files must be inside the game’s folder. Windows asks you to confirm exactly what will run before anything is saved.</p>
+        <div className="settings-actions"><button className="primary-button" disabled={busy}>{pending && args === argsText(route.launchArgs) ? 'Confirm options…' : 'Save options…'}</button><button type="button" className="secondary-button" onClick={onClose}>Cancel</button></div>
       </form>
       : <><p className="muted-text">{support.reason}</p><div className="settings-actions"><button type="button" className="secondary-button" onClick={onClose}>Close</button></div></>)}
     {tool === 'unlink' && (!canUnlink

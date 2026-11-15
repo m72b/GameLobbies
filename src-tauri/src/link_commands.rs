@@ -215,7 +215,16 @@ pub async fn library_route_args(
     let argv = links::prepare_args(&stored, &args).map_err(err)?;
     let current = crate::launch::parse_launch_arguments(stored.launch_args.as_deref());
     if argv.as_deref().unwrap_or_default() == current.as_slice() {
-        return db::all_games(&state.db.lock()).map_err(err);
+        let conn = state.db.lock();
+        // The same options again: nothing to do once they were confirmed for this program;
+        // options that never were (a backup, an older version) are confirmed now.
+        let confirmed = match &argv {
+            Some(argv) => links::args_confirmed(&conn, &stored, argv).map_err(err)?,
+            None => true,
+        };
+        if confirmed {
+            return db::all_games(&conn).map_err(err);
+        }
     }
     // Removing options runs nothing new; new options are confirmed first.
     if let Some(argv) = &argv {
@@ -231,8 +240,31 @@ pub async fn library_route_args(
             return Err("The game changed in the meantime. Try again.".into());
         }
         links::set_args(&conn, &game_id, &route, argv.as_deref()).map_err(err)?;
+        if let Some(argv) = &argv {
+            // The only place a confirmation is written: these options, this program, after
+            // the dialog and the check that nothing changed meanwhile.
+            links::confirm_args(&conn, &stored, argv).map_err(err)?;
+        }
         db::all_games(&conn).map_err(err)?
     };
     changed(&app, &state);
     Ok(games)
+}
+
+/// Whether the launch options stored on `route` need confirming on the game page before they
+/// run (they came from a backup or an older version, or the route's program changed).
+#[tauri::command]
+pub async fn library_route_args_pending(
+    state: State<'_, AppState>,
+    game_id: String,
+    route: Value,
+) -> CmdResult<bool> {
+    let game_id = game_arg(&game_id)?;
+    let route = route_arg(route)?;
+    let conn = state.db.lock();
+    let game = db::get_game(&conn, &game_id)
+        .map_err(err)?
+        .ok_or("Game not found.")?;
+    let stored = route.find(&game).map_err(err)?;
+    Ok(links::args_need_confirmation(&conn, stored))
 }

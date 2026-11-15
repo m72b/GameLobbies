@@ -39,6 +39,8 @@ export interface GamePageActions {
   renameRoute(game: Game, routeIndex: number, name: string): Promise<void>
   /** Launch options for a route (Rust checks them and confirms natively). */
   setRouteArgs(game: Game, routeIndex: number, args: string): Promise<void>
+  /** The route's stored launch options need confirming before they run. */
+  routeArgsPending(game: Game, routeIndex: number): Promise<boolean>
   unlinkPreview(game: Game, routeIndex: number): Promise<UnlinkPreview>
   /** Splits a route (and the routes that came in with it) off into its own game. */
   unlink(game: Game, routeIndex: number): Promise<void>
@@ -253,7 +255,7 @@ export function GamePage({ game, index, settings, launchers, running, libraryVer
               </span>
             </div>
             {tool && tool.index === i && <RouteToolPanel key={tool.tool + i} tool={tool.tool} route={item} canUnlink={game.routes.length > 1}
-              onRename={name => actions.renameRoute(game, i, name)} onArgs={args => actions.setRouteArgs(game, i, args)}
+              onRename={name => actions.renameRoute(game, i, name)} onArgs={args => actions.setRouteArgs(game, i, args)} onArgsPending={() => actions.routeArgsPending(game, i)}
               onUnlinkPreview={() => actions.unlinkPreview(game, i)} onUnlink={() => actions.unlink(game, i)} onClose={() => setTool(null)} />}
           </div>)}
           {game.routes.map((item, i) => {

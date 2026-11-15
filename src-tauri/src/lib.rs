@@ -236,6 +236,7 @@ pub fn run() {
             link_commands::library_unlink,
             link_commands::library_route_rename,
             link_commands::library_route_args,
+            link_commands::library_route_args_pending,
             commands::library_remove,
             commands::library_reset_playtime,
             commands::library_add,
