@@ -115,10 +115,11 @@ fn to_record((member_id, game_id, linked_at, raw): (String, String, i64, String)
     }
 }
 
-/// The entries linked into `game_id`, newest first.
+/// The entries linked into `game_id`, newest first (entries linked in one go keep the order they
+/// were linked in: `rowid`).
 pub fn records_of(conn: &Connection, game_id: &str) -> Result<Vec<LinkRecord>> {
     let mut stmt = conn.prepare(
-        "SELECT memberId,gameId,linkedAt,snapshot FROM game_links WHERE gameId=? ORDER BY linkedAt DESC,memberId",
+        "SELECT memberId,gameId,linkedAt,snapshot FROM game_links WHERE gameId=? ORDER BY linkedAt DESC,rowid DESC",
     )?;
     let rows = stmt
         .query_map([game_id], read_link)?
@@ -141,6 +142,9 @@ pub fn backup_records(conn: &Connection) -> Result<Vec<LinkRecord>> {
 
 /// Most link records in a backup.
 pub const MAX_BACKUP_LINKS: usize = 100_000;
+
+/// Latest time a backup's link record may hold (the largest JavaScript date, in milliseconds).
+const MAX_TIME_MS: i64 = 8_640_000_000_000_000;
 
 fn id_ok(id: &str) -> bool {
     !id.is_empty() && id.chars().count() <= 512 && !id.chars().any(char::is_control)
@@ -172,6 +176,10 @@ pub fn validate_backup(value: &serde_json::Value) -> Result<Vec<LinkRecord>> {
             || too_long(&s.default_cover, 8_192)
             || too_long(&s.genre, 500)
             || !(0..=60_000_000_000).contains(&s.playtime_seconds)
+            || !(0..=MAX_TIME_MS).contains(&record.linked_at)
+            || s.last_played
+                .is_some_and(|t| !(0..=MAX_TIME_MS).contains(&t))
+            || s.route_keys.is_empty()
             || s.route_keys.len() > 128
             || s.route_keys.iter().any(|k| k.chars().count() > 8_400)
             || s.session_starts.len() > crate::sessions::MAX_BACKUP_SESSIONS
@@ -189,7 +197,7 @@ pub fn validate_backup(value: &serde_json::Value) -> Result<Vec<LinkRecord>> {
 /// Every link record (backups).
 pub fn all_records(conn: &Connection) -> Result<Vec<LinkRecord>> {
     let mut stmt = conn.prepare(
-        "SELECT memberId,gameId,linkedAt,snapshot FROM game_links ORDER BY gameId,linkedAt,memberId",
+        "SELECT memberId,gameId,linkedAt,snapshot FROM game_links ORDER BY gameId,linkedAt,rowid",
     )?;
     let rows = stmt
         .query_map([], read_link)?
@@ -210,14 +218,141 @@ fn put_record(conn: &Connection, record: &LinkRecord) -> Result<()> {
     Ok(())
 }
 
-/// Restores backup link records for games in the library (others are skipped), never over a
-/// game that exists under the entry's own id.
-pub fn restore_records(conn: &Connection, records: &[LinkRecord]) -> Result<()> {
-    for record in records {
-        let game_exists = db::get_game(conn, &record.game_id)?.is_some();
-        let member_is_game = db::get_game(conn, &record.member_id)?.is_some();
-        if game_exists && !member_is_game {
-            put_record(conn, record)?;
+/// Restores backup link records (validated by [`validate_backup`]) inside the caller's
+/// transaction, after the backup's games. A record is only data from a file, so it is skipped
+/// unless it fits the library as it is now: its game exists and some but not all of that game's
+/// routes are the ones it says it brought; its entry id is not a game, not a game any record
+/// points at (here or in the backup), and not already linked (a live record is never replaced).
+/// Returns the entry ids restored, whose parked rows the backup may then restore too.
+pub fn restore_records(conn: &Connection, records: &[LinkRecord]) -> Result<HashSet<String>> {
+    let backup_games: HashSet<&str> = records.iter().map(|r| r.game_id.as_str()).collect();
+    // Oldest first, so entries linked in one go keep their order (`rowid`).
+    let mut order: Vec<&LinkRecord> = records.iter().collect();
+    order.sort_by_key(|r| r.linked_at);
+    let mut restored = HashSet::new();
+    for record in order {
+        let member = record.member_id.as_str();
+        let Some(game) = db::get_game(conn, &record.game_id)? else {
+            continue;
+        };
+        let keys: HashSet<String> = game.routes.iter().map(db::route_identity).collect();
+        let matched = keys
+            .iter()
+            .filter(|k| record.snapshot.route_keys.contains(k))
+            .count();
+        let linked: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM game_links WHERE memberId=?1 OR gameId=?1)",
+            [member],
+            |r| r.get(0),
+        )?;
+        if matched == 0
+            || matched == keys.len()
+            || linked
+            || backup_games.contains(member)
+            || db::get_game(conn, member)?.is_some()
+        {
+            continue;
+        }
+        let added = conn.execute(
+            "INSERT OR IGNORE INTO game_links(memberId,gameId,linkedAt,snapshot) VALUES(?,?,?,?)",
+            params![
+                record.member_id,
+                record.game_id,
+                record.linked_at,
+                serde_json::to_string(&record.snapshot)?
+            ],
+        )?;
+        if added == 1 {
+            restored.insert(record.member_id.clone());
+        }
+    }
+    Ok(restored)
+}
+
+/// The entries linked into `game_id`, oldest first (`linkedAt`, then `rowid`).
+fn ordered_records(conn: &Connection, game_id: &str) -> Result<Vec<LinkRecord>> {
+    let mut list = records_of(conn, game_id)?;
+    list.reverse();
+    Ok(list)
+}
+
+/// `inner` came in with `outer` (a chained link: `outer`'s routes include all of `inner`'s).
+fn within(inner: &LinkRecord, outer: &LinkRecord) -> bool {
+    !inner.snapshot.route_keys.is_empty()
+        && inner
+            .snapshot
+            .route_keys
+            .iter()
+            .all(|k| outer.snapshot.route_keys.contains(k))
+}
+
+fn took(record: &LinkRecord, part: Part) -> bool {
+    record.snapshot.took.iter().any(|k| k == part.key())
+}
+
+/// The entry `list[i]` was linked into, when that was an entry that was itself linked in later
+/// (the oldest newer record whose routes include all of `list[i]`'s); `None`: the game itself.
+fn container(list: &[LinkRecord], i: usize) -> Option<usize> {
+    (i + 1..list.len()).find(|&j| within(&list[i], &list[j]))
+}
+
+/// Where the row of `part` that the entry `list[i]` brought is now (`list` oldest first). When
+/// it was linked, its row became the row of what it was linked into, and that row was parked
+/// under its id. Later links that took `part` into the same place parked it in turn under their
+/// own id (the next one has it); otherwise it is still that place's row: the game's, or, for an
+/// entry linked into an entry that was linked on later, wherever that entry's row went.
+fn holder(list: &[LinkRecord], i: usize, part: Part, game_id: &str) -> String {
+    let scope = container(list, i);
+    if let Some(j) =
+        (i + 1..list.len()).find(|&j| container(list, j) == scope && took(&list[j], part))
+    {
+        return list[j].member_id.clone();
+    }
+    match scope {
+        None => game_id.to_string(),
+        Some(c) if took(&list[c], part) => holder(list, c, part, game_id),
+        Some(c) => list[c].member_id.clone(),
+    }
+}
+
+/// Gives a linked entry its details back and forgets its record: each detail the combined game
+/// took from it returns to the entry's id, and the row parked there goes back where it came
+/// from ([`holder`]), whatever order entries are unlinked in. Entries that came in with it (a
+/// chained link) now belong to it. Used when the entry is unlinked and when its id becomes a
+/// game again (`db::persist_game`: a scan or backup re-adds it), so a new game never inherits
+/// rows parked for another one.
+pub(crate) fn release_member(conn: &Connection, member_id: &str) -> Result<()> {
+    let Some(game_id) = conn
+        .query_row(
+            "SELECT gameId FROM game_links WHERE memberId=?",
+            [member_id],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()?
+    else {
+        return Ok(());
+    };
+    let list = ordered_records(conn, &game_id)?;
+    if let Some(i) = list.iter().position(|r| r.member_id == member_id) {
+        for part in Part::ALL.into_iter().filter(|p| took(&list[i], *p)) {
+            let holder = holder(&list, i, part, &game_id);
+            swap(conn, part, member_id, &holder)?;
+        }
+        move_within(conn, &list[i], member_id)?;
+    }
+    conn.execute("DELETE FROM game_links WHERE memberId=?", [member_id])?;
+    Ok(())
+}
+
+/// The records of entries that came in with `leaving` (all their routes are among the routes it
+/// brought) move to `to`, the game `leaving` becomes, so they can be unlinked from it later.
+fn move_within(conn: &Connection, leaving: &LinkRecord, to: &str) -> Result<()> {
+    for record in records_of(conn, &leaving.game_id)? {
+        if record.member_id != leaving.member_id && within(&record, leaving) {
+            conn.execute(
+                "UPDATE game_links SET gameId=?1 WHERE memberId=?2",
+                params![to, record.member_id],
+            )?;
         }
     }
     Ok(())
@@ -1338,6 +1473,16 @@ pub fn unlink(conn: &mut Connection, game_id: &str, route: &RouteRef) -> Result<
     let remaining: Vec<GameRoute> = remaining.into_iter().map(|(_, r)| r).collect();
     let game = &p.game;
     let tx = conn.transaction()?;
+    // The entry's details and the records of the entries that came in with it go first, so the
+    // new game is inserted under the entry's id with nothing left to release (`db::persist_game`).
+    if let Some(m) = &p.member {
+        if p.restores {
+            release_member(&tx, &m.member_id)?;
+        } else {
+            move_within(&tx, m, &p.new_id)?;
+            tx.execute("DELETE FROM game_links WHERE memberId=?", [&m.member_id])?;
+        }
+    }
     let new_game = match &p.member {
         Some(m) => {
             let s = &m.snapshot;
@@ -1408,14 +1553,6 @@ pub fn unlink(conn: &mut Connection, game_id: &str, route: &RouteRef) -> Result<
                 params![p.new_id, id, game_id],
             )?;
         }
-        // Details: the entry's parked rows are already under its id; what the combined game
-        // took from it goes back (and the kept game's own row returns).
-        if p.restores {
-            for part in m.snapshot.took.iter().filter_map(|k| Part::from_key(k)) {
-                swap(&tx, part, game_id, &p.new_id)?;
-            }
-        }
-        tx.execute("DELETE FROM game_links WHERE memberId=?", [&m.member_id])?;
     }
     for id in [game_id, p.new_id.as_str()] {
         tx.execute("DELETE FROM game_art WHERE gameId=?", [id])?;
@@ -2366,5 +2503,391 @@ mod tests {
         db::remove_game(&conn, "a").unwrap();
         assert_eq!(notes_of(&conn, "b"), None);
         assert!(all_records(&conn).unwrap().is_empty());
+    }
+
+    fn hero_of(conn: &Connection, id: &str) -> Option<String> {
+        conn.query_row(
+            "SELECT hero FROM game_page_custom WHERE gameId=?",
+            [id],
+            |r| r.get(0),
+        )
+        .optional()
+        .unwrap()
+        .flatten()
+    }
+
+    fn igdb_of(conn: &Connection, id: &str) -> Option<i64> {
+        conn.query_row(
+            "SELECT igdbId FROM game_metadata WHERE gameId=?",
+            [id],
+            |r| r.get(0),
+        )
+        .optional()
+        .unwrap()
+        .flatten()
+    }
+
+    fn input_of(conn: &Connection, id: &str) -> Option<String> {
+        conn.query_row(
+            "SELECT preferred FROM game_input WHERE gameId=?",
+            [id],
+            |r| r.get(0),
+        )
+        .optional()
+        .unwrap()
+    }
+
+    /// The route of `game_id` that launches `target`.
+    fn route_to(conn: &Connection, game_id: &str, target: &str) -> RouteRef {
+        let g = db::get_game(conn, game_id).unwrap().unwrap();
+        let index = g
+            .routes
+            .iter()
+            .position(|r| r.launch_target == target)
+            .unwrap();
+        rref(&g, index)
+    }
+
+    fn unlink_to(conn: &mut Connection, game_id: &str, target: &str) -> String {
+        let r = route_to(conn, game_id, target);
+        unlink(conn, game_id, &r).unwrap()
+    }
+
+    /// Choices that keep `keep` and take its page art, IGDB match and notes from `from`.
+    fn take_from(keep: &str, from: &str) -> LinkChoices {
+        LinkChoices {
+            hero_from: from.into(),
+            notes_from: from.into(),
+            igdb_from: from.into(),
+            ..choices(keep)
+        }
+    }
+
+    fn details(conn: &mut Connection, id: &str, igdb: i64) {
+        crate::notes::set_notes(conn, id, &format!("notes of {id}")).unwrap();
+        conn.execute(
+            "INSERT INTO game_page_custom(gameId,hero,logo,logoPosition,logoScale,updatedAt) VALUES(?1,?2,NULL,'bottom-left',1,1)",
+            params![id, format!("lobby-cover://hero-{id}.png")],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO game_metadata(gameId,igdbId,json,fetchedAt,source) VALUES(?1,?2,'{}',1,'user')",
+            params![id, igdb],
+        )
+        .unwrap();
+    }
+
+    const K_ROUTE: &str = "steam://rungameid/1";
+    const S1_ROUTE: &str = "com.epicgames.launcher://apps/x?action=launch";
+    const S2_ROUTE: &str = "goggalaxy://openGameView/1";
+
+    /// K with S1 linked in (details from S1), then S2 (details from S2).
+    fn linked_twice() -> db::Db {
+        let db = db::Db::memory().unwrap();
+        {
+            let mut conn = db.lock();
+            put(
+                &mut conn,
+                &[
+                    game("k", "Hades", vec![route("steam", "Steam", K_ROUTE)]),
+                    game(
+                        "s1",
+                        "Hades (Epic)",
+                        vec![route("epic", "Epic Games", S1_ROUTE)],
+                    ),
+                    game("s2", "Hades (GOG)", vec![route("gog", "GOG", S2_ROUTE)]),
+                ],
+            );
+            for (id, igdb) in [("k", 1), ("s1", 2), ("s2", 3)] {
+                details(&mut conn, id, igdb);
+            }
+            // Controller details follow the default rule: only the entries have them.
+            for id in ["s1", "s2"] {
+                conn.execute(
+                    "INSERT INTO game_input(gameId,preferred,updatedAt) VALUES(?1,?2,1)",
+                    params![id, format!("pad of {id}")],
+                )
+                .unwrap();
+            }
+            link(&mut conn, &ids(&["k", "s1"]), Some(&take_from("k", "s1"))).unwrap();
+            link(&mut conn, &ids(&["k", "s2"]), Some(&take_from("k", "s2"))).unwrap();
+            assert_eq!(notes_of(&conn, "k").as_deref(), Some("notes of s2"));
+            assert_eq!(igdb_of(&conn, "k"), Some(3));
+            assert_eq!(input_of(&conn, "k").as_deref(), Some("pad of s1"));
+        }
+        db
+    }
+
+    fn assert_own_details(conn: &Connection) {
+        for (id, igdb) in [("k", 1), ("s1", 2), ("s2", 3)] {
+            assert_eq!(
+                notes_of(conn, id),
+                Some(format!("notes of {id}")),
+                "notes of {id}"
+            );
+            assert_eq!(
+                hero_of(conn, id),
+                Some(format!("lobby-cover://hero-{id}.png")),
+                "hero of {id}"
+            );
+            assert_eq!(igdb_of(conn, id), Some(igdb), "IGDB of {id}");
+        }
+        assert_eq!(input_of(conn, "k"), None);
+        assert_eq!(input_of(conn, "s1").as_deref(), Some("pad of s1"));
+        assert_eq!(input_of(conn, "s2").as_deref(), Some("pad of s2"));
+    }
+
+    #[test]
+    fn unlinking_in_any_order_gives_every_entry_its_own_details() {
+        for first in [S2_ROUTE, S1_ROUTE] {
+            let db = linked_twice();
+            let mut conn = db.lock();
+            let second = if first == S1_ROUTE {
+                S2_ROUTE
+            } else {
+                S1_ROUTE
+            };
+            unlink_to(&mut conn, "k", first);
+            unlink_to(&mut conn, "k", second);
+            assert!(all_records(&conn).unwrap().is_empty());
+            assert_own_details(&conn);
+        }
+    }
+
+    #[test]
+    fn chained_links_unlink_back_out_in_any_order() {
+        const C: &str = "steam://rungameid/3";
+        const Q: &str = "com.epicgames.launcher://apps/q?action=launch";
+        const A: &str = "goggalaxy://openGameView/a";
+        let db = db::Db::memory().unwrap();
+        let mut conn = db.lock();
+        let b_route = xbox("Contoso.HadesB");
+        let b_target = b_route.launch_target.clone();
+        put(
+            &mut conn,
+            &[
+                game("c", "Hades", vec![route("steam", "Steam", C)]),
+                game("q", "Hades (Epic)", vec![route("epic", "Epic Games", Q)]),
+                Game {
+                    playtime_seconds: Some(1_200),
+                    ..game("a", "Hades (GOG)", vec![route("gog", "GOG", A)])
+                },
+                Game {
+                    playtime_seconds: Some(600),
+                    ..game("b", "Hades (Xbox)", vec![b_route])
+                },
+            ],
+        );
+        for (id, igdb) in [("c", 1), ("q", 2), ("a", 3), ("b", 4)] {
+            details(&mut conn, id, igdb);
+        }
+        db::insert_session(&conn, "b", 2_000, 600, "launch").unwrap();
+        link(&mut conn, &ids(&["c", "q"]), Some(&take_from("c", "q"))).unwrap();
+        // B into A, then A (with B) into C.
+        link(&mut conn, &ids(&["a", "b"]), Some(&take_from("a", "b"))).unwrap();
+        link(&mut conn, &ids(&["c", "a"]), Some(&take_from("c", "a"))).unwrap();
+        assert_eq!(notes_of(&conn, "c").as_deref(), Some("notes of b"));
+        assert_eq!(db::get_game(&conn, "c").unwrap().unwrap().routes.len(), 4);
+        // The entry linked first leaves first; then A, which brings B's route along.
+        assert_eq!(unlink_to(&mut conn, "c", Q), "q");
+        assert_eq!(unlink_to(&mut conn, "c", A), "a");
+        assert_eq!(db::get_game(&conn, "a").unwrap().unwrap().routes.len(), 2);
+        assert_eq!(records_of(&conn, "a").unwrap().len(), 1, "B moved with A");
+        assert_eq!(unlink_to(&mut conn, "a", &b_target), "b");
+        let b = db::get_game(&conn, "b").unwrap().unwrap();
+        assert_eq!(b.title, "Hades (Xbox)");
+        assert_eq!(b.playtime_seconds, Some(600));
+        assert_eq!(b.routes.len(), 1);
+        assert_eq!(b.routes[0].launch_target, b_target);
+        assert_eq!(sessions_of(&conn, "b"), 1);
+        assert_eq!(
+            db::get_game(&conn, "a").unwrap().unwrap().playtime_seconds,
+            Some(1_200)
+        );
+        for (id, igdb) in [("c", 1), ("q", 2), ("a", 3), ("b", 4)] {
+            assert_eq!(notes_of(&conn, id), Some(format!("notes of {id}")));
+            assert_eq!(
+                hero_of(&conn, id),
+                Some(format!("lobby-cover://hero-{id}.png"))
+            );
+            assert_eq!(igdb_of(&conn, id), Some(igdb));
+        }
+        assert!(all_records(&conn).unwrap().is_empty());
+    }
+
+    fn full_backup(conn: &Connection) -> serde_json::Value {
+        let backup = Backup {
+            games: db::all_games(conn).unwrap(),
+            settings: None,
+            emulators: None,
+            game_page_custom: Some(db::all_page_custom(conn).unwrap()),
+            game_notes: Some(crate::notes::export_backup(conn).unwrap()),
+            game_added: None,
+            play_sessions: Some(crate::sessions::export_all(conn).unwrap()),
+            launchers: None,
+            game_links: Some(backup_records(conn).unwrap()),
+        };
+        serde_json::to_value(&backup).unwrap()
+    }
+
+    fn restore(conn: &mut Connection, json: &serde_json::Value) {
+        let parsed = validation::backup(json).unwrap();
+        db::restore_backup(conn, &parsed).unwrap();
+    }
+
+    #[test]
+    fn a_crafted_backup_record_cant_take_parked_details() {
+        let db = db::Db::memory().unwrap();
+        let mut conn = db.lock();
+        put(
+            &mut conn,
+            &[
+                game("k", "Hades", vec![route("steam", "Steam", K_ROUTE)]),
+                game(
+                    "s",
+                    "Hades (Epic)",
+                    vec![route("epic", "Epic Games", S1_ROUTE)],
+                ),
+                game(
+                    "g",
+                    "Other",
+                    vec![
+                        route("steam", "Steam", "steam://rungameid/9"),
+                        route("gog", "GOG", S2_ROUTE),
+                    ],
+                ),
+            ],
+        );
+        for (id, igdb) in [("k", 1), ("s", 2), ("g", 3)] {
+            details(&mut conn, id, igdb);
+        }
+        // S into K with S's notes: K's own notes are parked under `s`.
+        link(&mut conn, &ids(&["k", "s"]), Some(&take_from("k", "s"))).unwrap();
+        assert_eq!(notes_of(&conn, "s").as_deref(), Some("notes of k"));
+        let g_route = db::route_identity(&route("steam", "Steam", "steam://rungameid/9"));
+        let mut json = full_backup(&conn);
+        let crafted = |member: &str, keys: serde_json::Value| {
+            serde_json::json!({
+                "memberId": member,
+                "gameId": "g",
+                "linkedAt": 1,
+                "snapshot": { "title": "x", "routeKeys": keys, "took": ["notes"] }
+            })
+        };
+        // A file with its own records instead (a backup's records are only data): the parked
+        // entry's id, a game's id, every route of G.
+        json["gameLinks"] = serde_json::json!([]);
+        let links = json["gameLinks"].as_array_mut().unwrap();
+        links.push(crafted("s", serde_json::json!([g_route])));
+        links.push(crafted("k", serde_json::json!([g_route])));
+        let all_g: Vec<String> = db::get_game(&conn, "g")
+            .unwrap()
+            .unwrap()
+            .routes
+            .iter()
+            .map(db::route_identity)
+            .collect();
+        links.push(crafted("zz", serde_json::json!(all_g)));
+        restore(&mut conn, &json);
+        assert!(records_of(&conn, "g").unwrap().is_empty(), "all skipped");
+        db::remove_game(&conn, "g").unwrap();
+        assert_eq!(notes_of(&conn, "s").as_deref(), Some("notes of k"));
+        unlink_to(&mut conn, "k", S1_ROUTE);
+        assert_eq!(notes_of(&conn, "k").as_deref(), Some("notes of k"));
+        assert_eq!(notes_of(&conn, "s").as_deref(), Some("notes of s"));
+        // Records without routes or with out-of-range times are refused outright.
+        let mut bad = full_backup(&conn);
+        bad["gameLinks"] = serde_json::json!([crafted("zz", serde_json::json!([]))]);
+        assert!(validation::backup(&bad).is_err());
+        let mut late = crafted("zz", serde_json::json!([g_route]));
+        late["linkedAt"] = serde_json::json!(8_640_000_000_000_001_i64);
+        bad["gameLinks"] = serde_json::json!([late]);
+        assert!(validation::backup(&bad).is_err());
+        let mut late = crafted("zz", serde_json::json!([g_route]));
+        late["snapshot"]["lastPlayed"] = serde_json::json!(-1);
+        bad["gameLinks"] = serde_json::json!([late]);
+        assert!(validation::backup(&bad).is_err());
+    }
+
+    #[test]
+    fn restoring_an_older_backup_keeps_the_live_link_record() {
+        let db = db::Db::memory().unwrap();
+        let mut conn = db.lock();
+        rich(&mut conn);
+        link(&mut conn, &ids(&["a", "b"]), Some(&choices("a"))).unwrap();
+        let old = full_backup(&conn);
+        let epic = "com.epicgames.launcher://apps/x?action=launch";
+        unlink_to(&mut conn, "a", epic);
+        link(&mut conn, &ids(&["a", "b"]), Some(&take_from("a", "b"))).unwrap();
+        let live = records_of(&conn, "a").unwrap();
+        assert!(live[0].snapshot.took.contains(&"notes".to_string()));
+        restore(&mut conn, &old);
+        assert_eq!(records_of(&conn, "a").unwrap(), live);
+    }
+
+    #[test]
+    fn parked_details_survive_a_backup_into_an_empty_library() {
+        let db = db::Db::memory().unwrap();
+        let mut conn = db.lock();
+        rich(&mut conn);
+        conn.execute(
+            "INSERT INTO game_input(gameId,preferred,updatedAt) VALUES('a','pad of a',1),('b','pad of b',1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO game_page_custom(gameId,hero,logo,logoPosition,logoScale,updatedAt) VALUES('a','lobby-cover://hero-a.png',NULL,'bottom-left',1,1)",
+            [],
+        )
+        .unwrap();
+        // A's notes, art and pad stay; B's are parked.
+        link(&mut conn, &ids(&["a", "b"]), Some(&choices("a"))).unwrap();
+        let json = full_backup(&conn);
+        let fresh = db::Db::memory().unwrap();
+        let mut restored = fresh.lock();
+        restore(&mut restored, &json);
+        assert_eq!(records_of(&restored, "a").unwrap().len(), 1);
+        let b = unlink_to(
+            &mut restored,
+            "a",
+            "com.epicgames.launcher://apps/x?action=launch",
+        );
+        assert_eq!(b, "b");
+        for id in ["a", "b"] {
+            assert_eq!(notes_of(&restored, id), Some(format!("notes of {id}")));
+            assert_eq!(
+                hero_of(&restored, id),
+                Some(format!("lobby-cover://hero-{id}.png"))
+            );
+            assert_eq!(input_of(&restored, id), Some(format!("pad of {id}")));
+        }
+    }
+
+    #[test]
+    fn an_entry_id_that_becomes_a_game_again_gets_its_own_details() {
+        let db = db::Db::memory().unwrap();
+        let mut conn = db.lock();
+        rich(&mut conn);
+        // B's notes are used; A's own are parked under `b`.
+        link(&mut conn, &ids(&["a", "b"]), Some(&take_from("a", "b"))).unwrap();
+        assert_eq!(notes_of(&conn, "b").as_deref(), Some("notes of a"));
+        // A scan adds `b` again.
+        put(
+            &mut conn,
+            &[game(
+                "b",
+                "Hades (Epic)",
+                vec![route(
+                    "epic",
+                    "Epic Games",
+                    "com.epicgames.launcher://apps/y",
+                )],
+            )],
+        );
+        assert!(all_records(&conn).unwrap().is_empty());
+        assert_eq!(notes_of(&conn, "a").as_deref(), Some("notes of a"));
+        assert_eq!(notes_of(&conn, "b").as_deref(), Some("notes of b"));
+        db::remove_game(&conn, "a").unwrap();
+        assert_eq!(notes_of(&conn, "b").as_deref(), Some("notes of b"));
     }
 }

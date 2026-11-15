@@ -725,12 +725,18 @@ pub fn export_backup(conn: &Connection) -> Result<NotesBackup> {
 }
 
 /// Restores a section inside the caller's transaction. Rows for games that are not in the
-/// library are skipped. A game's memories are replaced by the backup's.
-pub fn restore_backup(conn: &Connection, backup: &NotesBackup) -> Result<()> {
+/// library are skipped, apart from the notes and controller details parked for the linked
+/// entries in `parked` (restored from the same backup, `links::restore_records`). A game's
+/// memories are replaced by the backup's.
+pub fn restore_backup(
+    conn: &Connection,
+    backup: &NotesBackup,
+    parked: &std::collections::HashSet<String>,
+) -> Result<()> {
     validate_backup(backup)?;
     let now = now_ms();
     for n in &backup.notes {
-        if !game_exists(conn, &n.game_id)? {
+        if !parked.contains(&n.game_id) && !game_exists(conn, &n.game_id)? {
             continue;
         }
         conn.execute(
@@ -753,7 +759,7 @@ pub fn restore_backup(conn: &Connection, backup: &NotesBackup) -> Result<()> {
         )?;
     }
     for i in &backup.input {
-        if !game_exists(conn, &i.game_id)? {
+        if !parked.contains(&i.game_id) && !game_exists(conn, &i.game_id)? {
             continue;
         }
         // A level without a source in the file counts as the user's own choice.
@@ -1164,7 +1170,7 @@ mod tests {
         let other = setup();
         let mut c = other.lock();
         let tx = c.transaction().unwrap();
-        restore_backup(&tx, &backup).unwrap();
+        restore_backup(&tx, &backup, &Default::default()).unwrap();
         tx.commit().unwrap();
         let n = load(&c, "b").unwrap();
         assert_eq!((n.rating, n.notes.as_str()), (Some(4.5), "notes"));
@@ -1182,7 +1188,7 @@ mod tests {
         assert_eq!(load(&c, "ghost").unwrap(), GameNotes::default());
         // Restoring again replaces memories instead of duplicating them.
         let tx = c.transaction().unwrap();
-        restore_backup(&tx, &backup).unwrap();
+        restore_backup(&tx, &backup, &Default::default()).unwrap();
         tx.commit().unwrap();
         assert_eq!(load(&c, "b").unwrap().memories.len(), 1);
     }

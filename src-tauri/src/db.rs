@@ -442,6 +442,12 @@ pub fn game_count(db: &Connection) -> Result<usize> {
 /// Inserts or updates a game. Fields missing from the patch keep their stored value.
 fn persist_game(db: &Connection, game: &GamePatch) -> Result<GameRow> {
     let old = get_row(db, &game.id)?;
+    if old.is_none() {
+        // A new game under the id of an entry linked into another game (a scan or backup
+        // re-adds it): the entry's details go back to it and its record is forgotten, so the
+        // new game neither inherits rows parked there nor loses them when that game is removed.
+        crate::links::release_member(db, &game.id)?;
+    }
     let old_ref = old.as_ref();
     let previous_seconds = old_ref.map(GameRow::seconds).unwrap_or(0);
     let seconds = game
@@ -1228,9 +1234,15 @@ pub fn put_page_custom(db: &Connection, game_id: &str, custom: &GamePageCustom) 
     if get_row(db, game_id)?.is_none() {
         return Ok(false);
     }
+    write_page_custom(db, game_id, custom)?;
+    Ok(true)
+}
+
+/// [`put_page_custom`] without the game check (rows parked for a linked entry, `links`).
+fn write_page_custom(db: &Connection, game_id: &str, custom: &GamePageCustom) -> Result<()> {
     if custom.is_default() {
         db.execute("DELETE FROM game_page_custom WHERE gameId=?", [game_id])?;
-        return Ok(true);
+        return Ok(());
     }
     db.execute(
         "INSERT INTO game_page_custom(gameId,hero,logo,logoPosition,logoScale,updatedAt) VALUES(?1,?2,?3,?4,?5,?6)
@@ -1244,14 +1256,14 @@ pub fn put_page_custom(db: &Connection, game_id: &str, custom: &GamePageCustom) 
             now_ms()
         ],
     )?;
-    Ok(true)
+    Ok(())
 }
 
-/// Every customization of a game in the library (backups), by game id. Rows parked for a linked
-/// entry (`links`) aren't a game's and stay out.
+/// Every customization of a game in the library (backups), by game id, and the rows parked for
+/// entries linked into a game (`links`), which a restore brings back with their link records.
 pub fn all_page_custom(db: &Connection) -> Result<Vec<GamePageCustomEntry>> {
     let mut stmt = db.prepare(
-        "SELECT * FROM game_page_custom WHERE gameId IN (SELECT id FROM games) ORDER BY gameId",
+        "SELECT * FROM game_page_custom WHERE gameId IN (SELECT id FROM games UNION SELECT memberId FROM game_links) ORDER BY gameId",
     )?;
     let rows = stmt
         .query_map([], |row| {
@@ -1742,20 +1754,26 @@ pub fn restore_backup(db: &mut Connection, backup: &Backup) -> Result<usize> {
     for launcher in backup.launchers.iter().flatten() {
         crate::launchers::save(&tx, launcher)?;
     }
-    // Entries for games that aren't in the library are skipped.
+    // Link records first: the rows parked for the entries they restore come back with them.
+    let parked = match &backup.game_links {
+        Some(links) => crate::links::restore_records(&tx, links)?,
+        None => HashSet::new(),
+    };
+    // Entries for games that aren't in the library (or restored linked entries) are skipped.
     for entry in backup.game_page_custom.iter().flatten() {
-        put_page_custom(&tx, &entry.game_id, &entry.custom())?;
+        if parked.contains(&entry.game_id) {
+            write_page_custom(&tx, &entry.game_id, &entry.custom())?;
+        } else {
+            put_page_custom(&tx, &entry.game_id, &entry.custom())?;
+        }
     }
     if let Some(notes) = &backup.game_notes {
-        crate::notes::restore_backup(&tx, notes)?;
+        crate::notes::restore_backup(&tx, notes, &parked)?;
     }
     let ids: Vec<&str> = backup.games.iter().map(|g| g.id.as_str()).collect();
     crate::storage::restore_added(&tx, &ids, backup.game_added.as_deref())?;
     if let Some(sessions) = &backup.play_sessions {
         crate::sessions::restore(&tx, sessions, now_ms())?;
-    }
-    if let Some(links) = &backup.game_links {
-        crate::links::restore_records(&tx, links)?;
     }
     tx.commit()?;
     Ok(backup.games.len())
@@ -2702,8 +2720,8 @@ mod tests {
         remove_game(&conn, "e").unwrap();
         assert_eq!(page_custom(&conn, "e").unwrap(), GamePageCustom::default());
 
-        // Both customized: the target's row is kept, the source's is parked for unlinking (not
-        // a game's, so not listed).
+        // Both customized: the target's row is kept, the source's is parked for unlinking (and
+        // backed up with its link record).
         merge_games(&mut conn, "a", "b").unwrap();
         assert_eq!(page_custom(&conn, "a").unwrap(), custom_hero("a"));
         assert_eq!(page_custom(&conn, "b").unwrap(), custom_hero("b"));
@@ -2715,7 +2733,7 @@ mod tests {
             .into_iter()
             .map(|e| e.game_id)
             .collect();
-        assert_eq!(ids, ["a", "c"]);
+        assert_eq!(ids, ["a", "b", "c"]);
     }
 
     #[test]
