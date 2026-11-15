@@ -288,6 +288,7 @@ pub fn run() {
             launcher_commands::launchers_add_game,
             launcher_commands::launchers_assignments,
             launcher_commands::launchers_assign,
+            launcher_commands::launchers_link,
             launcher_commands::launchers_assign_check,
             launcher_commands::launchers_unassign,
             commands::plugins_list,

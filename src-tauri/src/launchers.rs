@@ -1049,7 +1049,8 @@ pub fn unassign(game: &Game, launcher_id: &str) -> Option<Vec<GameRoute>> {
 /// The native confirmation text for an assignment that adds a launcher route: the launcher's
 /// program, the exact argument list with this game's target and the route's launch options
 /// (`options`, already checked by `links::prepare_options`; may be empty), and the working
-/// folder. One dialog covers both the route and its options.
+/// folder. One dialog covers both the route and its options. Confirming it also confirms the
+/// launcher's command for later links ([`record_confirmed`]), which the text says.
 pub fn assign_prompt(
     l: &CustomLauncher,
     game_title: &str,
@@ -1086,7 +1087,7 @@ pub fn assign_prompt(
     // is kept short enough for the dialog (`links::MAX_CONFIRM_CHARS`), and a second copy of a
     // long target would push the options off it.
     Ok(format!(
-        "Game Lobby will run:\n  {}\n\nArguments (one per line, with the game's {what}):\n{}\n\nWorking folder:\n  {}\n\nFor the game: {title}\nLauncher: {name}\n\nPlay will use {name} from now on.{note} The game's current way to start stays under Play from, and you can remove {name} from the game page at any time.",
+        "Game Lobby will run:\n  {}\n\nArguments (one per line, with the game's {what}):\n{}\n\nWorking folder:\n  {}\n\nFor the game: {title}\nLauncher: {name}\n\nPlay will use {name} from now on.{note} The game's current way to start stays under Play from, and you can remove {name} from the game page at any time.\n\nGames you link to this launcher later run the same way, each with its own file, folder or store id, without asking again until the launcher's command changes.",
         crate::validation::escape_for_prompt(&l.executable),
         crate::links::numbered(&argv),
         crate::validation::escape_for_prompt(&folder),
@@ -1299,6 +1300,7 @@ pub fn remove(conn: &Connection, id: &str, mode: RemoveMode) -> Result<Option<Ve
         )?;
     }
     tx.execute("DELETE FROM custom_launchers WHERE id=?", [id])?;
+    forget_confirmed(&tx, id)?;
     tx.commit()?;
     Ok(Some(removed))
 }
@@ -1354,7 +1356,84 @@ pub fn migrate(conn: &Connection) -> Result<()> {
             params![serde_json::to_string(&[kind])?, id],
         )?;
     }
+    // What the user confirmed for each launcher on this PC ([`record_confirmed`]): an added
+    // table, no `user_version` change (older builds ignore it). Never part of a backup.
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS launcher_confirmed(launcherId TEXT PRIMARY KEY,exeKey TEXT NOT NULL,template TEXT NOT NULL,cwdKey TEXT NOT NULL,targetKinds TEXT NOT NULL,confirmedAt INTEGER NOT NULL);",
+    )?;
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Confirmed launch commands
+//
+// When the user confirms a launcher in its native save dialog (`launchers_save`), or confirms
+// linking a game to it ([`assign_prompt`]), Game Lobby remembers exactly what was shown: the
+// program, the argument template, the working folder and the target kinds (table
+// `launcher_confirmed`, one row per launcher). Linking another game of the library to that
+// launcher then needs no dialog, because it runs nothing new: the same command, with the game's
+// own stored file, folder or store id as `{target}` (the case the save dialog describes). A
+// launcher whose command differs from its row in any way (restored from a backup, changed
+// without a dialog, saved before this table existed) has to be confirmed again. Launch options
+// are never covered by this (they keep their own confirmations, `links`).
+
+/// What a confirmation covers for launcher `l`: its normalised program, its template (JSON), its
+/// normalised working folder and its target kinds (JSON). `None` for a launcher without a
+/// program, or one whose fields can't be read.
+fn confirmed_key(l: &CustomLauncher) -> Option<(String, String, String, String)> {
+    if is_label_only(l) {
+        return None;
+    }
+    let exe = crate::tracker::normalize_path(&l.executable)?;
+    let cwd = match &l.working_dir {
+        Some(dir) => dir.clone(),
+        None => Path::new(&l.executable)
+            .parent()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+    };
+    let cwd = crate::tracker::normalize_path(&cwd)?;
+    let template = serde_json::to_string(&l.args_template).ok()?;
+    let kinds = serde_json::to_string(&kind_names(&l.kinds().ok()?)).ok()?;
+    Some((exe, template, cwd, kinds))
+}
+
+/// Remembers that the user confirmed launcher `l`'s command on this PC. Only called right after
+/// a native dialog that showed it, inside that dialog's compare-and-save (`launchers_save`,
+/// `launchers_assign`). A launcher without a program forgets any earlier confirmation.
+pub fn record_confirmed(conn: &Connection, l: &CustomLauncher) -> Result<()> {
+    match confirmed_key(l) {
+        Some((exe, template, cwd, kinds)) => {
+            conn.execute(
+                "INSERT OR REPLACE INTO launcher_confirmed(launcherId,exeKey,template,cwdKey,targetKinds,confirmedAt) VALUES(?,?,?,?,?,?)",
+                params![l.id, exe, template, cwd, kinds, now_ms()],
+            )?;
+        }
+        None => forget_confirmed(conn, &l.id)?,
+    }
+    Ok(())
+}
+
+/// Forgets launcher `id`'s confirmation (it was deleted, or lost its program).
+pub fn forget_confirmed(conn: &Connection, id: &str) -> Result<()> {
+    conn.execute("DELETE FROM launcher_confirmed WHERE launcherId=?", [id])?;
+    Ok(())
+}
+
+/// Whether the user confirmed exactly launcher `l`'s current command on this PC
+/// ([`record_confirmed`]). Always false for a launcher without a program.
+pub fn is_confirmed(conn: &Connection, l: &CustomLauncher) -> Result<bool> {
+    let Some((exe, template, cwd, kinds)) = confirmed_key(l) else {
+        return Ok(false);
+    };
+    Ok(conn
+        .query_row(
+            "SELECT 1 FROM launcher_confirmed WHERE launcherId=? AND exeKey=? AND template=? AND cwdKey=? AND targetKinds=?",
+            params![l.id, exe, template, cwd, kinds],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some())
 }
 
 /// Every launcher in display order. `available` stays false (no filesystem access here):

@@ -1767,8 +1767,11 @@ pub fn restore_backup(db: &mut Connection, backup: &Backup) -> Result<usize> {
         save_emulator(&tx, emulator)?;
     }
     // Validated by `validation::backup` (same checks as a save, apart from the picks).
+    // A restored launcher is confirmed again before a game links to it without a dialog (its
+    // command comes from a file, not from a dialog on this PC).
     for launcher in backup.launchers.iter().flatten() {
         crate::launchers::save(&tx, launcher)?;
+        crate::launchers::forget_confirmed(&tx, &launcher.id)?;
     }
     // Link records first: the rows parked for the entries they restore come back with them.
     let parked = match &backup.game_links {
@@ -2631,6 +2634,31 @@ mod tests {
             .collect::<rusqlite::Result<_>>()
             .unwrap();
         assert_eq!(confirmed, ["exeKey", "argv", "confirmedAt"]);
+        // Launcher commands confirmed on this PC: added the same way, and empty (launchers saved
+        // before it existed are confirmed again once, on their first link).
+        let launcher_confirmed: Vec<String> = conn
+            .prepare("SELECT name FROM pragma_table_info('launcher_confirmed')")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(
+            launcher_confirmed,
+            [
+                "launcherId",
+                "exeKey",
+                "template",
+                "cwdKey",
+                "targetKinds",
+                "confirmedAt"
+            ]
+        );
+        let rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM launcher_confirmed", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows, 0);
+        migrate(&conn, None).unwrap();
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();

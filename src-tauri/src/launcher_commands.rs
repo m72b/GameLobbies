@@ -109,7 +109,8 @@ pub async fn launchers_save(
         .map_err(err)?;
         (stored, accepted)
     };
-    if launchers::needs_confirmation(stored.as_ref(), &accepted.launcher) {
+    let confirmed = launchers::needs_confirmation(stored.as_ref(), &accepted.launcher);
+    if confirmed {
         let prompt = launchers::confirmation_prompt(&accepted.launcher).map_err(err)?;
         if !confirm_natively(&window, "Confirm launcher", &prompt, "Save").await {
             return Err("The launcher was not saved.".into());
@@ -145,6 +146,10 @@ pub async fn launchers_save(
             launcher.sort_order = launchers::next_sort_order(&conn).map_err(err)?;
         }
         launchers::save(&conn, &launcher).map_err(err)?;
+        if confirmed {
+            // The dialog above showed exactly this program, template, working folder and kinds.
+            launchers::record_confirmed(&conn, &launcher).map_err(err)?;
+        }
     }
     if accepted.used_executable_pick {
         state
@@ -645,13 +650,12 @@ fn assignment_option(l: &CustomLauncher, game: &Game) -> AssignmentOption {
 /// Assigns game `gameId` to launcher `launcherId` from the game page: the game shows under the
 /// launcher, and (for a launcher with a program) Play runs it through the launcher with a target
 /// taken from one of the game's own routes (`routeIndex` and `kind` choose which; the first that
-/// fits otherwise). The renderer names no path, program or argument. A new launch route is shown
-/// in a native dialog (program, exact arguments, working folder) and added only when the user
-/// confirms it; the game's other routes stay. `options` is optional launch options text for the
-/// new route: checked like options set on the game page (`links::prepare_options` for the
-/// launcher and that route's target), shown in the same dialog (appended to the arguments), and
-/// saved with their confirmation only together with the route. A launcher without a program
-/// only labels a route (nothing new runs), without a dialog, and refuses options. Returns the
+/// fits otherwise). The renderer names no path, program or argument. `options` is optional
+/// launch options text for the new route: checked like options set on the game page
+/// (`links::prepare_options` for the launcher and that route's target), shown in the native
+/// dialog (appended to the arguments), and saved with their confirmation only together with the
+/// route. See [`assign_game`] for when a dialog is shown. A launcher without a program only
+/// labels a route (nothing new runs), without a dialog, and refuses options. Returns the
 /// library.
 #[tauri::command]
 // Tauri passes each renderer argument (and the app, window and state) as its own parameter.
@@ -669,32 +673,133 @@ pub async fn launchers_assign(
     let game_id = game_arg(&game_id)?;
     let launcher_id = id_arg(&launcher_id)?;
     let route_index = route_arg(route_index)?;
+    let kind = match kind.as_deref() {
+        None => None,
+        Some(raw) => Some(TargetKind::parse(raw).ok_or("That target kind is invalid.")?),
+    };
+    let window = &window;
+    let assigned = assign_game(
+        &state.db,
+        &game_id,
+        &launcher_id,
+        route_index,
+        kind,
+        options.unwrap_or_default(),
+        move |prompt| async move {
+            confirm_natively(window, "Confirm launcher", &prompt, "Use launcher").await
+        },
+    )
+    .await?;
+    notify_library(&app, &state);
+    Ok(assigned.games)
+}
+
+/// What [`launchers_link`] did: the library, and the target the new launch route passes to the
+/// launcher (`None` for a launcher without a program, which only labels a route).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LinkedGame {
+    games: Vec<Game>,
+    target: Option<AssignTarget>,
+}
+
+/// "Link to launcher": [`launchers_assign`] with nothing but the game and the launcher. Rust picks
+/// the target from the game's own routes (route order, then file, folder, store id, limited to
+/// the launcher's kinds; the first that exists). No launch options (they are added later on the
+/// game page, with their own confirmation). A launcher whose command the user already confirmed
+/// on this PC links in one click; otherwise the native dialog asks once (see [`assign_game`]).
+#[tauri::command]
+pub async fn launchers_link(
+    app: AppHandle,
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    game_id: String,
+    launcher_id: String,
+) -> CmdResult<LinkedGame> {
+    let game_id = game_arg(&game_id)?;
+    let launcher_id = id_arg(&launcher_id)?;
+    let window = &window;
+    let assigned = assign_game(
+        &state.db,
+        &game_id,
+        &launcher_id,
+        None,
+        None,
+        String::new(),
+        move |prompt| async move {
+            confirm_natively(window, "Confirm launcher", &prompt, "Use launcher").await
+        },
+    )
+    .await?;
+    notify_library(&app, &state);
+    Ok(LinkedGame {
+        games: assigned.games,
+        target: assigned.candidate.map(|c| AssignTarget {
+            route_index: c.route_index,
+            kind: c.kind.as_str(),
+            target: c.target,
+        }),
+    })
+}
+
+/// What [`assign_game`] did.
+struct Assigned {
+    games: Vec<Game>,
+    /// The target of the new launch route (none for a launcher without a program).
+    candidate: Option<launchers::AssignCandidate>,
+    /// Whether the native dialog was shown (and confirmed).
+    #[cfg_attr(not(test), allow(dead_code))]
+    asked: bool,
+}
+
+/// Assigns game `game_id` to launcher `launcher_id` (both checked by the caller): the work of
+/// [`launchers_assign`] and [`launchers_link`]. `confirm` shows the native dialog with the
+/// prompt it gets and says whether the user confirmed it (a parameter so tests can answer it).
+///
+/// A launcher without a program only labels a route: no dialog. A launcher with a program gets
+/// a new launch route whose target comes from the game's own stored routes, checked like every
+/// launch. The dialog ([`launchers::assign_prompt`]) is skipped only when no launch options are
+/// added and the user already confirmed exactly this launcher's command on this PC
+/// ([`launchers::is_confirmed`]): the route then runs that command with the game's own target,
+/// which is what that confirmation covered. When the dialog is confirmed, the launcher's
+/// command is remembered as confirmed too ([`launchers::record_confirmed`]), so the next link
+/// needs none. Everything is saved only over what was checked (compare-and-save).
+async fn assign_game<F, Fut>(
+    db: &db::Db,
+    game_id: &str,
+    launcher_id: &str,
+    route_index: Option<usize>,
+    kind: Option<TargetKind>,
+    options: String,
+    confirm: F,
+) -> CmdResult<Assigned>
+where
+    F: FnOnce(String) -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
     // Launch options text for the new route (checked below against the launcher, like options
     // set later on the game page); empty means none.
-    let options = options.unwrap_or_default();
     if options.chars().count() > crate::links::MAX_ARGS_CHARS {
         return Err(format!(
             "Launch options can be at most {} characters.",
             crate::links::MAX_ARGS_CHARS
         ));
     }
-    let kind = match kind.as_deref() {
-        None => None,
-        Some(raw) => Some(TargetKind::parse(raw).ok_or("That target kind is invalid.")?),
-    };
-    let (game, launcher) = {
-        let conn = state.db.lock();
-        let game = db::get_game(&conn, &game_id)
+    let (game, launcher, confirmed) = {
+        let conn = db.lock();
+        let game = db::get_game(&conn, game_id)
             .map_err(err)?
             .ok_or("Game not found.")?;
-        let launcher = launchers::get(&conn, &launcher_id)
+        let launcher = launchers::get(&conn, launcher_id)
             .map_err(err)?
             .ok_or("That launcher no longer exists.")?;
-        (game, launcher)
+        let confirmed = launchers::is_confirmed(&conn, &launcher).map_err(err)?;
+        (game, launcher, confirmed)
     };
     if let Some(reason) = launchers::assign_blocker(&launcher, &game) {
         return Err(reason);
     }
+    let mut asked = false;
     let candidate = if launchers::is_label_only(&launcher) {
         if !options.trim().is_empty() {
             return Err(format!(
@@ -725,7 +830,7 @@ pub async fn launchers_assign(
         // The same checks as every launch, before anything is saved: a shortcut handed to the
         // launcher must be one the user may run, and the program, arguments, target and working
         // folder must be usable.
-        let confirmations = db::shortcut_confirmations(&state.db.lock()).map_err(err)?;
+        let confirmations = db::shortcut_confirmations(&db.lock()).map_err(err)?;
         let target = chosen.target.clone();
         crate::platform::on_thread(move || {
             crate::launch::check_launcher_shortcut(&target, &confirmations)
@@ -744,15 +849,23 @@ pub async fn launchers_assign(
                 .map_err(err)?
                 .map(|argv| (host, argv))
         };
-        let shown = checked.as_ref().map(|(_, argv)| argv.as_slice());
-        let prompt =
-            launchers::assign_prompt(&launcher, &game.title, &chosen, shown.unwrap_or_default())
-                .map_err(err)?;
-        if !confirm_natively(&window, "Confirm launcher", &prompt, "Use launcher").await {
-            return Err(format!(
-                "{} was not added to {}.",
-                game.title, launcher.name
-            ));
+        // Nothing new runs when the command was confirmed and no options are added.
+        if checked.is_some() || !confirmed {
+            let shown = checked.as_ref().map(|(_, argv)| argv.as_slice());
+            let prompt = launchers::assign_prompt(
+                &launcher,
+                &game.title,
+                &chosen,
+                shown.unwrap_or_default(),
+            )
+            .map_err(err)?;
+            if !confirm(prompt).await {
+                return Err(format!(
+                    "{} was not added to {}.",
+                    game.title, launcher.name
+                ));
+            }
+            asked = true;
         }
         Some((chosen, checked))
     };
@@ -761,15 +874,23 @@ pub async fn launchers_assign(
         None => (None, None),
     };
     let games = {
-        let conn = state.db.lock();
+        let conn = db.lock();
         // The dialog may have been open for a while: save only over what was confirmed.
-        let now_game = db::get_game(&conn, &game_id).map_err(err)?;
-        let now_launcher = launchers::get(&conn, &launcher_id).map_err(err)?;
+        let now_game = db::get_game(&conn, game_id).map_err(err)?;
+        let now_launcher = launchers::get(&conn, launcher_id).map_err(err)?;
         if now_game.as_ref() != Some(&game) || now_launcher.as_ref() != Some(&launcher) {
+            return Err("The game or the launcher changed in the meantime. Try again.".into());
+        }
+        // Without a dialog, the confirmation it relied on must still be there.
+        if candidate.is_some()
+            && !asked
+            && !launchers::is_confirmed(&conn, &launcher).map_err(err)?
+        {
             return Err("The game or the launcher changed in the meantime. Try again.".into());
         }
         let mut routes =
             launchers::assign(&launcher, &game, candidate.as_ref(), route_index).map_err(err)?;
+        let tx = conn.unchecked_transaction().map_err(err)?;
         if let Some((host, argv)) = &checked {
             // `assign` puts the new launcher route first. The host was worked out from this
             // launcher (unchanged, checked above) and that route's target.
@@ -778,16 +899,24 @@ pub async fn launchers_assign(
                 return Err("The game or the launcher changed in the meantime. Try again.".into());
             }
             added.launch_args = Some(serde_json::to_string(argv).map_err(err)?);
-            db::set_routes(&conn, &game_id, routes).map_err(err)?;
+            db::set_routes(&tx, game_id, routes).map_err(err)?;
             // Confirmed in the dialog above, together with the route.
-            crate::links::confirm_host_args(&conn, host, argv).map_err(err)?;
+            crate::links::confirm_host_args(&tx, host, argv).map_err(err)?;
         } else {
-            db::set_routes(&conn, &game_id, routes).map_err(err)?;
+            db::set_routes(&tx, game_id, routes).map_err(err)?;
         }
+        if asked {
+            // The dialog showed this launcher's program, arguments and working folder.
+            launchers::record_confirmed(&tx, &launcher).map_err(err)?;
+        }
+        tx.commit().map_err(err)?;
         db::all_games(&conn).map_err(err)?
     };
-    notify_library(&app, &state);
-    Ok(games)
+    Ok(Assigned {
+        games,
+        candidate,
+        asked,
+    })
 }
 
 /// Checks launch options text for an assignment without saving anything (the checks of
@@ -878,4 +1007,430 @@ pub async fn launchers_unassign(
     };
     notify_library(&app, &state);
     Ok(games)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::Db;
+    use crate::launchers::{AssignCandidate, CustomLauncher};
+    use crate::localscan::tests::TempDir;
+    use crate::types::{GamePatch, GameRoute};
+    use std::cell::Cell;
+    use std::path::Path;
+
+    fn launcher(id: &str, exe: &str, kinds: &[&str]) -> CustomLauncher {
+        launchers::validate(CustomLauncher {
+            id: id.into(),
+            name: id.to_uppercase(),
+            icon_kind: "builtin".into(),
+            icon_value: "rocket".into(),
+            color: "#4F8CFF".into(),
+            executable: exe.into(),
+            args_template: if exe.is_empty() {
+                String::new()
+            } else {
+                "--start {target}".into()
+            },
+            target_kind: kinds[0].into(),
+            target_kinds: kinds.iter().map(|k| k.to_string()).collect(),
+            working_dir: None,
+            sort_order: 0,
+            created_at: 1,
+            available: false,
+        })
+        .unwrap()
+    }
+
+    fn local_route(exe: &Path) -> GameRoute {
+        GameRoute {
+            source_id: "local".into(),
+            store: "Custom".into(),
+            app_id: Some(crate::localscan::key_of(exe)),
+            launch_target: exe.to_string_lossy().into_owned(),
+            install_path: exe.parent().map(|p| p.to_string_lossy().into_owned()),
+            installed: Some(true),
+            ..Default::default()
+        }
+    }
+
+    fn steam_route(install: Option<&Path>) -> GameRoute {
+        GameRoute {
+            source_id: "steam".into(),
+            store: "Steam".into(),
+            app_id: Some("400".into()),
+            launch_target: "steam://rungameid/400".into(),
+            install_path: install.map(|p| p.to_string_lossy().into_owned()),
+            installed: Some(true),
+            ..Default::default()
+        }
+    }
+
+    fn game(id: &str, routes: Vec<GameRoute>) -> Game {
+        Game {
+            id: id.into(),
+            title: "Hollow Knight".into(),
+            store: routes[0].store.clone(),
+            routes,
+            ..Default::default()
+        }
+    }
+
+    fn library(all: &[&CustomLauncher], games: &[&Game]) -> Db {
+        let db = Db::memory().unwrap();
+        {
+            let conn = db.lock();
+            for l in all {
+                launchers::save(&conn, l).unwrap();
+            }
+            for g in games {
+                db::save_game(&conn, &GamePatch::from(*g)).unwrap();
+            }
+        }
+        db
+    }
+
+    /// [`assign_game`] the way `launchers_link` calls it (only the game and the launcher), with
+    /// the dialog answered `answer`; returns the result and how often the dialog was shown.
+    async fn link(
+        db: &Db,
+        game_id: &str,
+        launcher_id: &str,
+        answer: bool,
+    ) -> (CmdResult<Assigned>, usize) {
+        let shown = Cell::new(0);
+        let result = assign_game(
+            db,
+            game_id,
+            launcher_id,
+            None,
+            None,
+            String::new(),
+            |prompt| {
+                assert!(prompt.starts_with("Game Lobby will run:"), "{prompt}");
+                shown.set(shown.get() + 1);
+                async move { answer }
+            },
+        )
+        .await;
+        (result, shown.get())
+    }
+
+    fn stored(db: &Db, id: &str) -> Game {
+        db::get_game(&db.lock(), id).unwrap().unwrap()
+    }
+
+    fn confirmations(db: &Db) -> i64 {
+        db.lock()
+            .query_row("SELECT COUNT(*) FROM launcher_confirmed", [], |r| r.get(0))
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_confirmed_launcher_links_in_one_click() {
+        let dir = TempDir::new("link-confirmed");
+        let exe = dir.file("Hub/Hub.exe");
+        let game_exe = dir.file("Games/hk/hk.exe");
+        let l = launcher("hub", &exe.to_string_lossy(), &["file"]);
+        let g = game("g", vec![steam_route(None), local_route(&game_exe)]);
+        let db = library(&[&l], &[&g]);
+        // Confirmed in the launcher's save dialog (what `launchers_save` records).
+        launchers::record_confirmed(&db.lock(), &l).unwrap();
+
+        let (result, shown) = link(&db, "g", "hub", false).await;
+        let assigned = result.unwrap();
+        assert_eq!(shown, 0, "no dialog");
+        assert!(!assigned.asked);
+        assert_eq!(
+            assigned.candidate,
+            Some(AssignCandidate {
+                route_index: 1,
+                kind: TargetKind::File,
+                target: game_exe.to_string_lossy().into_owned(),
+            })
+        );
+        let now = stored(&db, "g");
+        assert_eq!(now.routes.len(), 3);
+        assert_eq!(now.routes[0].source_id, "launcher:hub");
+        assert_eq!(now.routes[0].launch_target, game_exe.to_string_lossy());
+        assert_eq!(now.routes[0].assigned, Some(true));
+        assert_eq!(now.routes[0].launch_args, None);
+        assert_eq!(now.routes[1..], g.routes[..]);
+        // It runs exactly the confirmed command with the game's own file.
+        let launch = launchers::prepare_launch(&l, &now.routes[0]).unwrap();
+        assert_eq!(
+            launch.argv,
+            ["--start".to_string(), now.routes[0].launch_target.clone()]
+        );
+        // Without launch options, Play needs no other confirmation.
+        assert!(
+            crate::links::checked_stored_args(&db.lock(), &now.routes[0])
+                .unwrap()
+                .is_empty()
+        );
+
+        // Undo: unassign gives back exactly the game's own routes.
+        let routes = launchers::unassign(&now, "hub").unwrap();
+        assert_eq!(routes, g.routes);
+        db::set_routes(&db.lock(), "g", routes).unwrap();
+        assert_eq!(stored(&db, "g").routes, g.routes);
+        // Linking again is still one click.
+        let (result, shown) = link(&db, "g", "hub", false).await;
+        assert!(result.is_ok());
+        assert_eq!(shown, 0);
+        // Once linked, it can't be linked twice.
+        let (result, shown) = link(&db, "g", "hub", true).await;
+        assert!(result.err().unwrap().contains("already listed"));
+        assert_eq!(shown, 0);
+    }
+
+    #[tokio::test]
+    async fn an_unconfirmed_launcher_asks_once_then_links_in_one_click() {
+        let dir = TempDir::new("link-legacy");
+        let exe = dir.file("Hub/Hub.exe");
+        let a = game("a", vec![local_route(&dir.file("Games/a/a.exe"))]);
+        let b = game("b", vec![local_route(&dir.file("Games/b/b.exe"))]);
+        // Saved before confirmations were recorded (or in an older version): no row.
+        let l = launcher("hub", &exe.to_string_lossy(), &["file"]);
+        let db = library(&[&l], &[&a, &b]);
+        assert!(!launchers::is_confirmed(&db.lock(), &l).unwrap());
+
+        // Cancelled: nothing changes, nothing is remembered.
+        let (result, shown) = link(&db, "a", "hub", false).await;
+        assert!(result.err().unwrap().contains("was not added"));
+        assert_eq!(shown, 1);
+        assert_eq!(stored(&db, "a").routes, a.routes);
+        assert_eq!(confirmations(&db), 0);
+
+        // Confirmed: the route is added and the launcher's command remembered.
+        let (result, shown) = link(&db, "a", "hub", true).await;
+        assert!(result.unwrap().asked);
+        assert_eq!(shown, 1);
+        assert_eq!(stored(&db, "a").routes[0].source_id, "launcher:hub");
+        assert!(launchers::is_confirmed(&db.lock(), &l).unwrap());
+
+        // The next game links without a dialog.
+        let (result, shown) = link(&db, "b", "hub", false).await;
+        assert!(!result.unwrap().asked);
+        assert_eq!(shown, 0);
+        assert_eq!(stored(&db, "b").routes[0].source_id, "launcher:hub");
+    }
+
+    #[tokio::test]
+    async fn a_changed_or_restored_launcher_asks_again() {
+        let dir = TempDir::new("link-changed");
+        let exe = dir.file("Hub/Hub.exe");
+        let other_exe = dir.file("Other/Other.exe").to_string_lossy().into_owned();
+        let games_dir = dir.path().join("Games").to_string_lossy().into_owned();
+        let g = game("g", vec![local_route(&dir.file("Games/g/g.exe"))]);
+        let l = launcher("hub", &exe.to_string_lossy(), &["file", "folder"]);
+        let db = library(&[&l], &[&g]);
+        launchers::record_confirmed(&db.lock(), &l).unwrap();
+
+        // Any change to the command without its dialog (template, program, working folder,
+        // target kinds) needs a new confirmation.
+        let mut changes = Vec::new();
+        for i in 0..4 {
+            let mut changed = l.clone();
+            match i {
+                0 => changed.args_template = "--run {target}".into(),
+                1 => changed.executable = other_exe.clone(),
+                2 => changed.working_dir = Some(games_dir.clone()),
+                _ => changed.target_kinds = vec!["file".into()],
+            }
+            changes.push(launchers::validate(changed).unwrap());
+        }
+        for changed in &changes {
+            launchers::save(&db.lock(), changed).unwrap();
+            assert!(
+                !launchers::is_confirmed(&db.lock(), changed).unwrap(),
+                "{changed:?}"
+            );
+            let (result, shown) = link(&db, "g", "hub", false).await;
+            assert!(result.is_err());
+            assert_eq!(shown, 1, "{changed:?}");
+            assert_eq!(stored(&db, "g").routes, g.routes);
+            launchers::save(&db.lock(), &l).unwrap();
+        }
+        // Back to exactly what was confirmed. Name, icon and colour don't count.
+        let mut cosmetic = l.clone();
+        cosmetic.name = "Renamed".into();
+        cosmetic.color = "#123456".into();
+        launchers::save(&db.lock(), &cosmetic).unwrap();
+        assert!(launchers::is_confirmed(&db.lock(), &cosmetic).unwrap());
+
+        // A launcher restored from a backup (even with the same command) asks again: its command
+        // came from a file. The table itself is never in a backup.
+        let all = launchers::list(&db.lock()).unwrap();
+        let backup = crate::types::Backup {
+            games: db::all_games(&db.lock()).unwrap(),
+            settings: None,
+            emulators: None,
+            game_page_custom: None,
+            game_notes: None,
+            game_added: None,
+            play_sessions: None,
+            game_links: None,
+            launchers: Some(all),
+        };
+        let json = serde_json::to_value(&backup).unwrap();
+        let text = json.to_string();
+        assert!(
+            !text.contains("onfirmed") && !text.contains("exeKey") && !text.contains("cwdKey"),
+            "{text}"
+        );
+        let parsed = crate::validation::backup(&json).unwrap();
+        db::restore_backup(&mut db.lock(), &parsed).unwrap();
+        assert!(!launchers::is_confirmed(&db.lock(), &cosmetic).unwrap());
+        let (result, shown) = link(&db, "g", "hub", true).await;
+        assert!(result.unwrap().asked);
+        assert_eq!(shown, 1);
+        // A new library restored from that backup has no confirmations at all.
+        let fresh = Db::memory().unwrap();
+        db::restore_backup(&mut fresh.lock(), &parsed).unwrap();
+        assert_eq!(confirmations(&fresh), 0);
+
+        // Deleting the launcher, or taking its program away, forgets the confirmation.
+        assert_eq!(confirmations(&db), 1);
+        launchers::remove(&db.lock(), "hub", launchers::RemoveMode::KeepGames).unwrap();
+        assert_eq!(confirmations(&db), 0);
+        let label = launcher("hub", "", &["file"]);
+        launchers::record_confirmed(&db.lock(), &l).unwrap();
+        launchers::record_confirmed(&db.lock(), &label).unwrap();
+        assert_eq!(confirmations(&db), 0);
+        assert!(!launchers::is_confirmed(&db.lock(), &label).unwrap());
+    }
+
+    #[tokio::test]
+    async fn launch_options_are_always_confirmed() {
+        let dir = TempDir::new("link-options");
+        let exe = dir.file("Hub/Hub.exe");
+        let g = game("g", vec![local_route(&dir.file("Games/g/g.exe"))]);
+        let l = launcher("hub", &exe.to_string_lossy(), &["file"]);
+        let db = library(&[&l], &[&g]);
+        launchers::record_confirmed(&db.lock(), &l).unwrap();
+        let shown = Cell::new(0);
+        let result = assign_game(&db, "g", "hub", None, None, "-windowed".into(), |prompt| {
+            assert!(prompt.contains("-windowed"), "{prompt}");
+            shown.set(shown.get() + 1);
+            async { false }
+        })
+        .await;
+        assert!(result.is_err());
+        assert_eq!(
+            shown.get(),
+            1,
+            "options need the dialog even for a confirmed launcher"
+        );
+        assert_eq!(stored(&db, "g").routes, g.routes);
+    }
+
+    #[tokio::test]
+    async fn the_target_is_picked_by_route_then_kind() {
+        let dir = TempDir::new("link-pick");
+        let exe = dir.file("Hub/Hub.exe");
+        let exe = exe.to_string_lossy();
+        let install = dir.path().join("Steam/hk");
+        std::fs::create_dir_all(&install).unwrap();
+        let install_text = install.to_string_lossy().into_owned();
+        let game_exe = dir.file("Games/hk/hk.exe");
+        let game_text = game_exe.to_string_lossy().into_owned();
+        let all = launcher("all", &exe, &["file", "folder", "identifier"]);
+        let ids = launcher("ids", &exe, &["identifier"]);
+        let files = launcher("files", &exe, &["file"]);
+        // A Steam route (no file; an install folder that exists; a store id) and a local route,
+        // in both orders.
+        let steam_first = game(
+            "s",
+            vec![steam_route(Some(&install)), local_route(&game_exe)],
+        );
+        let local_first = game(
+            "l",
+            vec![local_route(&game_exe), steam_route(Some(&install))],
+        );
+        let db = library(&[&all, &ids, &files], &[&steam_first, &local_first]);
+        for l in [&all, &ids, &files] {
+            launchers::record_confirmed(&db.lock(), l).unwrap();
+        }
+        let pick = |a: CmdResult<Assigned>| {
+            let c = a.unwrap().candidate.unwrap();
+            (c.route_index, c.kind, c.target)
+        };
+        // The first route's own target wins; within it: file, then folder, then store id.
+        assert_eq!(
+            pick(link(&db, "s", "all", false).await.0),
+            (0, TargetKind::Folder, install_text.clone())
+        );
+        assert_eq!(
+            pick(link(&db, "l", "all", false).await.0),
+            (0, TargetKind::File, game_text.clone())
+        );
+        // Only the launcher's kinds. (Routes added by a link are never a source.)
+        assert_eq!(
+            pick(link(&db, "l", "ids", false).await.0),
+            (2, TargetKind::Identifier, "400".to_string())
+        );
+        assert_eq!(
+            pick(link(&db, "s", "files", false).await.0),
+            (2, TargetKind::File, game_text.clone())
+        );
+        // A file that no longer exists is skipped; with nothing left, the reason is given.
+        let gone = game("x", vec![local_route(&dir.path().join("gone/x.exe"))]);
+        db::save_game(&db.lock(), &GamePatch::from(&gone)).unwrap();
+        let (result, shown) = link(&db, "x", "files", true).await;
+        assert_eq!(
+            result.err().unwrap(),
+            launchers::no_candidate_reason(&files, &gone)
+        );
+        assert_eq!(shown, 0);
+    }
+
+    #[tokio::test]
+    async fn a_launcher_without_a_program_only_labels_without_a_dialog() {
+        let dir = TempDir::new("link-label");
+        let g = game("g", vec![local_route(&dir.file("Games/g/g.exe"))]);
+        let app = launcher("app", "", &["file"]);
+        let db = library(&[&app], &[&g]);
+        let (result, shown) = link(&db, "g", "app", false).await;
+        let assigned = result.unwrap();
+        assert_eq!(shown, 0);
+        assert_eq!(assigned.candidate, None);
+        let now = stored(&db, "g");
+        assert_eq!(now.routes.len(), 1);
+        assert_eq!(now.routes[0].launcher_id.as_deref(), Some("app"));
+        assert_eq!(now.routes[0].assigned, Some(true));
+        assert_eq!(confirmations(&db), 0);
+        assert_eq!(launchers::unassign(&now, "app").unwrap(), g.routes);
+    }
+
+    #[test]
+    fn the_one_click_command_takes_only_the_game_and_the_launcher() {
+        // The renderer can't name a target, a kind, a route or launch options for it.
+        let source = include_str!("launcher_commands.rs");
+        let start = source.find("pub async fn launchers_link(").unwrap();
+        let end = start + source[start..].find(") -> CmdResult<LinkedGame>").unwrap();
+        let params: Vec<&str> = source[start..end]
+            .lines()
+            .skip(1)
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .collect();
+        assert_eq!(
+            params,
+            [
+                "app: AppHandle,",
+                "window: WebviewWindow,",
+                "state: State<'_, AppState>,",
+                "game_id: String,",
+                "launcher_id: String,"
+            ]
+        );
+        // It passes no route, kind or launch options on.
+        let body =
+            source[end..end + source[end..].find("notify_library").unwrap()].replace("\r\n", "\n");
+        assert!(
+            body.contains("None,\n        None,\n        String::new(),"),
+            "{body}"
+        );
+    }
 }
