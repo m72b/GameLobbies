@@ -55,6 +55,8 @@ export interface Settings { scanIntervalHours: number; posterWidth: number; show
   trackingExcludedGameIds: string[]
   /** Check for a new release about 10 s after startup, at most once a day. Never installs without a click. Default true. */
   autoCheckUpdates: boolean
+  /** Minimize Game Lobby when a game is started from it. */
+  minimizeOnLaunch: boolean
   /** Stores that library scans skip (distinct `StoreId`s). Default []. */
   disabledStores: StoreId[] }
 /** Grid styles accepted by `Settings.steamGridDbStyles` (the backend rejects anything else). */

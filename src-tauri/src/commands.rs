@@ -13,7 +13,7 @@ use regex::Regex;
 use serde_json::{json, Map, Value};
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
-use tauri::{AppHandle, Emitter, State, WebviewWindow};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 use tauri_plugin_dialog::DialogExt;
 
 type CmdResult<T> = Result<T, String>;
@@ -117,6 +117,16 @@ pub async fn library_launch(
     launch_game(&app, &game, route as usize)
         .await
         .map_err(err)?;
+    let minimize = db::get_settings(&state.db.lock())
+        .map(|settings| settings.minimize_on_launch)
+        .unwrap_or(false);
+    if minimize {
+        if let Some(window) = app.get_webview_window(crate::windows::MAIN) {
+            if let Err(e) = window.minimize() {
+                log::warn!("Could not minimize after launching a game: {e}");
+            }
+        }
+    }
     Ok(true)
 }
 

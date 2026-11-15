@@ -244,7 +244,7 @@ export function SettingsApp() {
             </div>)}
             <div className="settings-actions"><button className="primary-button" onClick={() => void scanLibraries()}><Library size={15} /> Scan libraries</button></div>
           </div>
-          <div className="settings-card"><div className="toggle-row"><div><b>Show only installed games</b><small>Hide games that are not installed</small></div><input type="checkbox" checked={settings.showOnlyInstalled} onChange={event => void save({ showOnlyInstalled: event.target.checked })} /></div></div>
+          <div className="settings-card"><div className="toggle-row"><div><b>Show only installed games</b><small>Hide games that are not installed</small></div><input type="checkbox" checked={settings.showOnlyInstalled} onChange={event => void save({ showOnlyInstalled: event.target.checked })} /></div><div className="toggle-row"><div><b>Minimize when a game starts</b><small>Game Lobby moves to the taskbar after you press Play</small></div><input type="checkbox" checked={settings.minimizeOnLaunch} onChange={event => void save({ minimizeOnLaunch: event.target.checked })} /></div></div>
           <label className="setting-row">Scan interval<select value={settings.scanIntervalHours} onChange={event => void save({ scanIntervalHours: +event.target.value })}><option value={0}>Manual only</option><option value={6}>Every 6 hours</option><option value={12}>Every 12 hours</option><option value={24}>Daily</option></select></label>
         </>}
 

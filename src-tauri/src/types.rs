@@ -250,6 +250,9 @@ pub struct Settings {
     /// Store ids from [`STORE_SOURCES`] that library scans skip. Default: none.
     #[serde(default)]
     pub disabled_stores: Vec<String>,
+    /// Minimize Game Lobby when a game is started from it. Stored settings without it default to on.
+    #[serde(default = "default_true")]
+    pub minimize_on_launch: bool,
 }
 
 /// Grid styles accepted by the SteamGridDB API (`styles=` on `/grids`).
@@ -281,6 +284,7 @@ impl Default for Settings {
             tracking_excluded_game_ids: Vec::new(),
             auto_check_updates: true,
             disabled_stores: Vec::new(),
+            minimize_on_launch: true,
         }
     }
 }

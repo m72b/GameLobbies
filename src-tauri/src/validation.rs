@@ -81,6 +81,7 @@ const SETTINGS_KEYS: &[&str] = &[
     "trackingExcludedGameIds",
     "autoCheckUpdates",
     "disabledStores",
+    "minimizeOnLaunch",
 ];
 /// Settings keys of older versions that are dropped (not rejected) when a backup is imported.
 const RETIRED_SETTINGS_KEYS: &[&str] = &["steamId", "steamApiKey", "legendaryPath"];
@@ -538,6 +539,7 @@ pub fn settings_patch(value: &Value) -> Result<Map<String, Value>> {
         "steamGridDbHumor",
         "detectExternalLaunches",
         "autoCheckUpdates",
+        "minimizeOnLaunch",
     ] {
         bool_field(&map, key)?;
     }
@@ -1195,6 +1197,13 @@ mod tests {
                 ["detectExternalLaunches"],
             false
         );
+        assert_eq!(
+            settings_patch(&json!({ "minimizeOnLaunch": false })).unwrap()["minimizeOnLaunch"],
+            false
+        );
+        assert!(settings_patch(&json!({ "minimizeOnLaunch": "yes" })).is_err());
+        // Stored settings from before this option keep minimizing (the default is on).
+        assert!(crate::types::Settings::default().minimize_on_launch);
         for bad in [
             json!({ "showOnlyInstalled": 1 }),
             json!({ "steamGridDbAnimated": "true" }),
