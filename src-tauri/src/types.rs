@@ -436,6 +436,13 @@ pub struct Backup {
         skip_serializing_if = "Option::is_none"
     )]
     pub play_sessions: Option<Vec<crate::sessions::SessionBackup>>,
+    /// Custom launchers. Optional: older backups don't have it.
+    #[serde(
+        default,
+        rename = "customLaunchers",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub launchers: Option<Vec<crate::launchers::CustomLauncher>>,
 }
 
 /// One stored play session (`tracking_sessions`). `ended_at` is absent while it is in progress.

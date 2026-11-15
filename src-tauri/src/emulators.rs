@@ -363,6 +363,33 @@ pub fn accept_renderer_profile(
     Ok((incoming, used_pick))
 }
 
+/// Whether a renderer save adds a profile or changes what its launches run (executable or
+/// arguments). Such a save is confirmed by the user in a native dialog showing
+/// [`confirmation_prompt`]; other edits (name, systems, enabled) save directly.
+pub fn needs_confirmation(stored: Option<&EmulatorProfile>, next: &EmulatorProfile) -> bool {
+    stored.is_none_or(|s| s.executable != next.executable || s.args != next.args)
+}
+
+/// The native confirmation text: the profile's name, executable and exact argument list (one
+/// argument per line, with its placeholders; `{rom}` is added last when the template has none).
+pub fn confirmation_prompt(p: &EmulatorProfile) -> Result<String> {
+    let mut argv = crate::launch::tokenize_template(&p.args)?;
+    if !argv.iter().any(|a| a.contains("{rom}")) {
+        argv.push("{rom}".into());
+    }
+    let lines: Vec<String> = argv
+        .iter()
+        .enumerate()
+        .map(|(i, arg)| format!("  {}. {arg}", i + 1))
+        .collect();
+    Ok(format!(
+        "Save the emulator \"{}\"?\n\nProgram:\n  {}\n\nArguments (one per line; {{rom}} is the game file, {{romdir}} its folder, {{romname}} its name):\n{}\n\nGame Lobby runs exactly this whenever you play a game with this emulator. Save it only if you set it up yourself.",
+        p.name,
+        p.executable,
+        lines.join("\n")
+    ))
+}
+
 /// A new discovered profile with the catalog defaults.
 pub fn new_profile(path: &Path, known: &KnownEmulator) -> EmulatorProfile {
     EmulatorProfile {
@@ -890,6 +917,63 @@ mod tests {
         .unwrap();
         assert!(!all.truncated);
         assert_eq!(all.found.len(), 41);
+    }
+
+    #[test]
+    fn new_executables_and_arguments_are_confirmed_natively() {
+        let stored = profile("mgba", "manual", None, r"D:\Emu\mGBA\mGBA.exe");
+        assert!(needs_confirmation(None, &stored), "a new profile");
+        let mut same = stored.clone();
+        assert!(!needs_confirmation(Some(&stored), &same), "unchanged");
+        same.name = "mGBA (dev)".into();
+        same.enabled = false;
+        same.systems = vec!["gba".into()];
+        assert!(
+            !needs_confirmation(Some(&stored), &same),
+            "name, systems, enabled"
+        );
+        let mut args = stored.clone();
+        args.args = "-f {rom}".into();
+        assert!(needs_confirmation(Some(&stored), &args));
+        let mut exe = stored.clone();
+        exe.executable = r"D:\Emu\Other\x.exe".into();
+        assert!(needs_confirmation(Some(&stored), &exe));
+
+        let mut shown = stored.clone();
+        shown.args = r#"-L "cores\a b.dll" --fullscreen"#.into();
+        let text = confirmation_prompt(&shown).unwrap();
+        assert!(
+            text.contains("\"mgba\"") && text.contains(r"D:\Emu\mGBA\mGBA.exe"),
+            "{text}"
+        );
+        assert!(
+            text.contains("  1. -L\n  2. cores\\a b.dll\n  3. --fullscreen\n  4. {rom}"),
+            "{text}"
+        );
+        shown.args = "--path={rom}".into();
+        let text = confirmation_prompt(&shown).unwrap();
+        assert!(text.contains("  1. --path={rom}\n\n"), "{text}");
+        shown.args = "\"open".into();
+        assert!(confirmation_prompt(&shown).is_err());
+    }
+
+    #[test]
+    fn options_that_run_other_programs_are_refused_at_launch_too() {
+        let dir = TempDir::new("emu-debug-flags");
+        let exe = dir.file("mGBA/mGBA.exe");
+        let rom = dir.file("Roms/x.gba");
+        let mut p = with_status(profile("mgba", "manual", None, &exe.to_string_lossy()));
+        let route = crate::types::GameRoute {
+            source_id: "rom".into(),
+            store: "Emulator".into(),
+            launch_target: rom.to_string_lossy().into(),
+            system: Some("gba".into()),
+            ..Default::default()
+        };
+        assert!(crate::launch::prepare_emulator_launch(&p, &route).is_ok());
+        // A profile stored before the check (its template is never re-checked when unchanged).
+        p.args = "--gpu-launcher=calc.exe {rom}".into();
+        assert!(crate::launch::prepare_emulator_launch(&p, &route).is_err());
     }
 
     #[test]

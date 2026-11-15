@@ -71,6 +71,16 @@ const api: LobbyAPI = {
     unignore: path => call('emulators_unignore', { path }),
     browseExecutable: () => call('emulators_browse_executable')
   },
+  launchers: {
+    list: () => call('launchers_list'),
+    save: launcher => call('launchers_save', { launcher }),
+    remove: (id, mode) => call('launchers_remove', { id, mode }),
+    browseExecutable: () => call('launchers_browse_executable'),
+    browseFolder: () => call('launchers_browse_folder'),
+    chooseIcon: () => call('launchers_choose_icon'),
+    addGame: (launcherId, title, identifier) => call('launchers_add_game', { launcherId, title, identifier }),
+    onChanged: callback => subscribe('launchers:changed', () => callback())
+  },
   roots: {
     list: () => call('roots_list'),
     add: (kind, path) => call('roots_add', { kind, path }),

@@ -1,6 +1,6 @@
 import './lobby-api'
 import { useEffect, useState } from 'react'
-import { ArrowLeft, Blocks, ChevronRight, CircleHelp, Cloud, FolderSearch, Gamepad2, Keyboard, Library, ListChecks, Puzzle, RotateCcw, Settings2, SlidersHorizontal, Sparkles, Star } from 'lucide-react'
+import { ArrowLeft, Blocks, ChevronRight, CircleHelp, Cloud, FolderSearch, Gamepad2, Keyboard, Library, ListChecks, Puzzle, Rocket, RotateCcw, Settings2, SlidersHorizontal, Sparkles, Star } from 'lucide-react'
 import type { IgdbBulkProgress, IgdbCredentialStatus, Settings, SettingsSection, SteamGridDbStyle, StoreId, StoreStatus } from '../shared/types'
 import { steamGridDbStyles } from '../shared/types'
 import { defaultSettings } from '../shared/defaults'
@@ -8,6 +8,7 @@ import { applyTheme } from './theme'
 import { StoreIcon } from './store-icons'
 import { EmulatorsSection, LibraryFoldersSection, useLocalScan } from './library-settings'
 import { ReviewSection } from './review-panel'
+import { LaunchersSection } from './launcher-settings'
 import { UpdatesSection } from './updates-section'
 import { IgdbAttribution } from './igdb-details'
 import { IgdbSetup, cleanPaste } from './igdb-setup'
@@ -18,6 +19,7 @@ const sections = [
   ['Libraries', 'Stores and launchers Game Lobby detects on this PC, and how often it scans.', Library],
   ['Library folders', 'Choose game and emulator folders and scan them.', FolderSearch],
   ['Emulators', 'Manage emulator profiles and the systems they run.', Gamepad2],
+  ['Custom launchers', 'Your own launchers: name, icon, colour and how they start a game.', Rocket],
   ['Review', 'Decide on duplicates and games a scan could not place.', ListChecks],
   ['Appearance', 'Poster size and motion, cover art from SteamGridDB, and themes.', SlidersHorizontal],
   ['Startup and Behavior', 'Choose how the app opens and closes.', Settings2],
@@ -250,6 +252,7 @@ export function SettingsApp() {
 
         {section === 'Library folders' && <LibraryFoldersSection scan={localScan} onOpenReview={() => setSection('Review')} say={say} />}
         {section === 'Emulators' && <EmulatorsSection scan={localScan} say={say} />}
+        {section === 'Custom launchers' && <LaunchersSection say={say} />}
         {section === 'Review' && <ReviewSection say={say} />}
 
         {section === 'Appearance' && <>

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ArrowLeft, ChevronDown, FolderOpen, Heart, MoreHorizontal, Pencil, Play } from 'lucide-react'
-import { StoreIcon } from './store-icons'
+import { RouteIcon } from './launcher-icon'
 import { CustomizePanel, useLogoLayout } from './customize-page'
 import { coverUrl } from './lobby-api'
 import { defaultGamePageCustom } from '../shared/defaults'
@@ -8,13 +8,14 @@ import { coverLayerStyle, coverStyle } from './cover'
 import { CoverLayer, useCover } from './poster'
 import { GenreBlock, IgdbAbout, IgdbPicker, IgdbRatings, useIgdb } from './igdb-details'
 import { isEmulatorRoute, routeLabel, routeTitle } from '../shared/routes'
+import { launcherOfRoute } from '../shared/launchers'
 import { ImageWall, useScreenshots } from './image-wall'
 import { GameNotesSection, YourScore } from './game-notes'
 import { ControllerBadge, ControllerBlock, useGameInput } from './controller-info'
 import { SessionHistory } from './session-history'
 import { formatRange } from '../shared/sessions'
 import { elapsedSeconds, formatClock, formatDate, formatSession, formatTime, formatTotal, useNow } from './format'
-import type { EmulatorCatalog, EmulatorProfile, Game, GamePageArt, GameRoute, PlaySession, PlayStats, RunningGame, Settings } from '../shared/types'
+import type { CustomLauncher, EmulatorCatalog, EmulatorProfile, Game, GamePageArt, GameRoute, PlaySession, PlayStats, RunningGame, Settings } from '../shared/types'
 
 export interface GamePageActions {
   back(): void
@@ -32,7 +33,7 @@ export interface GamePageActions {
 
 const emptyArt: GamePageArt = { hero: [], logo: [], custom: defaultGamePageCustom }
 
-export function GamePage({ game, index, settings, running, libraryVersion, actions }: { game: Game; index: number; settings: Settings; running?: RunningGame; libraryVersion: number; actions: GamePageActions }) {
+export function GamePage({ game, index, settings, launchers, running, libraryVersion, actions }: { game: Game; index: number; settings: Settings; launchers: CustomLauncher[]; running?: RunningGame; libraryVersion: number; actions: GamePageActions }) {
   const [art, setArt] = useState<GamePageArt>(emptyArt)
   const [heroIdx, setHeroIdx] = useState(0)
   const [logoIdx, setLogoIdx] = useState(0)
@@ -92,6 +93,9 @@ export function GamePage({ game, index, settings, running, libraryVersion, actio
   const logoSrc = art.logo[logoIdx] ? coverUrl(art.logo[logoIdx]) : undefined
   const cover = useCover(game)
   const route = game.routes[routeIdx]
+  // A launcher route reads as its launcher (Custom once the launcher is deleted).
+  const label = (item: GameRoute) => launcherOfRoute(item, launchers)?.name ?? routeLabel(item, game.routes)
+  const labelTitle = (item: GameRoute) => { const launcher = launcherOfRoute(item, launchers); return launcher ? launcher.name + ' · ' + item.launchTarget : routeTitle(item, game.routes, systemLabel(item)) }
   const systemLabel = (item: GameRoute) => item.system ? catalog?.systems.find(system => system.id === item.system)?.name ?? item.system : undefined
   const launching = running?.state === 'launching'
   const isRunning = running?.state === 'running'
@@ -139,9 +143,9 @@ export function GamePage({ game, index, settings, running, libraryVersion, actio
       {game.routes.length > 0 && <label className="gp-route">
         <span className="gp-route-label">Play from</span>
         <span className="gp-route-select">
-          {route && <StoreIcon store={route.store} size={14} />}
+          {route && <RouteIcon route={route} launchers={launchers} size={14} />}
           <select value={routeIdx} onChange={event => setRouteIdx(Number(event.target.value))} aria-label="Play from">
-            {game.routes.map((item, i) => <option key={item.sourceId + '-' + i} value={i} title={routeTitle(item, game.routes, systemLabel(item))}>{routeLabel(item, game.routes)}{item.installed ? '' : ' (not installed)'}</option>)}
+            {game.routes.map((item, i) => <option key={item.sourceId + '-' + i} value={i} title={labelTitle(item)}>{label(item)}{item.installed ? '' : ' (not installed)'}</option>)}
           </select>
           <ChevronDown size={13} />
         </span>
@@ -207,8 +211,8 @@ export function GamePage({ game, index, settings, running, libraryVersion, actio
         <div className="gp-side-block"><div className="detail-label">STORES</div>
           {game.routes.length === 0 && <div className="muted-text">No launch routes</div>}
           {game.routes.map((item, i) => <div className="gp-route-row" key={item.sourceId + '-' + i}>
-            <span className="store-badge small"><StoreIcon store={item.store} /></span>
-            <span className="route-name"><span className="route-label" title={routeTitle(item, game.routes, systemLabel(item))}>{routeLabel(item, game.routes)}</span><small>{item.installed ? 'Installed' : item.owned ? 'Owned · not installed' : 'Launch route'}</small></span>
+            <span className="store-badge small"><RouteIcon route={item} launchers={launchers} /></span>
+            <span className="route-name"><span className="route-label" title={labelTitle(item)}>{label(item)}</span><small>{item.installed ? 'Installed' : item.owned ? 'Owned · not installed' : 'Launch route'}</small></span>
           </div>)}
           {game.routes.map((item, i) => {
             if (!isEmulatorRoute(item)) return null

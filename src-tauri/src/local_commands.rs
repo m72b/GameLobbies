@@ -194,18 +194,31 @@ pub async fn emulators_list(state: State<'_, AppState>) -> CmdResult<Vec<Emulato
 /// `launch::check_template` (see `emulators::accept_renderer_profile`).
 #[tauri::command]
 pub async fn emulators_save(
+    window: WebviewWindow,
     state: State<'_, AppState>,
     profile: Value,
 ) -> CmdResult<Vec<EmulatorProfile>> {
     let p = validation::emulator(&profile).map_err(err)?;
     launch::tokenize_template(&p.args).map_err(err)?;
     let has = |key: &str| profile.get(key).is_some_and(|v| !v.is_null());
-    let conn = state.db.lock();
-    let stored = db::emulator_profile(&conn, &p.id).map_err(err)?;
+    let stored = db::emulator_profile(&state.db.lock(), &p.id).map_err(err)?;
     let (mut p, used_pick) = emulators::accept_renderer_profile(stored.as_ref(), p, |path| {
         state.picks.find(PickKind::EmulatorExecutable, path)
     })
     .map_err(err)?;
+    // A new profile, or a new executable or arguments, is confirmed by the user in a native
+    // dialog showing exactly what will run: the renderer alone can't change it.
+    if emulators::needs_confirmation(stored.as_ref(), &p) {
+        let prompt = emulators::confirmation_prompt(&p).map_err(err)?;
+        if !confirm_natively(&window, "Confirm emulator", &prompt, "Save").await {
+            return Err("The emulator was not saved.".into());
+        }
+    }
+    let conn = state.db.lock();
+    // The dialog may have been open for a while: save only over what was confirmed.
+    if db::emulator_profile(&conn, &p.id).map_err(err)? != stored {
+        return Err("The emulator changed in the meantime. Open it again and save.".into());
+    }
     match stored {
         Some(stored) => {
             if !has("systems") {

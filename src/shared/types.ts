@@ -247,6 +247,31 @@ export interface RootsAPI { list(): Promise<LibraryRoot[]>; add(kind: LibraryRoo
  * - ignored() / unignore(path): executables of removed profiles.
  * - browseExecutable(): native .exe picker; the path (save() accepts it), or null when cancelled.
  */
+/** What a custom launcher's games use as their target. */
+export type LauncherTargetKind = 'file' | 'folder' | 'identifier'
+/**
+ * A custom launcher (output of `launchers.list`). Its games have a route with `sourceId`
+ * `launcher:<id>` and store `Custom`. `executable` and `workingDir` are shown, never sent back.
+ */
+export interface CustomLauncher { id: string; name: string; iconKind: 'builtin' | 'image'; /** A built-in icon name or an icon file name in the covers folder. */ iconValue: string; /** `#rrggbb`. */ color: string; executable: string; argsTemplate: string; targetKind: LauncherTargetKind; /** Absent = the executable's folder. */ workingDir?: string; sortOrder: number; createdAt: number; /** The executable exists right now. */ available: boolean }
+/**
+ * What `launchers.save` takes: never a path. `useExecutablePick` / `useFolderPick` use the file or
+ * folder just chosen with `browseExecutable` / `browseFolder` (for up to 10 minutes); otherwise the
+ * stored ones are kept. A new launcher needs an executable pick.
+ */
+export interface LauncherInput { id?: string; name: string; iconKind: 'builtin' | 'image'; iconValue: string; color: string; argsTemplate: string; targetKind: LauncherTargetKind; workingDir: 'executable' | 'folder'; useExecutablePick?: boolean; useFolderPick?: boolean }
+export interface AddedLauncherGame { gameId: string; games: Game[] }
+/**
+ * Custom launchers. Calls reject with a user-facing message on invalid input.
+ * - browseExecutable / browseFolder: native pickers; the chosen path (to show) or null.
+ * - chooseIcon: native image picker; copies the image into the app's data folder and returns its
+ *   file name (send it as `iconValue` with `iconKind: 'image'`), or null.
+ * - remove(id, mode): `keep` = the launcher's games stay without its route; `remove` = games that
+ *   only had its route are removed as well.
+ * - addGame(launcherId, title, identifier): file/folder launchers open a native picker (pass
+ *   `identifier: null`; null result = cancelled); identifier launchers take the typed identifier.
+ */
+export interface LaunchersAPI { list(): Promise<CustomLauncher[]>; save(launcher: LauncherInput): Promise<CustomLauncher[]>; remove(id: string, mode: 'keep' | 'remove'): Promise<CustomLauncher[]>; browseExecutable(): Promise<string | null>; browseFolder(): Promise<string | null>; chooseIcon(): Promise<string | null>; addGame(launcherId: string, title: string, identifier: string | null): Promise<AddedLauncherGame | null>; onChanged(callback: () => void): () => void }
 export interface EmulatorsAPI { list(): Promise<EmulatorProfile[]>; save(profile: EmulatorProfile): Promise<EmulatorProfile[]>; remove(id: string): Promise<EmulatorProfile[]>; scan(): Promise<LocalScanSummary>; catalog(): Promise<EmulatorCatalog>; ignored(): Promise<IgnoredPath[]>; unignore(path: string): Promise<IgnoredPath[]>; browseExecutable(): Promise<string | null> }
 /**
  * Scan review.
@@ -536,6 +561,7 @@ export interface LobbyAPI {
     onSection(callback: (section: SettingsSection) => void): () => void }
   theme: { load(url: string): Promise<Settings>; reset(): Promise<Settings> }
   emulators: EmulatorsAPI
+  launchers: LaunchersAPI
   roots: RootsAPI
   review: ReviewAPI
   health: HealthAPI

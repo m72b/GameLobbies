@@ -11,7 +11,7 @@ use crate::localscan::{classify_shortcut, ShortcutKind};
 use crate::platform::{on_thread, resolve, shell_open, spawn_detached, spawn_detached_in};
 use crate::state::AppState;
 use crate::types::{non_empty, now_ms, EmulatorProfile, Game, GameRoute};
-use crate::{db, emulators, local};
+use crate::{db, emulators, launchers, local};
 use anyhow::{anyhow, bail, Result};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -94,6 +94,11 @@ pub fn parse_launch_arguments(value: Option<&str>) -> Vec<String> {
 /// - Backslashes are always literal (Windows paths); there are no escapes.
 /// - An unterminated quote or more than [`MAX_TEMPLATE_TOKENS`] tokens is an error.
 pub fn tokenize_template(template: &str) -> Result<Vec<String>> {
+    tokenize_arguments(template, "emulator")
+}
+
+/// [`tokenize_template`] for any program's arguments; `noun` names the program in messages.
+pub(crate) fn tokenize_arguments(template: &str, noun: &str) -> Result<Vec<String>> {
     let mut tokens = Vec::new();
     let mut current = String::new();
     let mut in_token = false;
@@ -119,13 +124,13 @@ pub fn tokenize_template(template: &str) -> Result<Vec<String>> {
         }
     }
     if quote.is_some() {
-        bail!("The emulator arguments have an unclosed quote.");
+        bail!("The {noun} arguments have an unclosed quote.");
     }
     if in_token {
         tokens.push(current);
     }
     if tokens.len() > MAX_TEMPLATE_TOKENS {
-        bail!("The emulator arguments have too many parts (at most {MAX_TEMPLATE_TOKENS}).");
+        bail!("The {noun} arguments have too many parts (at most {MAX_TEMPLATE_TOKENS}).");
     }
     Ok(tokens)
 }
@@ -201,6 +206,46 @@ const PLACEHOLDERS: [&str; 3] = ["{rom}", "{romdir}", "{romname}"];
 /// them is almost certainly an attempt to run something else, so it is refused.
 const SHELL_CHARACTERS: [char; 7] = ['&', '|', '<', '>', '^', '%', '`'];
 
+/// Option names (without their `--`, `-` or `/`, lower case) that make a Chromium/Electron or
+/// Node based program (Heroic, Playnite add-ons, many launchers) run another program, load code
+/// or accept remote control. A name that starts with one of these is refused, as is any
+/// `*cmd-prefix` option. No emulator in the catalog needs them.
+const DEBUGGING_OPTIONS: [&str; 9] = [
+    "inspect",
+    "remote-debugging",
+    "gpu-launcher",
+    "no-sandbox",
+    "load-extension",
+    "disable-web-security",
+    "renderer-cmd-prefix",
+    "js-flags",
+    "browser-subprocess-path",
+];
+
+/// The refused option `piece` names (see [`DEBUGGING_OPTIONS`]), compared case-insensitively;
+/// Chromium reads `--x`, `-x` and `/x` alike on Windows.
+/// Refuses a template that uses one of the [`DEBUGGING_OPTIONS`] (also checked right before
+/// an emulator launch, so a profile saved before this check can't use them either).
+pub(crate) fn check_no_debugging_options(template: &str, noun: &str) -> Result<()> {
+    for token in tokenize_arguments(template, noun)? {
+        if let Some(option) = token.split('=').find_map(debugging_option) {
+            bail!("The {noun} argument \"{token}\" is not allowed: {option} options can run other programs or open the {noun} to remote control.");
+        }
+    }
+    Ok(())
+}
+
+fn debugging_option(piece: &str) -> Option<String> {
+    let lower = piece.trim().to_ascii_lowercase();
+    let name = lower
+        .strip_prefix("--")
+        .or_else(|| lower.strip_prefix('-'))
+        .or_else(|| lower.strip_prefix('/'))?;
+    let refused =
+        DEBUGGING_OPTIONS.iter().any(|o| name.starts_with(o)) || name.contains("cmd-prefix");
+    refused.then(|| format!("--{name}"))
+}
+
 /// Checks an emulator argument template that the renderer sent (`emulators_save`), on top of
 /// what [`build_emulator_argv`] already guarantees at launch (no shell, the ROM path is always
 /// exactly one argument).
@@ -224,13 +269,31 @@ const SHELL_CHARACTERS: [char; 7] = ['&', '|', '<', '>', '^', '%', '`'];
 /// (look-alikes of `\ / : " .`) are refused. A template without `{rom}` stays valid:
 /// the ROM path is then appended as the last argument.
 pub fn check_template(template: &str, executable: &str) -> Result<()> {
+    check_arguments(
+        template,
+        executable,
+        &PLACEHOLDERS,
+        "emulator",
+        r"cores\snes9x_libretro.dll",
+    )
+}
+
+/// [`check_template`]'s rules for any program Game Lobby starts with an argument template
+/// (emulators, custom launchers): `placeholders` are the template's own placeholders (a piece
+/// starting with one is about the launched file; one glued to an option is refused), `noun`
+/// names the program in messages and `example` is a path inside its folder.
+pub(crate) fn check_arguments(
+    template: &str,
+    executable: &str,
+    placeholders: &[&str],
+    noun: &str,
+    example: &str,
+) -> Result<()> {
     if template.chars().any(char::is_control) {
-        bail!(
-            "The emulator arguments can't contain tabs, line breaks or other control characters."
-        );
+        bail!("The {noun} arguments can't contain tabs, line breaks or other control characters.");
     }
     if let Some(c) = template.chars().find(|c| SHELL_CHARACTERS.contains(c)) {
-        bail!("The emulator arguments can't contain \"{c}\". Arguments are passed to the emulator directly, without a command prompt.");
+        bail!("The {noun} arguments can't contain \"{c}\". Arguments are passed to the {noun} directly, without a command prompt.");
     }
     // Emulators with an ANSI command line get the arguments "best-fit" converted: look-alikes
     // such as U+FF3C (fullwidth \), U+2215 (division slash) or U+FF1A (fullwidth :) turn into
@@ -241,33 +304,39 @@ pub fn check_template(template: &str, executable: &str) -> Result<()> {
         .find(|c| !(c.is_ascii_graphic() || *c == ' ' || c.is_alphanumeric()))
     {
         bail!(
-            "The emulator arguments can't contain \"{c}\" (U+{:04X}). Use plain ASCII punctuation.",
+            "The {noun} arguments can't contain \"{c}\" (U+{:04X}). Use plain ASCII punctuation.",
             c as u32
         );
     }
     let folder = Path::new(executable)
         .parent()
         .and_then(|p| crate::tracker::normalize_path(&p.to_string_lossy()))
-        .ok_or_else(|| anyhow!("The emulator executable must be a full path to an .exe file."))?;
-    for token in tokenize_template(template)? {
+        .ok_or_else(|| anyhow!("The {noun} executable must be a full path to an .exe file."))?;
+    check_no_debugging_options(template, noun)?;
+    for token in tokenize_arguments(template, noun)? {
         for piece in token.split('=') {
-            check_template_piece(piece, &folder).map_err(|reason| {
-                anyhow!("The emulator argument \"{token}\" is not allowed: {reason} Paths in the arguments must be inside the emulator's folder, like cores\\snes9x_libretro.dll.")
+            check_template_piece(piece, &folder, placeholders, noun).map_err(|reason| {
+                anyhow!("The {noun} argument \"{token}\" is not allowed: {reason} Paths in the arguments must be inside the {noun}'s folder, like {example}.")
             })?;
         }
     }
     Ok(())
 }
 
-fn check_template_piece(piece: &str, folder: &str) -> Result<(), &'static str> {
+fn check_template_piece(
+    piece: &str,
+    folder: &str,
+    placeholders: &[&str],
+    noun: &str,
+) -> Result<(), String> {
     let is_separator = |c: char| c == '\\' || c == '/';
     let climbs = || piece.split(is_separator).any(|s| s.trim_end() == "..");
     if piece.is_empty() {
         return Ok(());
     }
-    if PLACEHOLDERS.iter().any(|p| piece.starts_with(p)) {
+    if placeholders.iter().any(|p| piece.starts_with(p)) {
         return if climbs() {
-            Err("it leaves the game's folder with \"..\".")
+            Err("it leaves the game's folder with \"..\".".into())
         } else {
             Ok(())
         };
@@ -281,11 +350,14 @@ fn check_template_piece(piece: &str, folder: &str) -> Result<(), &'static str> {
     // file to an option that loads code (`-L {rom}` as separate arguments, or a code-loading
     // `--key={rom}`) would run that file as code. Such templates must be written by hand in
     // Settings, and the game file itself comes from a scan or a native picker.
-    if piece.starts_with(['-', '/', '@']) && PLACEHOLDERS.iter().any(|p| piece.contains(p)) {
-        return Err("it glues the game file to an option (\"-L{rom}\") or to \"@\".");
+    if piece.starts_with(['-', '/', '@']) && placeholders.iter().any(|p| piece.contains(p)) {
+        return Err(format!(
+            "it glues the game file to an option (\"-L{}\") or to \"@\".",
+            placeholders[0]
+        ));
     }
     if piece.contains(r"\\") || piece.contains("//") {
-        return Err("it names a network location.");
+        return Err("it names a network location.".into());
     }
     if piece.contains(':') {
         let bytes = piece.as_bytes();
@@ -295,11 +367,11 @@ fn check_template_piece(piece: &str, folder: &str) -> Result<(), &'static str> {
             && is_separator(bytes[2] as char)
             && !piece[2..].contains(':');
         if !absolute {
-            return Err("it has a \":\" that isn't part of a full path.");
+            return Err("it has a \":\" that isn't part of a full path.".into());
         }
         return match crate::tracker::normalize_path(piece) {
             Some(key) if !climbs() && crate::tracker::is_within(folder, &key) => Ok(()),
-            _ => Err("it points outside the emulator's folder."),
+            _ => Err(format!("it points outside the {noun}'s folder.")),
         };
     }
     if !piece.contains(is_separator) {
@@ -315,10 +387,10 @@ fn check_template_piece(piece: &str, folder: &str) -> Result<(), &'static str> {
     }
     let first = piece.chars().next().unwrap_or(' ');
     if !(first.is_alphanumeric() || first == '_' || first == '.') {
-        return Err("it is not a path inside the emulator's folder.");
+        return Err(format!("it is not a path inside the {noun}'s folder."));
     }
     if climbs() {
-        return Err("it leaves the emulator's folder with \"..\".");
+        return Err(format!("it leaves the {noun}'s folder with \"..\"."));
     }
     Ok(())
 }
@@ -384,6 +456,7 @@ pub fn prepare_emulator_launch(
     if !rom.exists() {
         bail!("The game file was not found: {}", route.launch_target);
     }
+    check_no_debugging_options(&profile.args, "emulator")?;
     let argv = build_emulator_argv(&profile.args, rom)?;
     let cwd = exe
         .parent()
@@ -486,12 +559,37 @@ async fn launch_local_exe(path: &Path) -> Result<()> {
     }
 }
 
+/// Hands a process Game Lobby started for `game_id` to the tracker (the session lasts while
+/// that process runs), or only marks the game played when it can't be tracked.
+fn track_started_process(state: &AppState, game_id: &str, pid: u32, exe: &Path) -> Result<()> {
+    let settings = db::get_settings(&state.db.lock())?;
+    let watching = state
+        .tracker
+        .watch_process(game_id, pid, &exe.to_string_lossy(), &settings);
+    if !watching {
+        db::mark_game_played(&state.db.lock(), game_id, now_ms())?;
+    }
+    Ok(())
+}
+
 pub async fn launch_game(app: &AppHandle, game: &Game, route_index: usize) -> Result<()> {
     let route = game
         .routes
         .get(route_index)
         .ok_or_else(|| anyhow!("No launch route is configured."))?;
     let state = app.state::<AppState>();
+    // Custom launchers: only the launcher's own .exe, started directly (never through a shell
+    // or a link), with the checked argv of `launchers::prepare_launch`.
+    if let Some(launcher_id) = launchers::launcher_id_of(route) {
+        let launcher = launchers::get(&state.db.lock(), launcher_id)?.ok_or_else(|| {
+            anyhow!("This game's launcher was deleted. Add the game again to another launcher.")
+        })?;
+        // Touches the filesystem: the database lock is already released.
+        let launch = launchers::prepare_launch(&launcher, route)?;
+        let pid = spawn_detached_in(&launch.program, &launch.argv, Some(&launch.cwd))
+            .map_err(|e| anyhow!("Could not start {}: {e}", launch.program.display()))?;
+        return track_started_process(&state, &game.id, pid, &launch.program);
+    }
     if is_rom_route(route) {
         let (exe, argv, cwd) = {
             let raw = db::emulator_profiles(&state.db.lock())?;
@@ -502,15 +600,7 @@ pub async fn launch_game(app: &AppHandle, game: &Game, route_index: usize) -> Re
         };
         let pid = spawn_detached_in(&exe, &argv, Some(&cwd))
             .map_err(|e| anyhow!("Could not start {}: {e}", exe.display()))?;
-        let settings = db::get_settings(&state.db.lock())?;
-        let watching =
-            state
-                .tracker
-                .watch_process(&game.id, pid, &exe.to_string_lossy(), &settings);
-        if !watching {
-            db::mark_game_played(&state.db.lock(), &game.id, now_ms())?;
-        }
-        return Ok(());
+        return track_started_process(&state, &game.id, pid, &exe);
     }
     let target = route.launch_target.as_str();
     if route.source_id == local::LOCAL_SOURCE {
@@ -556,7 +646,7 @@ pub async fn launch_game(app: &AppHandle, game: &Game, route_index: usize) -> Re
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::localscan::tests::TempDir;
 
@@ -722,6 +812,84 @@ mod tests {
             build_emulator_argv("", path).unwrap(),
             [path.to_string_lossy()]
         );
+    }
+
+    /// Options that make Chromium/Electron/Node programs run other code; refused in every
+    /// template (emulators and custom launchers alike).
+    pub(crate) const DEBUGGING_TEMPLATES: [&str; 24] = [
+        "--gpu-launcher=calc.exe {rom}",
+        "--gpu-launcher calc.exe",
+        "\"--utility-cmd-prefix=cmd /c calc\" {rom}",
+        "--renderer-cmd-prefix=calc",
+        "--plugin-cmd-prefix=x",
+        "--inspect {rom}",
+        "--inspect=9229",
+        "--inspect-brk=0.0.0.0:9229",
+        "--INSPECT",
+        "-inspect",
+        "/inspect",
+        "--remote-debugging-port=9222",
+        "--remote-debugging-pipe",
+        "--Remote-Debugging-Address=0.0.0.0",
+        "--no-sandbox {rom}",
+        "--load-extension=ext",
+        "--disable-web-security",
+        "--js-flags=--allow-natives-syntax",
+        "--browser-subprocess-path=calc.exe",
+        "--x=--inspect",
+        "'--gpu-launcher=calc'",
+        "--NO-SANDBOX",
+        "--js-flags",
+        "-remote-debugging-port=1",
+    ];
+
+    #[test]
+    fn options_that_run_other_programs_are_refused() {
+        let exe = r"D:\Emulators\RetroArch\retroarch.exe";
+        for bad in DEBUGGING_TEMPLATES {
+            let e = check_template(bad, exe).unwrap_err().to_string();
+            assert!(e.contains("not allowed"), "{bad}: {e}");
+        }
+        for known in crate::catalog::EMULATORS {
+            assert!(
+                debugging_option(known.default_args).is_none(),
+                "{}",
+                known.id
+            );
+            for token in tokenize_template(known.default_args).unwrap() {
+                assert!(
+                    token.split('=').find_map(debugging_option).is_none(),
+                    "{}",
+                    known.id
+                );
+            }
+        }
+        for good in [
+            "--fullscreen",
+            "--no-gui",
+            "--sandboxed",
+            "/f",
+            "-batch",
+            "{rom}",
+        ] {
+            assert!(debugging_option(good).is_none(), "{good}");
+            assert!(check_template(good, exe).is_ok(), "{good}");
+        }
+    }
+
+    #[test]
+    fn tokenizer_messages_name_the_program() {
+        let e = tokenize_arguments("\"x", "launcher")
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("launcher") && !e.contains("emulator"), "{e}");
+        let e = tokenize_template("\"x").unwrap_err().to_string();
+        assert!(e.contains("emulator"), "{e}");
+        let many = "a ".repeat(MAX_TEMPLATE_TOKENS + 1);
+        assert!(tokenize_arguments(&many, "launcher")
+            .unwrap_err()
+            .to_string()
+            .contains("launcher"));
     }
 
     #[test]
