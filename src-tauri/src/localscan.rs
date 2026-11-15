@@ -1897,13 +1897,21 @@ pub(crate) mod tests {
         };
         let capped = scan_games(dir.path(), &inputs, &mut |_, _| {}).unwrap();
         assert!(capped.truncated, "the cap holds");
-        assert!(capped.visited <= 100 + 10, "stopped near the cap: {}", capped.visited);
+        assert!(
+            capped.visited <= 100 + 10,
+            "stopped near the cap: {}",
+            capped.visited
+        );
         assert!(capped.pcs.len() < 40, "{}", capped.pcs.len());
         inputs.limits.max_entries = 10_000;
         let full = scan_games(dir.path(), &inputs, &mut |_, _| {}).unwrap();
         assert!(!full.truncated);
         assert_eq!(full.pcs.len(), 40);
-        assert!(full.visited >= 40 + 40 * 5, "classification is counted: {}", full.visited);
+        assert!(
+            full.visited >= 40 + 40 * 5,
+            "classification is counted: {}",
+            full.visited
+        );
     }
 
     #[test]
