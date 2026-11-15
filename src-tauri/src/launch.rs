@@ -682,8 +682,13 @@ pub async fn launch_game(
         on_thread(move || check_launcher_shortcut(&target, &confirmations)).await??;
         // Touches the filesystem: the database lock is already released.
         let launch = launchers::prepare_launch(&launcher, route)?;
-        // A launcher that isn't open yet is started on its own (no game arguments, nothing
-        // tracked); the game waits for the user's Continue, which only names this pending id.
+        // The route's own launch options (set on the game page) run only when the user confirmed
+        // exactly this program, command line and working folder. Checked before the launcher is
+        // started on its own too, so a launch that would be refused doesn't open it first.
+        let argv = crate::links::launcher_launch_argv(&state.db.lock(), &launcher, route, &launch)?;
+        // A launcher that isn't open yet is started on its own (no game arguments and no launch
+        // options, nothing tracked); the game waits for the user's Continue, which only names
+        // this pending id and runs `launch_game` again, with every check again.
         if wait == LauncherWait::IfNotRunning && !launcher_program_running(&launch.program).await {
             spawn_detached_in(&launch.program, &[], Some(&launch.cwd))
                 .map_err(|e| anyhow!("Could not start {}: {e}", launch.program.display()))?;
@@ -702,7 +707,7 @@ pub async fn launch_game(
                 launcher_name: launcher.name,
             });
         }
-        let pid = spawn_detached_in(&launch.program, &launch.argv, Some(&launch.cwd))
+        let pid = spawn_detached_in(&launch.program, &argv, Some(&launch.cwd))
             .map_err(|e| anyhow!("Could not start {}: {e}", launch.program.display()))?;
         track_started_process(&state, &game.id, pid, &launch.program)?;
         return Ok(LaunchOutcome::Started);

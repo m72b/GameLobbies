@@ -165,14 +165,10 @@ pub async fn library_launch_continue(
             pending.launcher_name
         ));
     }
-    // What a launcher route runs is its launcher and target (both checked again by
-    // `launch_game`); its install state may change meanwhile.
-    let index = game
-        .routes
-        .iter()
-        .position(|r| {
-            r.source_id == pending.route.source_id && r.launch_target == pending.route.launch_target
-        })
+    // What a launcher route runs is its launcher, target and launch options (all checked again
+    // by `launch_game`, options against their confirmation); its install state may change
+    // meanwhile.
+    let index = crate::pending_launch::route_index(&game, &pending.route)
         .ok_or("This game's launch settings changed since you pressed Play. Press Play again.")?;
     let outcome = launch_game(&app, &game, index, LauncherWait::Never)
         .await

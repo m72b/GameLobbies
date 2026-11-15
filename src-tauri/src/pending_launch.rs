@@ -11,7 +11,7 @@
 //! Like native picks (`picks`), a pending launch is one-shot (taken by the first Continue),
 //! short-lived ([`PENDING_LIFETIME`]), and there is at most one per game (a new one replaces it).
 
-use crate::types::GameRoute;
+use crate::types::{Game, GameRoute};
 use anyhow::{bail, Result};
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -119,6 +119,18 @@ fn alive(e: &Entry, now: Instant) -> bool {
     now.saturating_duration_since(e.at) < PENDING_LIFETIME
 }
 
+/// Where the route a pending launch checked is in `game` now: the same launcher, target and
+/// launch options (its install state may change meanwhile). `None` when it changed: Continue
+/// then refuses instead of launching something else (`launch_game` checks everything again
+/// anyway, launch options against their confirmation).
+pub fn route_index(game: &Game, checked: &GameRoute) -> Option<usize> {
+    game.routes.iter().position(|r| {
+        r.source_id == checked.source_id
+            && r.launch_target == checked.launch_target
+            && r.launch_args == checked.launch_args
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -136,6 +148,42 @@ mod tests {
                 ..Default::default()
             },
         }
+    }
+
+    #[test]
+    fn continue_finds_only_the_route_that_was_checked() {
+        let checked = pending("a").route;
+        let with = |args: Option<&str>, installed: Option<bool>| GameRoute {
+            launch_args: args.map(str::to_owned),
+            installed,
+            ..checked.clone()
+        };
+        let game = |routes: Vec<GameRoute>| Game {
+            id: "a".into(),
+            routes,
+            ..Default::default()
+        };
+        let other = GameRoute {
+            source_id: "steam".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            route_index(&game(vec![other.clone(), with(None, Some(true))]), &checked),
+            Some(1),
+            "install state may change"
+        );
+        // Launch options changed (or were added) since Play: not the route that was checked.
+        assert_eq!(
+            route_index(&game(vec![with(Some(r#"["-x"]"#), None)]), &checked),
+            None
+        );
+        let with_args = with(Some(r#"["-x"]"#), None);
+        assert_eq!(
+            route_index(&game(vec![with(Some(r#"["-y"]"#), None)]), &with_args),
+            None
+        );
+        assert_eq!(route_index(&game(vec![with(None, None)]), &with_args), None);
+        assert_eq!(route_index(&game(vec![other]), &checked), None);
     }
 
     #[test]

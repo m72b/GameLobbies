@@ -202,10 +202,11 @@ pub async fn library_route_rename(
 }
 
 /// Sets the launch options of one route from the text the user typed (empty removes them).
-/// Only routes whose `.exe` Game Lobby starts directly take options (`links::args_exe`); the
-/// text gets the checks of every program started with arguments, the exact program and argv
-/// are shown in a native dialog, and the options are saved only when the user confirms and the
-/// game is still exactly as it was when the dialog opened.
+/// Routes whose `.exe` Game Lobby starts directly and routes of a custom launcher with a program
+/// take options (`links::args_host`); the text gets the checks of every program started with
+/// arguments, the exact program, whole argv and working folder are shown in a native dialog,
+/// and the options are saved (and their confirmation recorded) only when the user confirms and
+/// the game and its launcher are still exactly as they were when the dialog opened.
 #[tauri::command]
 pub async fn library_route_args(
     app: AppHandle,
@@ -223,42 +224,63 @@ pub async fn library_route_args(
             links::MAX_ARGS_CHARS
         ));
     }
-    let game = db::get_game(&state.db.lock(), &game_id)
-        .map_err(err)?
-        .ok_or("Game not found.")?;
-    let stored = route.find(&game).map_err(err)?.clone();
-    let argv = links::prepare_args(&stored, &args).map_err(err)?;
+    let (game, stored, checked) = {
+        let conn = state.db.lock();
+        let game = db::get_game(&conn, &game_id)
+            .map_err(err)?
+            .ok_or("Game not found.")?;
+        let stored = route.find(&game).map_err(err)?.clone();
+        // Clearing a launcher route's options runs nothing new, so it works even when its
+        // launcher no longer takes options (deleted, or a backup's options on a launcher
+        // without a program).
+        let clearing = args.trim().is_empty() && crate::launchers::is_launcher_route(&stored);
+        let checked = if clearing {
+            None
+        } else {
+            Some(links::prepare_route_args(&conn, &stored, &args).map_err(err)?)
+        };
+        (game, stored, checked)
+    };
+    let argv = checked.as_ref().and_then(|(_, argv)| argv.clone());
     let current = crate::launch::parse_launch_arguments(stored.launch_args.as_deref());
     if argv.as_deref().unwrap_or_default() == current.as_slice() {
         let conn = state.db.lock();
         // The same options again: nothing to do once they were confirmed for this program;
         // options that never were (a backup, an older version) are confirmed now.
-        let confirmed = match &argv {
-            Some(argv) => links::args_confirmed(&conn, &stored, argv).map_err(err)?,
-            None => true,
+        let confirmed = match (&checked, &argv) {
+            (Some((host, _)), Some(argv)) => {
+                links::host_confirmed(&conn, host, argv).map_err(err)?
+            }
+            _ => true,
         };
         if confirmed {
             return db::all_games(&conn).map_err(err);
         }
     }
     // Removing options runs nothing new; new options are confirmed first.
-    if let Some(argv) = &argv {
-        let prompt = links::args_prompt(&game.title, &stored, argv).map_err(err)?;
+    if let (Some((host, _)), Some(argv)) = (&checked, &argv) {
+        let prompt = links::route_args_prompt(host, &game.title, &stored, argv);
         if !confirm_natively(&window, "Confirm launch options", &prompt, "Save").await {
             return Err("The launch options were not saved.".into());
         }
     }
     let games = {
         let conn = state.db.lock();
-        // The dialog may have been open for a while: save only over what was confirmed.
+        // The dialog may have been open for a while: save only over what was confirmed (the
+        // game, and the launcher's program, arguments and working folder).
         if db::get_game(&conn, &game_id).map_err(err)?.as_ref() != Some(&game) {
             return Err("The game changed in the meantime. Try again.".into());
         }
+        if let (Some((host, _)), Some(_)) = (&checked, &argv) {
+            if links::args_host(&conn, &stored).ok().as_ref() != Some(host) {
+                return Err("The game's launcher changed in the meantime. Try again.".into());
+            }
+        }
         links::set_args(&conn, &game_id, &route, argv.as_deref()).map_err(err)?;
-        if let Some(argv) = &argv {
-            // The only place a confirmation is written: these options, this program, after
-            // the dialog and the check that nothing changed meanwhile.
-            links::confirm_args(&conn, &stored, argv).map_err(err)?;
+        if let (Some((host, _)), Some(argv)) = (&checked, &argv) {
+            // The only place (with `launchers_assign`) a confirmation is written: these
+            // options, this host, after the dialog and the check that nothing changed meanwhile.
+            links::confirm_host_args(&conn, host, argv).map_err(err)?;
         }
         db::all_games(&conn).map_err(err)?
     };
@@ -267,7 +289,8 @@ pub async fn library_route_args(
 }
 
 /// Whether the launch options stored on `route` need confirming on the game page before they
-/// run (they came from a backup or an older version, or the route's program changed).
+/// run (they came from a backup or an older version, or the route's program, its launcher's
+/// command line or working folder changed).
 #[tauri::command]
 pub async fn library_route_args_pending(
     state: State<'_, AppState>,

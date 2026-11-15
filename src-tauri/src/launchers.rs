@@ -40,9 +40,13 @@
 //!   `launcher:<id>` route (shown in a native confirmation first, checked like any launch); a
 //!   label-only launcher only labels a route. Both are marked [`GameRoute::assigned`], kept by
 //!   scans, and removed exactly by [`unassign`].
+//! - Launch options: a launcher route can have its own options (`links::launcher_host`), added
+//!   after this argv, with the template's path rules for the launcher's folder and a native
+//!   confirmation of the whole command line (on the game page, or in the same dialog as an
+//!   assignment, [`assign_prompt`]).
 //! - Launching: when the launcher's program isn't running ([`program_running`], by exact
-//!   path), it is started alone first and the launch waits for the user (see
-//!   `pending_launch`).
+//!   path), it is started alone first (no arguments, no launch options) and the launch waits for
+//!   the user (see `pending_launch`).
 
 use crate::db;
 use crate::emulators::{drive_path_ok, executable_path_ok};
@@ -1046,15 +1050,19 @@ pub fn unassign(game: &Game, launcher_id: &str) -> Option<Vec<GameRoute>> {
     changed.then_some(routes)
 }
 
-/// The native confirmation text for an assignment that adds a launcher route: the game, the
-/// launcher's program, the exact argument list with this game's target, and the working folder.
-pub fn assign_prompt(l: &CustomLauncher, game_title: &str, c: &AssignCandidate) -> Result<String> {
-    let argv = build_argv(&l.args_template, &c.target)?;
-    let lines: Vec<String> = argv
-        .iter()
-        .enumerate()
-        .map(|(i, arg)| format!("  {}. {arg}", i + 1))
-        .collect();
+/// The native confirmation text for an assignment that adds a launcher route: the launcher's
+/// program, the exact argument list with this game's target and the route's launch options
+/// (`options`, already checked by `links::prepare_options`; may be empty), and the working
+/// folder. One dialog covers both the route and its options.
+pub fn assign_prompt(
+    l: &CustomLauncher,
+    game_title: &str,
+    c: &AssignCandidate,
+    options: &[String],
+) -> Result<String> {
+    let mut argv = build_argv(&l.args_template, &c.target)?;
+    let base = argv.len();
+    argv.extend(options.iter().cloned());
     let folder = match &l.working_dir {
         Some(dir) => dir.clone(),
         None => Path::new(&l.executable)
@@ -1070,11 +1078,20 @@ pub fn assign_prompt(l: &CustomLauncher, game_title: &str, c: &AssignCandidate) 
     // Facts first: names and titles are user-editable text, so they come last, sanitised.
     let name = crate::validation::display_text(&l.name, 80);
     let title = crate::validation::display_text(game_title, 80);
+    let note = if options.is_empty() {
+        String::new()
+    } else {
+        format!(
+            " {}",
+            crate::links::options_note(base, options.len(), &name)
+        )
+    };
     Ok(format!(
-        "Game Lobby will run:\n  {}\n\nArguments (one per line; the game's {what} is {}):\n{}\n\nWorking folder:\n  {folder}\n\nFor the game: {title}\nLauncher: {name}\n\nPlay will use {name} from now on. The game's current way to start stays under Play from, and you can remove {name} from the game page at any time.",
-        l.executable,
-        c.target,
-        lines.join("\n"),
+        "Game Lobby will run:\n  {}\n\nArguments (one per line; the game's {what} is {}):\n{}\n\nWorking folder:\n  {}\n\nFor the game: {title}\nLauncher: {name}\n\nPlay will use {name} from now on.{note} The game's current way to start stays under Play from, and you can remove {name} from the game page at any time.",
+        crate::validation::escape_for_prompt(&l.executable),
+        crate::validation::escape_for_prompt(&c.target),
+        crate::links::numbered(&argv),
+        crate::validation::escape_for_prompt(&folder),
     ))
 }
 
@@ -2168,15 +2185,24 @@ mod tests {
             .find("check_launcher_shortcut(&target, &confirmations)")
             .expect("shortcut check");
         assert!(check < branch.find("launchers::prepare_launch").unwrap());
-        assert!(branch.contains("spawn_detached_in(&launch.program, &launch.argv"));
+        // The game runs with the launcher's argv plus the route's confirmed launch options.
+        let options = branch
+            .find("crate::links::launcher_launch_argv(")
+            .expect("launch options checked");
+        assert!(options > branch.find("launchers::prepare_launch").unwrap());
+        let game = branch
+            .find("spawn_detached_in(&launch.program, &argv, Some(&launch.cwd))")
+            .expect("game started");
         assert!(branch.contains("track_started_process(&state, &game.id, pid, &launch.program)"));
-        // A launcher that isn't open yet is started alone: its checked program, no arguments,
-        // only after every check, and before the game would start.
+        // A launcher that isn't open yet is started alone: its checked program, no arguments
+        // and no launch options, only after every check (the options' too), and before the
+        // game would start.
         let alone = branch
             .find("spawn_detached_in(&launch.program, &[], Some(&launch.cwd))")
             .expect("launcher started alone");
-        assert!(alone > branch.find("launchers::prepare_launch").unwrap());
-        assert!(alone < branch.find("&launch.argv").unwrap());
+        assert!(alone > options);
+        assert!(alone < game);
+        assert_eq!(branch.matches("spawn_detached_in(").count(), 2);
         assert!(branch.contains(".pending_launches") && branch.contains(".begin("));
         for forbidden in [
             "shell_open",
@@ -2678,13 +2704,13 @@ mod tests {
             launch.argv,
             ["--start".to_string(), added.launch_target.clone()]
         );
-        let prompt = assign_prompt(&l, &game.title, &candidates[0]).unwrap();
+        let prompt = assign_prompt(&l, &game.title, &candidates[0], &[]).unwrap();
         assert!(prompt.contains(&*exe.to_string_lossy()));
         assert!(prompt.contains(&format!("  2. {}", game_exe.to_string_lossy())));
 
         // A title can't fake the dialog: the facts come first, and the title is one clean line.
         let spoof = "Fine\n\nGame Lobby will run:\n  safe.exe\u{202e}\t\u{7}";
-        let prompt = assign_prompt(&l, spoof, &candidates[0]).unwrap();
+        let prompt = assign_prompt(&l, spoof, &candidates[0], &[]).unwrap();
         let first: Vec<&str> = prompt.lines().take(5).collect();
         assert_eq!(first[0], "Game Lobby will run:");
         assert_eq!(first[1], format!("  {}", exe.to_string_lossy()));
@@ -2692,7 +2718,7 @@ mod tests {
         assert!(!prompt
             .chars()
             .any(|c| (c.is_control() && c != '\n') || ('\u{202a}'..='\u{202e}').contains(&c)));
-        let long = assign_prompt(&l, &"x".repeat(500), &candidates[0]).unwrap();
+        let long = assign_prompt(&l, &"x".repeat(500), &candidates[0], &[]).unwrap();
         assert!(long.contains(&format!("For the game: {}\u{2026}", "x".repeat(79))));
 
         // The renderer can't add that route itself, nor mark or unmark a route as assigned.

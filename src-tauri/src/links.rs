@@ -30,17 +30,23 @@
 //! - **Route names** are display text only: cleaned (`validation::route_name`), at most
 //!   [`MAX_ROUTE_NAME`] characters, never part of `db::route_identity` or the renderer's launch
 //!   identity check, never shown before the facts in a native confirmation.
-//! - **Launch options** ([`prepare_args`]) are only accepted where Game Lobby itself starts the
-//!   game's `.exe` without a shell (local PC routes). They get the checks every program Game
-//!   Lobby starts with arguments gets (`launch::check_arguments`), are confirmed natively with the
-//!   exact program and argv, and are checked again at every launch ([`checked_stored_args`]):
-//!   they only run on the `.exe` they were confirmed for (`launch_args_confirmed`, written only
-//!   after that dialog), so options from a backup, a merge or an older version stay inert until
-//!   the user confirms them on the game page.
-//!   Store links (`steam://`, `shell:AppsFolder\…`), launchers and emulators start the game
-//!   themselves, so their routes don't take options here.
+//! - **Launch options** ([`prepare_options`] for an [`ArgsHost`]) are only accepted where Game
+//!   Lobby itself starts a program without a shell: a game's own `.exe` (local PC routes), or a
+//!   custom launcher's program (launcher routes of a launcher with a program), where they come
+//!   after the launcher's template and the game's target. They get the checks every program Game
+//!   Lobby starts with arguments gets (`launch::check_arguments`; paths only inside the game's
+//!   folder, or the launcher's folder like its own template), are confirmed natively with the
+//!   exact program, whole argv and working folder, and are checked again at every launch
+//!   ([`checked_stored_args`], [`launcher_launch_argv`]): they only run for the command line they
+//!   were confirmed for (`launch_args_confirmed`, written only after that dialog: the `.exe`, or
+//!   the launcher's program and working folder, plus the whole argv), so options from a backup, a
+//!   merge or an older version, or after the launcher's program, template or working folder or
+//!   the route's target changed, stay inert until the user confirms them on the game page.
+//!   Store links (`steam://`, `shell:AppsFolder\…`), label-only launchers and emulators start the
+//!   game themselves (or have their own arguments), so their routes don't take options here.
 
 use crate::db;
+use crate::launchers::CustomLauncher;
 use crate::local::{LOCAL_SOURCE, ROM_SOURCE};
 use crate::types::*;
 use crate::validation::{self, display_text, plain_text};
@@ -723,11 +729,12 @@ pub fn rename_route(
 // ---------------------------------------------------------------------------
 // Launch options
 
-/// The `.exe` a route starts directly, when the route can take launch options; otherwise why
-/// not, in words for the user.
+/// The `.exe` a route starts directly, when the route can take launch options without knowing
+/// its launcher; otherwise why not, in words for the user. Launcher routes take options too, but
+/// need their launcher ([`launcher_host`], or [`args_host`] with the database).
 pub fn args_exe(route: &GameRoute) -> Result<&str> {
     if crate::launchers::is_launcher_route(route) {
-        bail!("This route runs through a custom launcher. Its arguments are set on the launcher (Settings → Launchers).");
+        bail!("This route runs through a custom launcher: its launch options are checked against that launcher.");
     }
     if route.source_id == ROM_SOURCE || non_empty(&route.emulator_id).is_some() {
         bail!(
@@ -747,6 +754,128 @@ pub fn args_exe(route: &GameRoute) -> Result<&str> {
     }
     refuse_host_program(target)?;
     Ok(target)
+}
+
+/// What a route's launch options are passed to, worked out from the stored route (and, for a
+/// launcher route, its stored launcher). Never from the renderer.
+///
+/// - A local route: the game's own `.exe`, nothing before the options, run in the `.exe`'s
+///   folder. Confirmations are keyed by the `.exe` alone (as they always were).
+/// - A launcher route (a launcher with a program): the launcher's `.exe`, the launcher's
+///   template with this route's target ([`crate::launchers::build_argv`]) before the options,
+///   run in the launcher's working folder. Confirmations are keyed by the program and the
+///   working folder, and the argv they cover is the whole command line (template, target and
+///   options), so a change to any of them needs a new confirmation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ArgsHost {
+    /// The program that gets the options.
+    pub program: String,
+    /// The arguments before the options.
+    pub base: Vec<String>,
+    /// The working folder.
+    pub cwd: String,
+    /// The launcher's name (cleaned), for a launcher route.
+    pub launcher: Option<String>,
+    /// What a confirmation is for besides the argv (see above).
+    key: String,
+}
+
+impl ArgsHost {
+    /// The whole argv a launch runs with `options`.
+    pub fn argv(&self, options: &[String]) -> Vec<String> {
+        self.base.iter().chain(options).cloned().collect()
+    }
+
+    fn noun(&self) -> &'static str {
+        if self.launcher.is_some() {
+            "launcher"
+        } else {
+            "game"
+        }
+    }
+}
+
+fn exe_host(route: &GameRoute) -> Result<ArgsHost> {
+    let exe = args_exe(route)?;
+    let key = crate::tracker::normalize_path(exe).ok_or_else(|| {
+        anyhow!("Only a game started from its own .exe can have launch options here.")
+    })?;
+    let cwd = std::path::Path::new(exe)
+        .parent()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    Ok(ArgsHost {
+        program: exe.to_string(),
+        base: Vec::new(),
+        cwd,
+        launcher: None,
+        key,
+    })
+}
+
+/// The [`ArgsHost`] of launcher route `route` of launcher `l`. Shape checks only (no disk
+/// access; `launchers::prepare_launch` checks the files at launch): a launcher with a program
+/// that may take arguments ([`refuse_host_program`]), a valid template and a target of one of
+/// its kinds. Label-only launchers never run their routes, so they take no options.
+pub fn launcher_host(l: &CustomLauncher, route: &GameRoute) -> Result<ArgsHost> {
+    use crate::launchers as lx;
+    if lx::launcher_id_of(route) != Some(l.id.as_str()) {
+        bail!("This game belongs to another launcher.");
+    }
+    let name = display_text(&l.name, 64);
+    if lx::is_label_only(l) {
+        bail!("{name} has no program, so this route can't have launch options. Its games run directly: set options on the game's own .exe route instead.");
+    }
+    if !crate::emulators::executable_path_ok(&l.executable) {
+        bail!("{name}'s program must be a full path to an .exe file.");
+    }
+    refuse_host_program(&l.executable)?;
+    lx::check_launcher_template(&l.args_template, &l.executable)?;
+    let target = route.launch_target.as_str();
+    if !l
+        .kinds()?
+        .into_iter()
+        .any(|k| lx::target_shape_ok(k, target))
+    {
+        bail!("This game's target doesn't fit {name}. Add the game again.");
+    }
+    let base = lx::build_argv(&l.args_template, target)?;
+    let cwd = match &l.working_dir {
+        Some(dir) => dir.clone(),
+        None => std::path::Path::new(&l.executable)
+            .parent()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+    };
+    let normal = |p: &str| {
+        crate::tracker::normalize_path(p)
+            .ok_or_else(|| anyhow!("{name}'s program or working folder is invalid."))
+    };
+    let key = serde_json::to_string(&["launcher", &normal(&l.executable)?, &normal(&cwd)?])?;
+    Ok(ArgsHost {
+        program: l.executable.clone(),
+        base,
+        cwd,
+        launcher: Some(name),
+        key,
+    })
+}
+
+/// The [`ArgsHost`] of a stored route: its launcher's (read from the database) for a launcher
+/// route, its own `.exe` otherwise; or why it can't take launch options.
+pub fn args_host(conn: &Connection, route: &GameRoute) -> Result<ArgsHost> {
+    match crate::launchers::launcher_id_of(route) {
+        Some(id) => {
+            let l = crate::launchers::get(conn, id)?.ok_or_else(|| {
+                anyhow!("This game's launcher was deleted. Add the game again to another launcher.")
+            })?;
+            launcher_host(&l, route)
+        }
+        None if crate::launchers::is_launcher_route(route) => {
+            bail!("This game's launcher route is invalid.")
+        }
+        None => exe_host(route),
+    }
 }
 
 /// Programs that run whatever their arguments say (shells, script hosts, interpreters) or are
@@ -830,13 +959,32 @@ pub fn args_text(argv: &[String]) -> Option<String> {
         .map(|v| v.join(" "))
 }
 
-/// Checks launch options the user typed for `route`: the route must take them ([`args_exe`]),
-/// and the text gets the rules of every program Game Lobby starts with arguments
-/// (`launch::check_arguments`: no shell characters, control or look-alike characters,
-/// code-loading or debugging options, and paths only inside the game's folder). Returns the
-/// argv, or `None` for empty text (no options).
+/// Checks launch options the user typed for a game's own `.exe` (see [`prepare_options`]).
+#[cfg(test)]
 pub fn prepare_args(route: &GameRoute, text: &str) -> Result<Option<Vec<String>>> {
-    let exe = args_exe(route)?;
+    prepare_options(&exe_host(route)?, text)
+}
+
+/// Checks launch options the user typed for a stored route (for its [`args_host`]). Returns the
+/// host they were checked for (compared again after the native dialog) and the options.
+pub fn prepare_route_args(
+    conn: &Connection,
+    route: &GameRoute,
+    text: &str,
+) -> Result<(ArgsHost, Option<Vec<String>>)> {
+    let host = args_host(conn, route)?;
+    let argv = prepare_options(&host, text)?;
+    Ok((host, argv))
+}
+
+/// Checks launch options the user typed for `host`: the rules of every program Game Lobby
+/// starts with arguments (`launch::check_arguments`: no shell characters, control or look-alike
+/// characters, code-loading or debugging options, and paths only inside the program's folder:
+/// the game's for a game's own `.exe`, the launcher's for a launcher route, exactly as for the
+/// launcher's own template), no `{` or `}` on a launcher route (`{target}` belongs to the
+/// launcher's template and is never substituted in options), and the count and length limits.
+/// Returns the argv, or `None` for empty text (no options).
+pub fn prepare_options(host: &ArgsHost, text: &str) -> Result<Option<Vec<String>>> {
     let text = text.trim();
     if text.is_empty() {
         return Ok(None);
@@ -844,8 +992,17 @@ pub fn prepare_args(route: &GameRoute, text: &str) -> Result<Option<Vec<String>>
     if text.chars().count() > MAX_ARGS_CHARS {
         bail!("Launch options can be at most {MAX_ARGS_CHARS} characters.");
     }
-    crate::launch::check_arguments(text, exe, &[], "game", r"config\settings.ini")?;
-    let argv = crate::launch::tokenize_arguments(text, "game")?;
+    let noun = host.noun();
+    let example = if host.launcher.is_some() {
+        r"plugins\settings.ini"
+    } else {
+        r"config\settings.ini"
+    };
+    if host.launcher.is_some() && text.contains(['{', '}']) {
+        bail!("Launch options can't contain {{ or }}: the launcher's own arguments already pass the game ({{target}}).");
+    }
+    crate::launch::check_arguments(text, &host.program, &[], noun, example)?;
+    let argv = crate::launch::tokenize_arguments(text, noun)?;
     if argv.len() > MAX_ARGS {
         bail!("A route can have at most {MAX_ARGS} launch options.");
     }
@@ -858,10 +1015,20 @@ pub fn prepare_args(route: &GameRoute, text: &str) -> Result<Option<Vec<String>>
     Ok(Some(argv))
 }
 
-/// The stored launch options of `route`, checked again (a route may come from a backup or an
-/// older version): the same rules as [`prepare_args`]. Empty when it has none. Whether the user
-/// confirmed them is checked by [`checked_stored_args`].
+/// The stored launch options of a game's own `.exe` route, checked again (see
+/// [`stored_options`]).
+#[cfg(test)]
 pub fn valid_stored_args(route: &GameRoute) -> Result<Vec<String>> {
+    if non_empty(&route.launch_args).is_none() {
+        return Ok(Vec::new());
+    }
+    stored_options(&exe_host(route)?, route)
+}
+
+/// The stored launch options of `route`, checked again for `host` (a route may come from a
+/// backup or an older version): the same rules as [`prepare_options`]. Empty when it has none.
+/// Whether the user confirmed them is checked by [`checked_options`].
+fn stored_options(host: &ArgsHost, route: &GameRoute) -> Result<Vec<String>> {
     if non_empty(&route.launch_args).is_none() {
         return Ok(Vec::new());
     }
@@ -869,57 +1036,98 @@ pub fn valid_stored_args(route: &GameRoute) -> Result<Vec<String>> {
     let text = args_text(&argv).ok_or_else(|| {
         anyhow!("This game's launch options can't be used. Edit them on its page.")
     })?;
-    match prepare_args(route, &text)? {
+    match prepare_options(host, &text)? {
         Some(checked) if checked == argv => Ok(argv),
         None if argv.is_empty() => Ok(argv),
         _ => bail!("This game's launch options can't be used. Edit them on its page."),
     }
 }
 
-/// What a confirmation is for: the route's `.exe` (`tracker::normalize_path`) and the exact
-/// argv (JSON).
-fn args_key(route: &GameRoute, argv: &[String]) -> Result<(String, String)> {
-    let exe = args_exe(route)?;
-    let key = crate::tracker::normalize_path(exe).ok_or_else(|| {
-        anyhow!("Only a game started from its own .exe can have launch options here.")
-    })?;
-    Ok((key, serde_json::to_string(argv)?))
+/// What a confirmation is for: the host's key and the whole argv (JSON).
+fn confirm_key(host: &ArgsHost, options: &[String]) -> Result<(String, String)> {
+    Ok((
+        host.key.clone(),
+        serde_json::to_string(&host.argv(options))?,
+    ))
 }
 
-/// Whether the user confirmed `argv` for the program `route` starts, in the native dialog.
-pub fn args_confirmed(conn: &Connection, route: &GameRoute, argv: &[String]) -> Result<bool> {
-    let (exe, argv) = args_key(route, argv)?;
+/// Whether the user confirmed `options` for exactly `host`, in the native dialog.
+pub fn host_confirmed(conn: &Connection, host: &ArgsHost, options: &[String]) -> Result<bool> {
+    let (key, argv) = confirm_key(host, options)?;
     Ok(conn
         .query_row(
             "SELECT 1 FROM launch_args_confirmed WHERE exeKey=? AND argv=?",
-            params![exe, argv],
+            params![key, argv],
             |_| Ok(()),
         )
         .optional()?
         .is_some())
 }
 
-/// Remembers that the user confirmed `argv` for the program `route` starts. Only called by
-/// `link_commands::library_route_args` after the native dialog and its compare-and-save; the
-/// table is never part of a backup, so restored options stay inert until confirmed there.
-pub fn confirm_args(conn: &Connection, route: &GameRoute, argv: &[String]) -> Result<()> {
-    let (exe, argv) = args_key(route, argv)?;
+/// Remembers that the user confirmed `options` for `host`. Only called after the native dialog
+/// and its compare-and-save (`link_commands::library_route_args`,
+/// `launcher_commands::launchers_assign`); the table is never part of a backup, so restored
+/// options stay inert until confirmed there.
+pub fn confirm_host_args(conn: &Connection, host: &ArgsHost, options: &[String]) -> Result<()> {
+    let (key, argv) = confirm_key(host, options)?;
     conn.execute(
         "INSERT OR REPLACE INTO launch_args_confirmed(exeKey,argv,confirmedAt) VALUES(?,?,?)",
-        params![exe, argv, now_ms()],
+        params![key, argv, now_ms()],
     )?;
     Ok(())
 }
 
-/// The launch options `route` runs with: [`valid_stored_args`], and only ones the user confirmed
-/// for exactly this program. Options from a backup, a merge or an older version, or confirmed
-/// for another `.exe`, are refused until they are confirmed on the game page.
-pub fn checked_stored_args(conn: &Connection, route: &GameRoute) -> Result<Vec<String>> {
-    let argv = valid_stored_args(route)?;
-    if !argv.is_empty() && !args_confirmed(conn, route, &argv)? {
+/// [`confirm_host_args`] for a stored route's current host (tests only: the commands confirm
+/// the host the dialog showed).
+#[cfg(test)]
+pub fn confirm_args(conn: &Connection, route: &GameRoute, argv: &[String]) -> Result<()> {
+    confirm_host_args(conn, &args_host(conn, route)?, argv)
+}
+
+/// The launch options `route` runs with for `host`: [`stored_options`], and only ones the user
+/// confirmed for exactly this host. Options from a backup, a merge or an older version, or
+/// confirmed for another program, command line or folder, are refused until they are confirmed
+/// on the game page.
+fn checked_options(conn: &Connection, host: &ArgsHost, route: &GameRoute) -> Result<Vec<String>> {
+    let argv = stored_options(host, route)?;
+    if !argv.is_empty() && !host_confirmed(conn, host, &argv)? {
         bail!("Confirm this route's launch options again on its game page.");
     }
     Ok(argv)
+}
+
+/// The launch options a stored route runs with ([`checked_options`] for its [`args_host`]).
+/// Empty when it has none (then nothing else about the route is checked here).
+pub fn checked_stored_args(conn: &Connection, route: &GameRoute) -> Result<Vec<String>> {
+    if non_empty(&route.launch_args).is_none() {
+        return Ok(Vec::new());
+    }
+    checked_options(conn, &args_host(conn, route)?, route)
+}
+
+/// The whole argv of a launch through launcher `l` (`launch` is its checked
+/// `launchers::prepare_launch`): the launcher's argv, plus the route's launch options when it
+/// has some, which must be confirmed for exactly this program, command line and working folder.
+pub fn launcher_launch_argv(
+    conn: &Connection,
+    l: &CustomLauncher,
+    route: &GameRoute,
+    launch: &crate::launchers::LauncherLaunch,
+) -> Result<Vec<String>> {
+    if non_empty(&route.launch_args).is_none() {
+        return Ok(launch.argv.clone());
+    }
+    let host = launcher_host(l, route)?;
+    // Both come from the same launcher and route; should they ever disagree, refuse rather than
+    // run options confirmed for another command line.
+    if host.base != launch.argv
+        || std::path::Path::new(&host.program) != launch.program
+        || std::path::Path::new(&host.cwd) != launch.cwd
+    {
+        bail!("Confirm this route's launch options again on its game page.");
+    }
+    let options = checked_options(conn, &host, route)?;
+    Ok(host.argv(&options))
 }
 
 /// The route has launch options that would be refused at launch ([`checked_stored_args`]): the
@@ -928,27 +1136,65 @@ pub fn args_need_confirmation(conn: &Connection, route: &GameRoute) -> bool {
     non_empty(&route.launch_args).is_some() && checked_stored_args(conn, route).is_err()
 }
 
-/// The native confirmation for new launch options: the program, the exact argv and the
-/// working folder first; the game title and route name (user-editable text) last, cleaned.
+/// The native confirmation for new launch options of a game's own `.exe` route (tests; the
+/// command uses [`route_args_prompt`] with the host it checked).
+#[cfg(test)]
 pub fn args_prompt(game_title: &str, route: &GameRoute, argv: &[String]) -> Result<String> {
-    let exe = args_exe(route)?;
-    let folder = std::path::Path::new(exe)
-        .parent()
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let lines: Vec<String> = argv
-        .iter()
+    Ok(route_args_prompt(
+        &exe_host(route)?,
+        game_title,
+        route,
+        argv,
+    ))
+}
+
+/// The numbered argument lines of a confirmation (one per line), escaped
+/// (`validation::escape_for_prompt`).
+pub fn numbered(argv: &[String]) -> String {
+    argv.iter()
         .enumerate()
-        .map(|(i, arg)| format!("  {}. {arg}", i + 1))
-        .collect();
-    Ok(format!(
-        "Game Lobby will run:\n  {}\n\nArguments (one per line):\n{}\n\nWorking folder:\n  {}\n\nFor the game: {}\nLaunch route: {}\n\nPlay runs exactly this from now on when this route is chosen. Save only options you trust.",
-        validation::escape_for_prompt(exe),
-        lines.join("\n"),
-        validation::escape_for_prompt(&folder),
+        .map(|(i, arg)| format!("  {}. {}", i + 1, validation::escape_for_prompt(arg)))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Which arguments of a launcher command line are this game's launch options, for a
+/// confirmation (`base` arguments come first).
+pub fn options_note(base: usize, options: usize, launcher: &str) -> String {
+    let first = base + 1;
+    let which = if options == 1 {
+        format!("Argument {first} is")
+    } else {
+        format!("Arguments {first} to {} are", base + options)
+    };
+    format!("{which} this game's launch options; the others come from {launcher}'s settings and the game's target.")
+}
+
+/// The native confirmation for new launch options: the program, the whole argv (numbered) and
+/// the working folder first; the game title, route name and launcher name (user-editable text)
+/// last, cleaned.
+pub fn route_args_prompt(
+    host: &ArgsHost,
+    game_title: &str,
+    route: &GameRoute,
+    options: &[String],
+) -> String {
+    let facts = format!(
+        "Game Lobby will run:\n  {}\n\nArguments (one per line):\n{}\n\nWorking folder:\n  {}\n\nFor the game: {}\nLaunch route: {}",
+        validation::escape_for_prompt(&host.program),
+        numbered(&host.argv(options)),
+        validation::escape_for_prompt(&host.cwd),
         display_text(game_title, 80),
         route_display(route),
-    ))
+    );
+    let end = "Play runs exactly this from now on when this route is chosen. Save only options you trust.";
+    match &host.launcher {
+        None => format!("{facts}\n\n{end}"),
+        Some(name) => format!(
+            "{facts}\nLauncher: {name}\n\n{} {end}",
+            options_note(host.base.len(), options.len(), name)
+        ),
+    }
 }
 
 /// Stores `argv` (or none) on the route, as a JSON list.
@@ -3285,6 +3531,327 @@ mod tests {
             prompt.starts_with("Game Lobby will run:\n  C:\\Games\\<U+202E>gnp.exe\\game.exe\n")
         );
         assert!(prompt.contains("Working folder:\n  C:\\Games\\<U+202E>gnp.exe\n"));
+    }
+
+    const HUB: &str = r"D:\Launchers\Hub\Hub.exe";
+    const HK: &str = r"D:\Games\Hollow Knight\hk.exe";
+
+    fn hub(exe: &str, template: &str) -> CustomLauncher {
+        crate::launchers::validate(CustomLauncher {
+            id: "hub".into(),
+            name: "Hub".into(),
+            icon_kind: "builtin".into(),
+            icon_value: "rocket".into(),
+            color: "#336699".into(),
+            executable: exe.into(),
+            args_template: template.into(),
+            target_kind: "file".into(),
+            target_kinds: vec!["file".into(), "identifier".into()],
+            working_dir: None,
+            sort_order: 0,
+            created_at: 1,
+            available: false,
+        })
+        .unwrap()
+    }
+
+    fn hub_route(target: &str, args: Option<&str>) -> GameRoute {
+        GameRoute {
+            launch_args: args.map(str::to_owned),
+            assigned: Some(true),
+            ..route("launcher:hub", "Custom", target)
+        }
+    }
+
+    /// What `launchers::prepare_launch` gives for `l` (without its disk checks).
+    fn hub_launch(l: &CustomLauncher, target: &str) -> crate::launchers::LauncherLaunch {
+        let program = std::path::PathBuf::from(&l.executable);
+        crate::launchers::LauncherLaunch {
+            argv: crate::launchers::build_argv(&l.args_template, target).unwrap(),
+            cwd: match &l.working_dir {
+                Some(dir) => dir.into(),
+                None => program.parent().unwrap().to_path_buf(),
+            },
+            program,
+        }
+    }
+
+    #[test]
+    fn launcher_routes_take_options_checked_against_the_launcher() {
+        let l = hub(HUB, "--start {target}");
+        let r = hub_route(HK, None);
+        let host = launcher_host(&l, &r).unwrap();
+        assert_eq!(host.program, HUB);
+        assert_eq!(host.base, ["--start", HK]);
+        assert_eq!(host.cwd, r"D:\Launchers\Hub");
+        // After the template and the target, as separate arguments.
+        let argv = prepare_options(&host, "-windowed -nosplash")
+            .unwrap()
+            .unwrap();
+        assert_eq!(host.argv(&argv), ["--start", HK, "-windowed", "-nosplash"]);
+        assert_eq!(prepare_options(&host, "  ").unwrap(), None);
+        // Files inside the launcher's folder only, exactly like its own template.
+        assert!(prepare_options(&host, r"-cfg plugins\a.ini").is_ok());
+        assert!(prepare_options(&host, r"-cfg D:\Launchers\Hub\a.ini").is_ok());
+        for bad in [
+            "{target}",
+            "--id={target}",
+            "-x }",
+            "--inspect",
+            "--remote-debugging-port=9222",
+            "--gpu-launcher=calc.exe",
+            "--renderer-cmd-prefix=calc",
+            "--no-sandbox",
+            r"-cfg D:\Games\Hollow Knight\x.ini",
+            r"-cfg C:\Windows\x.dll",
+            r"-cfg ..\x.dll",
+            r"-cfg \\host\share\x",
+            "-x & calc.exe",
+            "-x | y",
+            "-x %PATH%",
+            "-a\u{ff3c}b",
+            "-x\n-y",
+            "\"unclosed",
+        ] {
+            assert!(
+                prepare_options(&host, bad).is_err(),
+                "{bad} should be refused"
+            );
+        }
+        let many = (0..25).map(|i| format!("-o{i}")).collect::<Vec<_>>();
+        assert!(prepare_options(&host, &many[..24].join(" ")).is_ok());
+        assert!(prepare_options(&host, &many.join(" ")).is_err());
+        assert!(prepare_options(&host, &"a".repeat(201)).is_err());
+        assert!(prepare_options(&host, &"-x ".repeat(400)).is_err());
+        // Without a program, for a launcher that runs other programs, or for another
+        // launcher's route: no options.
+        let label = CustomLauncher {
+            executable: String::new(),
+            args_template: String::new(),
+            ..l.clone()
+        };
+        assert!(launcher_host(&label, &r)
+            .unwrap_err()
+            .to_string()
+            .contains("no program"));
+        for exe in [
+            r"C:\Windows\System32\cmd.exe",
+            r"D:\Tools\powershell.exe",
+            r"D:\Tools\node.exe",
+            r"D:\Tools\python.exe",
+        ] {
+            assert!(launcher_host(&hub(exe, "{target}"), &r).is_err(), "{exe}");
+        }
+        assert!(launcher_host(&l, &route("launcher:other", "Custom", HK)).is_err());
+        assert!(launcher_host(&l, &hub_route("bad/target", None)).is_err());
+    }
+
+    #[test]
+    fn options_are_refused_for_store_xbox_and_emulator_routes_with_the_reason() {
+        let db = db::Db::memory().unwrap();
+        let conn = db.lock();
+        let rom = GameRoute {
+            system: Some("snes".into()),
+            ..route("rom", "Emulator", r"C:\Roms\a.sfc")
+        };
+        for (r, says) in [
+            (
+                route("steam", "Steam", "steam://rungameid/1"),
+                "Set them in Steam",
+            ),
+            (xbox("Microsoft.MinecraftUWP"), "Set them in Xbox"),
+            (rom, "Settings → Emulators"),
+            (route("launcher:gone", "Custom", HK), "launcher was deleted"),
+        ] {
+            let e = prepare_route_args(&conn, &r, "-x").unwrap_err().to_string();
+            assert!(e.contains(says), "{e}");
+        }
+        crate::launchers::save(&conn, &hub(HUB, "{target}")).unwrap();
+        assert!(prepare_route_args(&conn, &hub_route(HK, None), "-x").is_ok());
+        assert!(prepare_route_args(&conn, &route("local", "Custom", HK), "-x").is_ok());
+    }
+
+    #[test]
+    fn launcher_options_bind_to_the_whole_command_line() {
+        let db = db::Db::memory().unwrap();
+        let mut conn = db.lock();
+        let l = hub(HUB, "--start {target}");
+        crate::launchers::save(&conn, &l).unwrap();
+        let g = game(
+            "g",
+            "Hollow Knight",
+            vec![hub_route(HK, None), route("local", "Custom", HK)],
+        );
+        put(&mut conn, std::slice::from_ref(&g));
+        let (host, argv) = prepare_route_args(&conn, &g.routes[0], "-windowed").unwrap();
+        let argv = argv.unwrap();
+        set_args(&conn, "g", &rref(&g, 0), Some(&argv)).unwrap();
+        let saved = db::get_game(&conn, "g").unwrap().unwrap().routes[0].clone();
+        // Stored but never confirmed: refused at launch, shown as needing confirmation.
+        assert!(checked_stored_args(&conn, &saved).is_err());
+        assert!(args_need_confirmation(&conn, &saved));
+        assert!(launcher_launch_argv(&conn, &l, &saved, &hub_launch(&l, HK)).is_err());
+        // A confirmation of the same program and argv as a game's own .exe is another thing.
+        let as_local = exe_host(&route("local", "Custom", HUB)).unwrap();
+        confirm_host_args(&conn, &as_local, &host.argv(&argv)).unwrap();
+        assert!(args_need_confirmation(&conn, &saved));
+        // Confirmed: the launch runs template, target, then the options.
+        confirm_host_args(&conn, &host, &argv).unwrap();
+        assert!(!args_need_confirmation(&conn, &saved));
+        assert_eq!(checked_stored_args(&conn, &saved).unwrap(), argv);
+        assert_eq!(
+            launcher_launch_argv(&conn, &l, &saved, &hub_launch(&l, HK)).unwrap(),
+            ["--start", HK, "-windowed"]
+        );
+        // A launch whose command line or folder isn't the one confirmed is refused.
+        let mut elsewhere = hub_launch(&l, HK);
+        elsewhere.cwd = r"D:\Elsewhere".into();
+        assert!(launcher_launch_argv(&conn, &l, &saved, &elsewhere).is_err());
+        assert!(launcher_launch_argv(&conn, &l, &saved, &hub_launch(&l, "other")).is_err());
+
+        // Changing the launcher's template, program or working folder, the route's target or
+        // the options needs a new confirmation.
+        let changes = [
+            hub(HUB, "--play {target}"),
+            hub(HUB, "{target} --fast"),
+            hub(r"D:\Launchers\Hub2\Hub.exe", "--start {target}"),
+            CustomLauncher {
+                working_dir: Some(r"D:\Launchers\Hub\data".into()),
+                ..l.clone()
+            },
+        ];
+        for changed in &changes {
+            crate::launchers::save(&conn, changed).unwrap();
+            assert!(args_need_confirmation(&conn, &saved), "{changed:?}");
+            assert!(checked_stored_args(&conn, &saved).is_err());
+            assert!(
+                launcher_launch_argv(&conn, changed, &saved, &hub_launch(changed, HK)).is_err()
+            );
+        }
+        crate::launchers::save(&conn, &l).unwrap();
+        assert!(
+            !args_need_confirmation(&conn, &saved),
+            "the confirmed one again"
+        );
+        let moved = GameRoute {
+            launch_target: r"D:\Games\Hollow Knight\other.exe".into(),
+            ..saved.clone()
+        };
+        assert!(args_need_confirmation(&conn, &moved));
+        let more = GameRoute {
+            launch_args: Some(r#"["-windowed","-fast"]"#.into()),
+            ..saved.clone()
+        };
+        assert!(args_need_confirmation(&conn, &more));
+        // Stored options are checked again at launch: a crafted value is refused even if a
+        // confirmation row for it existed.
+        let crafted = GameRoute {
+            launch_args: Some(r#"["--inspect"]"#.into()),
+            ..saved.clone()
+        };
+        confirm_host_args(&conn, &host, &["--inspect".into()]).unwrap();
+        assert!(checked_stored_args(&conn, &crafted).is_err());
+        assert!(launcher_launch_argv(&conn, &l, &crafted, &hub_launch(&l, HK)).is_err());
+        // Without options nothing is needed, and the launch is the launcher's own argv.
+        assert_eq!(
+            launcher_launch_argv(&conn, &l, &g.routes[0], &hub_launch(&l, HK)).unwrap(),
+            ["--start", HK]
+        );
+        // A label-only launcher never runs its routes' options.
+        let label = CustomLauncher {
+            executable: String::new(),
+            args_template: String::new(),
+            ..l.clone()
+        };
+        crate::launchers::save(&conn, &label).unwrap();
+        assert!(checked_stored_args(&conn, &saved).is_err());
+        assert!(args_need_confirmation(&conn, &saved));
+        crate::launchers::save(&conn, &l).unwrap();
+
+        // The renderer can't change them through a library save.
+        let mut sent = db::get_game(&conn, "g").unwrap().unwrap().routes;
+        sent[0].launch_args = Some(r#"["-other"]"#.into());
+        assert!(validation::check_renderer_routes(&saved_routes(&conn), &sent).is_err());
+
+        // Restored from a backup: kept as data, inert until confirmed.
+        let json = full_backup(&conn);
+        let fresh = db::Db::memory().unwrap();
+        let mut restored = fresh.lock();
+        crate::launchers::save(&restored, &l).unwrap();
+        restore(&mut restored, &json);
+        let r = db::get_game(&restored, "g").unwrap().unwrap().routes[0].clone();
+        assert_eq!(r.launch_args, saved.launch_args);
+        assert!(args_need_confirmation(&restored, &r));
+        assert!(launcher_launch_argv(&restored, &l, &r, &hub_launch(&l, HK)).is_err());
+        confirm_host_args(&restored, &args_host(&restored, &r).unwrap(), &argv).unwrap();
+        assert!(!args_need_confirmation(&restored, &r));
+    }
+
+    #[test]
+    fn adding_a_game_to_a_launcher_with_options_is_one_confirmation() {
+        let db = db::Db::memory().unwrap();
+        let mut conn = db.lock();
+        let l = hub(HUB, "--start {target}");
+        crate::launchers::save(&conn, &l).unwrap();
+        let g = game("g", "Hollow Knight", vec![route("local", "Custom", HK)]);
+        put(&mut conn, std::slice::from_ref(&g));
+        let c = crate::launchers::assign_candidates(&l, &g)[0].clone();
+        let added = crate::launchers::assigned_route(&l, &g, &c).unwrap();
+        // What `launchers_assign` does: options checked for the new route's host, one dialog
+        // with the whole command line, then the route and its confirmation saved together.
+        let host = launcher_host(&l, &added).unwrap();
+        let options = prepare_options(&host, "-windowed -nosplash")
+            .unwrap()
+            .unwrap();
+        let prompt = crate::launchers::assign_prompt(&l, &g.title, &c, &options).unwrap();
+        assert!(prompt.starts_with(&format!(
+            "Game Lobby will run:\n  {HUB}\n\nArguments (one per line; the game's file is {HK}):\n  1. --start\n  2. {HK}\n  3. -windowed\n  4. -nosplash\n\nWorking folder:\n  D:\\Launchers\\Hub\n\nFor the game: Hollow Knight\nLauncher: Hub\n"
+        )), "{prompt}");
+        assert!(prompt.contains("Arguments 3 to 4 are this game's launch options"));
+        let plain = crate::launchers::assign_prompt(&l, &g.title, &c, &[]).unwrap();
+        assert!(!plain.contains("launch options") && !plain.contains("  3."));
+        let mut routes = crate::launchers::assign(&l, &g, Some(&c), None).unwrap();
+        assert_eq!(launcher_host(&l, &routes[0]).unwrap(), host);
+        routes[0].launch_args = Some(serde_json::to_string(&options).unwrap());
+        db::set_routes(&conn, "g", routes).unwrap();
+        confirm_host_args(&conn, &host, &options).unwrap();
+        let saved = db::get_game(&conn, "g").unwrap().unwrap();
+        assert_eq!(
+            checked_stored_args(&conn, &saved.routes[0]).unwrap(),
+            options
+        );
+        assert!(!args_need_confirmation(&conn, &saved.routes[0]));
+        // The game's own route didn't get them.
+        assert!(saved.routes[1].launch_args.is_none());
+    }
+
+    fn saved_routes(conn: &Connection) -> Vec<GameRoute> {
+        db::get_game(conn, "g").unwrap().unwrap().routes
+    }
+
+    #[test]
+    fn launcher_options_prompt_shows_the_whole_command_line_before_names() {
+        let mut l = hub(HUB, "--start {target}");
+        l.name = "Hub\n\nGame Lobby will run:\n  C:\\evil.exe".into();
+        let r = GameRoute {
+            name: Some("Route\u{202e}".into()),
+            ..hub_route(HK, None)
+        };
+        let host = launcher_host(&l, &r).unwrap();
+        let options = ["-windowed".to_string(), "-nosplash".to_string()];
+        let prompt = route_args_prompt(&host, "Hollow\nKnight", &r, &options);
+        assert!(prompt.starts_with(&format!(
+            "Game Lobby will run:\n  {HUB}\n\nArguments (one per line):\n  1. --start\n  2. {HK}\n  3. -windowed\n  4. -nosplash\n\nWorking folder:\n  D:\\Launchers\\Hub\n\nFor the game: Hollow Knight\n"
+        )), "{prompt}");
+        assert!(
+            prompt.contains("\nLauncher: Hub Game Lobby will run: C:\\evil.exe\n"),
+            "{prompt}"
+        );
+        assert!(prompt.contains("Arguments 3 to 4 are this game's launch options"));
+        assert!(prompt.find("evil").unwrap() > prompt.find("Working folder").unwrap());
+        assert!(!prompt.contains('\u{202e}'));
+        let one = route_args_prompt(&host, "x", &r, &options[..1]);
+        assert!(one.contains("Argument 3 is this game's launch options"));
     }
 
     fn route_targets(conn: &Connection, id: &str) -> Vec<String> {

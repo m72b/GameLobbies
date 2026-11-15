@@ -647,9 +647,15 @@ fn assignment_option(l: &CustomLauncher, game: &Game) -> AssignmentOption {
 /// taken from one of the game's own routes (`routeIndex` and `kind` choose which; the first that
 /// fits otherwise). The renderer names no path, program or argument. A new launch route is shown
 /// in a native dialog (program, exact arguments, working folder) and added only when the user
-/// confirms it; the game's other routes stay. A launcher without a program only labels a route
-/// (nothing new runs), without a dialog. Returns the library.
+/// confirms it; the game's other routes stay. `options` is optional launch options text for the
+/// new route: checked like options set on the game page (`links::prepare_options` for the
+/// launcher and that route's target), shown in the same dialog (appended to the arguments), and
+/// saved with their confirmation only together with the route. A launcher without a program
+/// only labels a route (nothing new runs), without a dialog, and refuses options. Returns the
+/// library.
 #[tauri::command]
+// Tauri passes each renderer argument (and the app, window and state) as its own parameter.
+#[allow(clippy::too_many_arguments)]
 pub async fn launchers_assign(
     app: AppHandle,
     window: WebviewWindow,
@@ -658,10 +664,20 @@ pub async fn launchers_assign(
     launcher_id: String,
     route_index: Option<i64>,
     kind: Option<String>,
+    options: Option<String>,
 ) -> CmdResult<Vec<Game>> {
     let game_id = game_arg(&game_id)?;
     let launcher_id = id_arg(&launcher_id)?;
     let route_index = route_arg(route_index)?;
+    // Launch options text for the new route (checked below against the launcher, like options
+    // set later on the game page); empty means none.
+    let options = options.unwrap_or_default();
+    if options.chars().count() > crate::links::MAX_ARGS_CHARS {
+        return Err(format!(
+            "Launch options can be at most {} characters.",
+            crate::links::MAX_ARGS_CHARS
+        ));
+    }
     let kind = match kind.as_deref() {
         None => None,
         Some(raw) => Some(TargetKind::parse(raw).ok_or("That target kind is invalid.")?),
@@ -680,6 +696,12 @@ pub async fn launchers_assign(
         return Err(reason);
     }
     let candidate = if launchers::is_label_only(&launcher) {
+        if !options.trim().is_empty() {
+            return Err(format!(
+                "{} has no program, so it doesn't take launch options: the game keeps starting as before. Set options on the game's own .exe route instead.",
+                crate::validation::display_text(&launcher.name, 64)
+            ));
+        }
         None
     } else {
         if kind.is_some_and(|k| !launcher.allows(k)) {
@@ -712,14 +734,31 @@ pub async fn launchers_assign(
         .map_err(err)?
         .map_err(err)?;
         launchers::prepare_launch(&launcher, &route).map_err(err)?;
-        let prompt = launchers::assign_prompt(&launcher, &game.title, &chosen).map_err(err)?;
+        // Launch options get the checks of options set on the game page, for this launcher and
+        // this route's target, and are shown in the same dialog as the route.
+        let checked = if options.trim().is_empty() {
+            None
+        } else {
+            let host = crate::links::launcher_host(&launcher, &route).map_err(err)?;
+            crate::links::prepare_options(&host, &options)
+                .map_err(err)?
+                .map(|argv| (host, argv))
+        };
+        let shown = checked.as_ref().map(|(_, argv)| argv.as_slice());
+        let prompt =
+            launchers::assign_prompt(&launcher, &game.title, &chosen, shown.unwrap_or_default())
+                .map_err(err)?;
         if !confirm_natively(&window, "Confirm launcher", &prompt, "Use launcher").await {
             return Err(format!(
                 "{} was not added to {}.",
                 game.title, launcher.name
             ));
         }
-        Some(chosen)
+        Some((chosen, checked))
+    };
+    let (candidate, checked) = match candidate {
+        Some((chosen, checked)) => (Some(chosen), checked),
+        None => (None, None),
     };
     let games = {
         let conn = state.db.lock();
@@ -729,9 +768,22 @@ pub async fn launchers_assign(
         if now_game.as_ref() != Some(&game) || now_launcher.as_ref() != Some(&launcher) {
             return Err("The game or the launcher changed in the meantime. Try again.".into());
         }
-        let routes =
+        let mut routes =
             launchers::assign(&launcher, &game, candidate.as_ref(), route_index).map_err(err)?;
-        db::set_routes(&conn, &game_id, routes).map_err(err)?;
+        if let Some((host, argv)) = &checked {
+            // `assign` puts the new launcher route first. The host was worked out from this
+            // launcher (unchanged, checked above) and that route's target.
+            let added = &mut routes[0];
+            if crate::links::launcher_host(&launcher, added).ok().as_ref() != Some(host) {
+                return Err("The game or the launcher changed in the meantime. Try again.".into());
+            }
+            added.launch_args = Some(serde_json::to_string(argv).map_err(err)?);
+            db::set_routes(&conn, &game_id, routes).map_err(err)?;
+            // Confirmed in the dialog above, together with the route.
+            crate::links::confirm_host_args(&conn, host, argv).map_err(err)?;
+        } else {
+            db::set_routes(&conn, &game_id, routes).map_err(err)?;
+        }
         db::all_games(&conn).map_err(err)?
     };
     notify_library(&app, &state);
