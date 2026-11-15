@@ -42,7 +42,12 @@ const api: LobbyAPI = {
     pendingLaunch: pendingId => call('library_launch_pending', { pendingId }),
     save: game => call('library_save', { game }),
     remove: id => call('library_remove', { id }),
-    merge: (targetId, sourceId) => call('library_merge', { targetId, sourceId }),
+    linkPreview: (gameIds, title) => call('library_link_preview', { gameIds, title: title ?? null }),
+    link: (gameIds, choices, reviewId) => call('library_link', { gameIds, choices, reviewId: reviewId ?? null }),
+    unlinkPreview: (gameId, route) => call('library_unlink_preview', { gameId, route }),
+    unlink: (gameId, route) => call('library_unlink', { gameId, route }),
+    renameRoute: (gameId, route, name) => call('library_route_rename', { gameId, route, name }),
+    setRouteArgs: (gameId, route, args) => call('library_route_args', { gameId, route, args }),
     resetPlaytime: () => call('library_reset_playtime'),
     setCover: (id, dataUrl) => call('library_set_cover', { id, dataUrl }),
     chooseCover: id => call('library_choose_cover', { id }),
@@ -112,7 +117,6 @@ const api: LobbyAPI = {
     locate: id => call('health_locate', { id }),
     removeRoute: (id, confirmed) => call('health_remove_route', { id, confirmed }),
     dismiss: id => call('health_dismiss', { id }),
-    merge: (id, targetGameId) => call('health_merge', { id, targetGameId: targetGameId ?? null }),
     mergeRoutes: id => call('health_merge_routes', { id })
   },
   backup: {

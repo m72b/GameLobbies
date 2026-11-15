@@ -89,6 +89,14 @@ pub struct GameRoute {
     /// (`validation::check_renderer_routes`). Older builds ignore it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assigned: Option<bool>,
+    /// The route's own name ("Java Edition"), shown after the store or launcher under "Play
+    /// from" and Stores. Display only: it is never part of what a launch runs, never part of the
+    /// route's launch identity (`validation::launch_identity`) and never part of `db::route_identity`,
+    /// so renaming can't change or unlock anything. Always plain text, at most
+    /// [`crate::links::MAX_ROUTE_NAME`] characters (`validation::route_name`). Older builds ignore
+    /// it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
@@ -458,6 +466,10 @@ pub struct Backup {
         skip_serializing_if = "Option::is_none"
     )]
     pub launchers: Option<Vec<crate::launchers::CustomLauncher>>,
+    /// What each linked entry brought into its game, so it can be unlinked after a restore
+    /// (`links`). Optional: older backups don't have it (and older builds refuse it).
+    #[serde(default, rename = "gameLinks", skip_serializing_if = "Option::is_none")]
+    pub game_links: Option<Vec<crate::links::LinkRecord>>,
 }
 
 /// One stored play session (`tracking_sessions`). `ended_at` is absent while it is in progress.

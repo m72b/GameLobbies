@@ -22,7 +22,7 @@ use crate::roots::{self, LibraryRoot};
 use crate::tracker::is_within;
 use crate::types::{Game, GameRoute};
 use anyhow::{anyhow, bail, Result};
-use rusqlite::Connection;
+use rusqlite::{params, Connection};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -898,9 +898,29 @@ pub fn keep_separate(db: &Db, id: &str) -> Result<()> {
     review::resolve(&conn, id, "kept-separate")
 }
 
+/// Remembers two games as "not duplicates" (resolved `kept-separate`), as if the user had chosen
+/// that on their duplicate item: used when a linked entry is split off again (`links::unlink`),
+/// so the check doesn't suggest linking them right back.
+pub fn remember_separate(conn: &Connection, a: &str, b: &str) -> Result<()> {
+    let (a, b) = if a <= b { (a, b) } else { (b, a) };
+    let key = format!("{HEALTH_DUPLICATE}:{a},{b}");
+    let details = json!({
+        "reasons": Vec::<&str>::new(),
+        "games": [{"gameId": a, "title": "", "store": "", "playtimeMinutes": 0, "paths": []}, {"gameId": b, "title": "", "store": "", "playtimeMinutes": 0, "paths": []}],
+    });
+    review::upsert(conn, HEALTH_DUPLICATE, &key, None, &details)?;
+    conn.execute(
+        "UPDATE scan_review SET status='resolved',resolution='kept-separate',updatedAt=? WHERE key=?",
+        params![crate::types::now_ms(), key],
+    )?;
+    Ok(())
+}
+
 /// Merges the second game of a duplicate pair into the first, or the first into the second
 /// when `target` names it, with `db::merge_games` (playtime summed, sessions moved). Returns
-/// the (target, source) pair for the play tracker.
+/// the (target, source) pair for the play tracker. The interface links pairs through the review
+/// step instead (`link_commands::library_link`); kept for the tests of the pair item.
+#[cfg(test)]
 pub fn merge_pair(db: &Db, id: &str, target: Option<&str>) -> Result<(String, String)> {
     let mut conn = db.lock();
     let item = open_item(&conn, id, HEALTH_DUPLICATE)?;
@@ -948,7 +968,12 @@ pub fn merge_routes(db: &Db, id: &str) -> Result<()> {
             .find(|&i| game.routes[i].installed == Some(true))
             .unwrap_or(indexes[0]);
         for &i in indexes.iter().filter(|&&i| i != keep) {
+            let name = routes[keep].name.clone();
             routes[keep] = db::merge_route(&game.routes[i], &routes[keep]);
+            // The kept route's own name wins (`merge_route` prefers the stored one for scans).
+            if name.is_some() {
+                routes[keep].name = name;
+            }
             drop.insert(i);
         }
     }

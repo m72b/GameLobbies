@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { LinkReview } from './link-review'
 import type { HealthSummary, ReviewItem } from '../shared/types'
 
 export type HealthKind = 'missing-file' | 'health-duplicate' | 'duplicate-route'
@@ -37,21 +38,16 @@ function MissingItem({ item, run, busy }: Props<'missing-file'>) {
 }
 
 function DuplicateGamesItem({ item, run, busy }: Props<'health-duplicate'>) {
-  const [confirming, setConfirming] = useState(false)
+  const [reviewing, setReviewing] = useState(false)
   const games = item.details.games
-  const [target, setTarget] = useState(games[0]?.gameId ?? '')
   const id = item.id
   return <>
-    <p className="muted-text">Looks like the same game ({item.details.reasons.map(reason => reasonText[reason]).join(', ')}). Merging keeps all playtime and launch routes.</p>
+    <p className="muted-text">Looks like the same game ({item.details.reasons.map(reason => reasonText[reason]).join(', ')}). Nothing is linked until you review it: linking keeps every launch route, playtime and session, and can be undone from the game page.</p>
     <ul className="review-games">{games.map(game => <li key={game.gameId}><b>{game.title}</b> · {game.store} · {game.playtimeMinutes} min{game.paths.map(path => <div className="root-path" key={path} title={path}>{path}</div>)}</li>)}</ul>
-    {confirming
-      ? <><fieldset className="review-choices"><legend>Keep which game? The other is merged into it.</legend>
-        {games.map(game => <label key={game.gameId}><input type="radio" name={'merge-' + id} checked={target === game.gameId} onChange={() => setTarget(game.gameId)} /> {game.title} · {game.store}</label>)}</fieldset>
-        <div className="settings-actions"><button type="button" className="primary-button" disabled={busy || !target} onClick={() => run(() => window.lobby.health.merge(id, target), 'Games merged')}>Merge</button><button type="button" className="secondary-button" onClick={() => setConfirming(false)}>Cancel</button></div></>
-      : <div className="settings-actions"><button type="button" className="secondary-button" disabled={busy} onClick={() => setConfirming(true)}>Merge…</button><button type="button" className="secondary-button" disabled={busy} onClick={() => run(() => window.lobby.health.dismiss(id), 'Saved. These won’t be suggested again.')}>Not duplicates</button></div>}
+    <div className="settings-actions"><button type="button" className="secondary-button" disabled={busy} onClick={() => setReviewing(true)}>Link…</button><button type="button" className="secondary-button" disabled={busy} onClick={() => run(() => window.lobby.health.dismiss(id), 'Saved. These won’t be suggested again.')}>Not duplicates</button></div>
+    {reviewing && <LinkReview gameIds={games.map(game => game.gameId)} reviewId={id} onClose={() => setReviewing(false)} onLinked={() => { setReviewing(false); run(() => window.lobby.review.list(), 'Games linked') }} />}
   </>
 }
-
 function DuplicateRouteItem({ item, run, busy }: Props<'duplicate-route'>) {
   const id = item.id
   return <>

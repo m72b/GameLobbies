@@ -16,6 +16,8 @@ mod importers;
 mod launch;
 mod launcher_commands;
 mod launchers;
+mod link_commands;
+mod links;
 mod local;
 mod local_commands;
 mod localscan;
@@ -228,7 +230,12 @@ pub fn run() {
             commands::library_launch_cancel,
             commands::library_launch_pending,
             commands::library_save,
-            commands::library_merge,
+            link_commands::library_link_preview,
+            link_commands::library_link,
+            link_commands::library_unlink_preview,
+            link_commands::library_unlink,
+            link_commands::library_route_rename,
+            link_commands::library_route_args,
             commands::library_remove,
             commands::library_reset_playtime,
             commands::library_add,
@@ -265,7 +272,6 @@ pub fn run() {
             health_commands::health_locate,
             health_commands::health_remove_route,
             health_commands::health_dismiss,
-            health_commands::health_merge,
             health_commands::health_merge_routes,
             local_commands::library_set_emulator,
             local_commands::library_add_local_game,

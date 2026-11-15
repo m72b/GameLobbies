@@ -927,6 +927,7 @@ mod tests {
             game_notes: None,
             game_added: Some(all_added(&conn).unwrap()),
             play_sessions: None,
+            game_links: None,
             launchers: None,
         };
         let text = serde_json::to_value(&backup).unwrap();

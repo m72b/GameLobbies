@@ -23,8 +23,9 @@
 //!   never finds, claims or marks missing that root's games or emulators; each route keeps the
 //!   `root:<id>` state of the root that found it, and reconcile and root removal only touch
 //!   their own root's state.
-//! - Games are only ever matched by route identity; similar titles are reported as
-//!   `duplicate` review items, never merged. (Launcher games folders are the exception, below.)
+//! - Games are only ever matched by route identity (or, in launcher games folders, the same
+//!   file or folder, below); similar titles are reported as `duplicate` review items, never
+//!   merged.
 //!
 //! Launcher games folders (a `games` root with `launcherId`, see `roots`):
 //! - One scan classifies the mixed app folder: emulator executables (the emulator discovery,
@@ -42,9 +43,11 @@
 //!   several systems share is matched to the one system an enabled emulator runs; otherwise it is
 //!   an `uncertain-rom` review item where the user picks the emulator.
 //! - A route found there joins an existing game instead of duplicating it: the game holding the
-//!   same route identity, else the one game with a route to the same file or folder, else the
-//!   one game with the same clean title (and, for ROMs, system). Only the route is added: title,
-//!   cover, favourite, hidden, notes, sessions and playtime stay as they are.
+//!   same route identity, else the one game with a route to the same file or folder. Only the
+//!   route is added: title, cover, favourite, hidden, notes, sessions and playtime stay as they
+//!   are. A title alone never joins games (it may be another edition): a find with the same
+//!   clean title as a game is added as its own game and offered as a `duplicate` to link, with
+//!   the review step (`links`).
 //! - Rescans touch only routes holding this root's install state, like any root.
 //! - Removing such a root keeps its games (their routes just stop belonging to the folder) or
 //!   removes the routes it found ([`remove_launcher_root`]).
@@ -320,29 +323,12 @@ fn attach_to_existing(conn: &Connection, games: &mut [Game]) -> Result<HashSet<u
     let existing = db::all_games(conn)?;
     let mut identities: HashSet<String> = HashSet::new();
     let mut by_path: HashMap<String, HashSet<String>> = HashMap::new();
-    let mut by_title: HashMap<String, Vec<TitleCandidate>> = HashMap::new();
     for game in &existing {
-        let mut systems = HashSet::new();
-        let mut rom = false;
-        let local = game.routes.iter().any(is_file_route);
         for route in &game.routes {
             identities.insert(db::route_identity(route));
             for key in route_path_keys(route) {
                 by_path.entry(key).or_default().insert(game.id.clone());
             }
-            if route.source_id == ROM_SOURCE {
-                rom = true;
-                if let Some(system) = &route.system {
-                    systems.insert(system.clone());
-                }
-            }
-        }
-        let title = catalog::title_key(&game.title);
-        if !title.is_empty() {
-            by_title
-                .entry(title)
-                .or_default()
-                .push((game.id.clone(), systems, rom, local));
         }
     }
     let mut attached = HashSet::new();
@@ -357,44 +343,15 @@ fn attach_to_existing(conn: &Connection, games: &mut [Game]) -> Result<HashSet<u
         for key in route_path_keys(route) {
             owners.extend(by_path.get(&key).into_iter().flatten().cloned());
         }
-        let owner = match owners.len() {
-            1 => owners.into_iter().next(),
-            0 => {
-                let system = route.system.clone().filter(|s| s != catalog::PC);
-                let fits: Vec<&String> = by_title
-                    .get(&catalog::title_key(&game.title))
-                    .into_iter()
-                    .flatten()
-                    // A title alone only joins a game that is already played from a file (a
-                    // local, ROM or launcher route): a store game with the same name may be
-                    // another edition, so that pair is offered as a duplicate to link instead.
-                    .filter(|(_, _, _, local)| *local)
-                    .filter(|(_, systems, rom, _)| match &system {
-                        // A ROM joins a game with a ROM of the same system.
-                        Some(s) if route.source_id == ROM_SOURCE => systems.contains(s),
-                        // A PC game (or a launcher's file) joins a game that isn't a ROM.
-                        _ => !rom,
-                    })
-                    .map(|(id, _, _, _)| id)
-                    .collect();
-                match fits.as_slice() {
-                    [only] => Some((*only).clone()),
-                    _ => None,
-                }
-            }
-            _ => None,
-        };
-        if let Some(id) = owner {
-            game.id = id;
+        // Only the same file or folder joins a game. A title alone never does (it may be
+        // another edition): `refresh_duplicates` offers that pair to link instead.
+        if owners.len() == 1 {
+            game.id = owners.into_iter().next().unwrap_or_default();
             attached.insert(index);
         }
     }
     Ok(attached)
 }
-
-/// An existing game a find may join by title: (game id, its ROM systems, has a ROM route, has a
-/// local/ROM/launcher route).
-type TitleCandidate = (String, HashSet<String>, bool, bool);
 
 /// A route that plays a file on this PC: local, ROM or custom launcher.
 fn is_file_route(route: &GameRoute) -> bool {
@@ -3268,7 +3225,7 @@ mod tests {
         let LocalFile::Game(hades) = game_for_file(&hades_exe, &HashMap::new()).unwrap() else {
             panic!("an .exe is a game");
         };
-        // A local game with the same title elsewhere (played from a file: joins by title).
+        // A local game with the same title elsewhere (a title alone never joins: offered to link).
         let other_ori = f.dir.file("Elsewhere/Ori.exe");
         let LocalFile::Game(ori) = game_for_file(&other_ori, &HashMap::new()).unwrap() else {
             panic!("an .exe is a game");
@@ -3303,22 +3260,44 @@ mod tests {
         let l = save_launcher(&f, None, &["file"]);
         let root = launcher_root(&f, &l, "App");
         let summary = f.scan();
-        // Hades: the same file; Ori: the same clean title as a game played from a file. Celeste
-        // only shares a title with a store game: added as its own game, offered as a duplicate.
-        assert_eq!(summary.games.routes_added, 2);
-        assert_eq!(summary.games.added, 7);
+        // Hades: the same file joins. Ori and Celeste only share a clean title with a game (it
+        // may be another edition): each is added as its own game and offered as a duplicate.
+        assert_eq!(summary.games.routes_added, 1);
+        assert_eq!(summary.games.added, 8);
         let hades_now = f.game("Hades");
         assert_eq!(hades_now.id, hades.id);
         assert_eq!(hades_now.routes.len(), 2);
         assert_eq!(hades_now.routes[0], hades.routes[0]);
         assert_eq!(hades_now.routes[1].launcher_id.as_deref(), Some("app"));
-        let ori_now = f.game(&ori.title);
-        assert_eq!(ori_now.id, ori.id);
-        assert_eq!(ori_now.routes.len(), 2);
-        assert_eq!(ori_now.routes[0], ori.routes[0]);
-        assert!(ori_now.routes[1]
+        let oris: Vec<Game> = f
+            .games()
+            .into_iter()
+            .filter(|g| g.title == ori.title)
+            .collect();
+        assert_eq!(oris.len(), 2, "never merged by title");
+        let ori_mine = oris.iter().find(|g| g.id == ori.id).unwrap();
+        assert_eq!(ori_mine.routes, ori.routes);
+        assert!(ori_mine.favorite, "user data kept");
+        let ori_found = oris.iter().find(|g| g.id != ori.id).unwrap().clone();
+        assert!(ori_found.routes[0]
             .launch_target
             .ends_with(r"Games\Ori\ori.exe"));
+        let ori_duplicate = open_items(&f)
+            .into_iter()
+            .find(|i| i.kind == DUPLICATE && duplicate_ids(i).contains(&ori.id))
+            .expect("the same title as a game played from a file is offered as a duplicate");
+        resolve(
+            &f.db,
+            &ori_duplicate.id,
+            &Resolution::Link {
+                target_game_id: Some(ori.id.clone()),
+            },
+        )
+        .unwrap();
+        let ori_now = db::get_game(&f.db.lock(), &ori.id).unwrap().unwrap();
+        assert_eq!(ori_now.routes.len(), 2);
+        assert_eq!(ori_now.routes[0], ori.routes[0]);
+        assert_eq!(ori_now.routes[1], ori_found.routes[0]);
         assert!(ori_now.favorite, "user data kept");
         // The store-only game is not touched at all.
         let celeste = db::get_game(&f.db.lock(), "steam:504230").unwrap().unwrap();
@@ -3333,7 +3312,7 @@ mod tests {
         assert_eq!(found.routes[0].launcher_id.as_deref(), Some("app"));
         let duplicate = open_items(&f)
             .into_iter()
-            .find(|i| i.kind == DUPLICATE)
+            .find(|i| i.kind == DUPLICATE && duplicate_ids(i).contains(&"steam:504230".to_string()))
             .expect("the same title as a store game is offered as a duplicate");
         let ids: HashSet<String> = duplicate_ids(&duplicate).into_iter().collect();
         assert_eq!(ids, ["steam:504230".to_string(), found.id.clone()].into());
