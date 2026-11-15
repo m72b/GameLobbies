@@ -1,8 +1,9 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import Fuse from 'fuse.js'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { Boxes, Clock3, CloudDownload, EyeOff, Gamepad2, HardDrive, Heart, History, Library, ListFilter, MoreHorizontal, Pencil, Play, Plus, Search, Settings2, Star, X } from 'lucide-react'
+import { Clock3, CloudDownload, EyeOff, Gamepad2, HardDrive, Heart, History, Library, ListFilter, MoreHorizontal, Pencil, Play, Plus, Search, Settings2, Star, X } from 'lucide-react'
 import { StoreIcon } from './store-icons'
+import { GlMark } from './gl-mark'
 import type { Game, RunningGame, Settings, Store as StoreName, SteamGridDbCover, UpdateInfo } from '../shared/types'
 import { defaultSettings } from '../shared/defaults'
 import { applyTheme } from './theme'
@@ -390,13 +391,13 @@ export default function App() {
 
   return <div className="app-shell">
     <header className="titlebar">
-      <div className="brand">Game Lobby</div>{nowPlaying && !(pageOpen && openId === nowPlaying.game.id) && <NowPlaying game={nowPlaying.game} entry={nowPlaying.item} onOpen={() => openGame(nowPlaying.game)} />}<div className="drag-space" data-tauri-drag-region />
+      <div className="brand"><GlMark size={12} className="gl-mark" />Game Lobby</div>{nowPlaying && !(pageOpen && openId === nowPlaying.game.id) && <NowPlaying game={nowPlaying.game} entry={nowPlaying.item} onOpen={() => openGame(nowPlaying.game)} />}<div className="drag-space" data-tauri-drag-region />
       <button className="title-action" onClick={() => window.lobby.window.minimize()} aria-label="Minimize">—</button>
       <button className="title-action" onClick={() => window.lobby.window.toggleMaximize()} aria-label="Maximize">□</button>
       <button className="title-action close" onClick={() => window.lobby.window.close()} aria-label="Close">×</button>
     </header>
     <aside className={'rail ' + (collapsed ? 'compact' : '')}>
-      <button className="rail-button" onClick={() => setCollapsed(!collapsed)} title="Menu"><Boxes /></button>
+      <button className="rail-button" onClick={() => setCollapsed(!collapsed)} title="Menu"><GlMark size={16} className="gl-mark" /></button>
       <button className="rail-button search-button" onClick={() => searchRef.current?.focus()} title="Search"><Search /></button>
       <div className="rail-sep" />
       <button className={'rail-button ' + (view === 'All Games' ? 'active' : '')} onClick={() => { setStorageOpen(false); setView('All Games'); setStore('All Games') }} title="All games"><Library /></button>

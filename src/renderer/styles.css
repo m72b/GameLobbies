@@ -346,3 +346,7 @@
 .sh-note textarea{resize:vertical;min-height:80px}.sh-note small{display:block;text-align:right;color:var(--muted);font-size:10px;margin-top:4px}.sh-note small.sh-over{color:#e48787}
 .sh-shot-picker{display:grid;grid-template-columns:repeat(auto-fill,minmax(90px,1fr));gap:6px;max-height:190px;overflow:auto}.sh-shot{padding:0;border:2px solid transparent;border-radius:6px;background:#22252a;aspect-ratio:16/9;overflow:hidden}.sh-shot img{width:100%;height:100%;object-fit:cover;display:block}.sh-shot.chosen{border-color:var(--accent)}
 .sh-share-head{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.sh-share-head .secondary-button{height:30px}.sh-link{margin:0 0 0 auto;display:inline-flex;align-items:center;gap:4px}.sh-preview{margin-top:10px;font-family:ui-monospace,Consolas,monospace;font-size:11px;resize:vertical}
+
+/* GL mark in the title bar and the side rail (gl-mark.tsx) */
+.brand{display:flex;align-items:center;gap:7px}
+.rail-button svg.gl-mark{width:25px;height:16px}
