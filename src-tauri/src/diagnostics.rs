@@ -265,8 +265,7 @@ mod tests {
             webview: Some("130.0.2849.80".into()),
             data_dir: r"C:\Users\Alice\AppData\Roaming\app.gamelobby.desktop".into(),
             update_endpoints: vec![
-                "https://github.com/m72b/GameLobby/releases/latest/download/latest.json"
-                    .into(),
+                "https://github.com/m72b/GameLobby/releases/latest/download/latest.json".into(),
             ],
         }
     }

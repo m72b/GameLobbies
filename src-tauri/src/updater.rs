@@ -739,8 +739,7 @@ mod tests {
 
     #[test]
     fn download_prefix_comes_from_a_github_endpoint() {
-        let endpoint =
-            "https://github.com/m72b/GameLobby/releases/latest/download/latest.json";
+        let endpoint = "https://github.com/m72b/GameLobby/releases/latest/download/latest.json";
         assert_eq!(
             download_prefix(endpoint).as_deref(),
             Some("/m72b/GameLobby/releases/download/")
