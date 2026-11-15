@@ -592,7 +592,8 @@ pub fn sweep(conn: &Connection, covers_dir: &Path) -> Result<usize> {
 }
 
 /// Start-up clean-up of the files themselves: leftover temporary files, and cache-named files
-/// that are neither indexed nor referenced (both only when older than a few minutes).
+/// that are neither indexed nor referenced, and custom launcher icons no launcher uses (all only
+/// when older than a few minutes, so an icon just chosen but not saved yet is kept).
 pub fn sweep_files(conn: &Connection, covers_dir: &Path) -> Result<usize> {
     let Ok(entries) = std::fs::read_dir(covers_dir) else {
         return Ok(0);
@@ -602,6 +603,7 @@ pub fn sweep_files(conn: &Connection, covers_dir: &Path) -> Result<usize> {
         .prepare("SELECT file FROM cover_cache")?
         .query_map([], |r| r.get(0))?
         .collect::<rusqlite::Result<_>>()?;
+    let icons = crate::launchers::referenced_icons(conn)?;
     let now = SystemTime::now();
     let mut removed = 0;
     for entry in entries.flatten() {
@@ -609,7 +611,9 @@ pub fn sweep_files(conn: &Connection, covers_dir: &Path) -> Result<usize> {
         let orphan = CACHE_TEMP_NAME.is_match(&name)
             || (is_cache_file_name(&name)
                 && !indexed.contains(&name)
-                && !referenced.contains(&name));
+                && !referenced.contains(&name))
+            // Icons of deleted launchers, or replaced by another image.
+            || (crate::launchers::icon_file_ok(&name) && !icons.contains(&name));
         if !orphan {
             continue;
         }

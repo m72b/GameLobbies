@@ -658,6 +658,32 @@ mod tests {
         assert_eq!(std::fs::read_dir(&covers_dir).unwrap().count(), 4);
     }
 
+    /// `import_image_as` keeps only sniffed types in its list: every type the sniffer can
+    /// return must be one page art accepts, or a real image would be refused as "not supported".
+    #[test]
+    fn every_sniffed_type_is_an_accepted_page_image() {
+        let samples: [&[u8]; 5] = [
+            PNG,
+            &[0xFF, 0xD8, 0xFF, 0xE0],
+            b"RIFF\x10\0\0\0WEBPVP8 ",
+            b"\0\0\0\x1cftypavif\0\0\0\0",
+            b"GIF89a  ",
+        ];
+        let mut seen = Vec::new();
+        for bytes in samples {
+            let ext = crate::covercache::sniff(bytes).expect("an image");
+            assert!(PAGE_IMAGE_EXTENSIONS.contains(&ext), "{ext}");
+            seen.push(ext);
+        }
+        assert_eq!(seen, ["png", "jpg", "webp", "avif", "gif"]);
+        // SVG and other text formats are never sniffed as images.
+        assert_eq!(crate::covercache::sniff(b"<svg xmlns=\"x\"/>"), None);
+        assert_eq!(
+            crate::covercache::sniff(b"<?xml version=\"1.0\"?><svg/>"),
+            None
+        );
+    }
+
     #[test]
     fn image_formats_are_recognised_by_content() {
         assert_eq!(sniff_image(PNG), Some("png"));

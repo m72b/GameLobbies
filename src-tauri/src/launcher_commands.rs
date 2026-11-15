@@ -3,6 +3,7 @@
 //! picker opened here.
 
 use crate::launchers::{self, CustomLauncher, LauncherInput, RemoveMode, SaveContext, TargetKind};
+use crate::local_commands::confirm_natively;
 use crate::picks::PickKind;
 use crate::state::AppState;
 use crate::types::Game;
@@ -46,9 +47,15 @@ pub async fn launchers_list(state: State<'_, AppState>) -> CmdResult<Vec<CustomL
 /// Creates or updates a launcher from a [`LauncherInput`] (no paths). The executable and
 /// working folder come from the latest picks of `launchers_browse_executable` /
 /// `launchers_browse_folder` when the input asks for them, else they stay as stored.
+///
+/// A new launcher, or a change to what its launches run (program, arguments, target kind,
+/// working folder), is shown to the user in a native dialog first (the exact program and
+/// argument list) and saved only when they choose Save: the renderer alone can't make Game
+/// Lobby run something new. Name, icon and colour changes save directly.
 #[tauri::command]
 pub async fn launchers_save(
     app: AppHandle,
+    window: WebviewWindow,
     state: State<'_, AppState>,
     launcher: Value,
 ) -> CmdResult<Vec<CustomLauncher>> {
@@ -62,7 +69,7 @@ pub async fn launchers_save(
     let requested_icon = input.icon_value.clone();
     let icon_found = launchers::icon_exists(&state.covers_dir(), &requested_icon);
     let icon_exists = |name: &str| icon_found && name == requested_icon;
-    let accepted = {
+    let (stored, accepted) = {
         let conn = state.db.lock();
         let stored = match &id {
             Some(id) => launchers::get(&conn, id).map_err(err)?,
@@ -72,7 +79,7 @@ pub async fn launchers_save(
             Some(s) => !launchers::games_of(&conn, &s.id).map_err(err)?.is_empty(),
             None => false,
         };
-        let mut accepted = launchers::accept_renderer_launcher(
+        let accepted = launchers::accept_renderer_launcher(
             input,
             SaveContext {
                 stored: stored.as_ref(),
@@ -83,6 +90,25 @@ pub async fn launchers_save(
             },
         )
         .map_err(err)?;
+        (stored, accepted)
+    };
+    if launchers::needs_confirmation(stored.as_ref(), &accepted.launcher) {
+        let prompt = launchers::confirmation_prompt(&accepted.launcher).map_err(err)?;
+        if !confirm_natively(&window, "Confirm launcher", &prompt, "Save").await {
+            return Err("The launcher was not saved.".into());
+        }
+    }
+    let mut launcher = accepted.launcher;
+    {
+        let conn = state.db.lock();
+        // The dialog may have been open for a while: save only over what was confirmed.
+        let now = match &id {
+            Some(id) => launchers::get(&conn, id).map_err(err)?,
+            None => None,
+        };
+        if now != stored {
+            return Err("The launcher changed in the meantime. Open it again and save.".into());
+        }
         if stored.is_none() {
             if launchers::list(&conn).map_err(err)?.len() >= launchers::MAX_LAUNCHERS {
                 return Err(format!(
@@ -90,18 +116,17 @@ pub async fn launchers_save(
                     launchers::MAX_LAUNCHERS
                 ));
             }
-            accepted.launcher.sort_order = launchers::next_sort_order(&conn).map_err(err)?;
+            launcher.sort_order = launchers::next_sort_order(&conn).map_err(err)?;
         }
-        launchers::save(&conn, &accepted.launcher).map_err(err)?;
-        accepted
-    };
+        launchers::save(&conn, &launcher).map_err(err)?;
+    }
     if accepted.used_executable_pick {
         state
             .picks
-            .forget(PickKind::LauncherExecutable, &accepted.launcher.executable);
+            .forget(PickKind::LauncherExecutable, &launcher.executable);
     }
     if accepted.used_folder_pick {
-        if let Some(dir) = &accepted.launcher.working_dir {
+        if let Some(dir) = &launcher.working_dir {
             state.picks.forget(PickKind::LauncherFolder, dir);
         }
     }

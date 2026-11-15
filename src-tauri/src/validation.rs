@@ -231,6 +231,16 @@ fn route(value: &Value) -> Result<GameRoute> {
     short_text(&mut r.launch_target, 8_192, "Launch target")?;
     // Custom launcher routes: a valid launcher id, and a target that is a drive path or a
     // valid identifier (checked against the launcher's own kind again at launch).
+    // Route identities are compared lower-case: `Launcher:x` must not pass as a non-launcher
+    // route here and then match a launcher route elsewhere.
+    let prefix = crate::launchers::SOURCE_PREFIX;
+    if r.source_id
+        .get(..prefix.len())
+        .is_some_and(|p| p.eq_ignore_ascii_case(prefix))
+        && !r.source_id.starts_with(prefix)
+    {
+        bail!("A custom launcher route is invalid.");
+    }
     if crate::launchers::is_launcher_route(&r) {
         let id_ok = crate::launchers::launcher_id_of(&r)
             .is_some_and(|id| crate::launchers::check_id(id).is_ok_and(|clean| clean == id));

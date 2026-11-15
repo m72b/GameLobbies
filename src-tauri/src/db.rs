@@ -1607,7 +1607,7 @@ pub fn reconcile_local_root(
     })
 }
 
-/// Shortcuts the user confirmed: normalized `.lnk` path â†’ (target, arguments) they saw.
+/// Shortcuts the user confirmed: normalized `.lnk` path → (target, arguments) they saw.
 pub fn shortcut_confirmations(db: &Connection) -> Result<HashMap<String, (String, String)>> {
     let mut stmt = db.prepare("SELECT shortcutKey,target,arguments FROM local_shortcut_ok")?;
     let rows = stmt

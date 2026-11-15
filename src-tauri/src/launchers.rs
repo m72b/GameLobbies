@@ -27,7 +27,7 @@
 
 use crate::db;
 use crate::emulators::{drive_path_ok, executable_path_ok};
-use crate::launch::{check_arguments, tokenize_template};
+use crate::launch::{check_arguments, tokenize_arguments};
 use crate::localscan::key_of;
 use crate::types::{now_ms, Game, GamePatch, GameRoute};
 use anyhow::{anyhow, bail, Result};
@@ -215,15 +215,16 @@ pub fn check_icon(kind: &str, value: &str) -> Result<()> {
         "builtin" => bail!("Choose one of the built-in icons."),
         "image" if icon_file_ok(value) => Ok(()),
         "image" => {
-            bail!("The launcher icon image is not valid. Choose it again with \"Use an imageâ€¦\".")
+            bail!("The launcher icon image is not valid. Choose it again with \"Use an image…\".")
         }
         _ => bail!("The launcher icon is invalid."),
     }
 }
 
 /// A typed per-game identifier, passed to the launcher as exactly one argument: at most
-/// [`MAX_IDENTIFIER_CHARS`] characters of `A-Z a-z 0-9 space . _ : @ # ( ) ' & + , ! -`, not
-/// starting with `-` or `/` (it would be read as an option), without `\`, `..` or control
+/// [`MAX_IDENTIFIER_CHARS`] characters of `A-Z a-z 0-9 space . _ : @ # ( ) ' + , ! -`, not
+/// starting with `-` or `/` (it would be read as an option) or `@` (a response file to many
+/// programs), not starting like a drive (`C:`, a drive-relative path), without `\`, `..` or control
 /// characters. Leading and trailing spaces are removed. Only ASCII is accepted, so no
 /// look-alike of `\ / : " .` can be "best-fit" converted into a real one.
 pub fn check_identifier(raw: &str) -> Result<String> {
@@ -240,14 +241,21 @@ pub fn check_identifier(raw: &str) -> Result<String> {
     if id.contains('\\') || id.contains('/') {
         bail!("The identifier can't contain \"\\\" or \"/\". To use a file or folder, set the launcher's target to File or Folder.");
     }
-    let allowed = |c: char| c.is_ascii_alphanumeric() || " ._:@#()'&+,!-".contains(c);
+    let allowed = |c: char| c.is_ascii_alphanumeric() || " ._:@#()'+,!-".contains(c);
     if let Some(c) = id.chars().find(|c| !allowed(*c)) {
         bail!(
-            "The identifier can't contain \"{c}\". Use letters, digits, spaces and . _ : @ # ( ) ' & + , ! -"
+            "The identifier can't contain \"{c}\". Use letters, digits, spaces and . _ : @ # ( ) ' + , ! -"
         );
     }
     if id.starts_with('-') {
         bail!("The identifier can't start with \"-\": the launcher would read it as an option.");
+    }
+    if id.starts_with('@') {
+        bail!("The identifier can't start with \"@\": the launcher could read it as a file of more arguments.");
+    }
+    let bytes = id.as_bytes();
+    if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+        bail!("The identifier can't start like a drive (\"C:\"): the launcher could read it as a file path.");
     }
     if id.contains("..") {
         bail!("The identifier can't contain \"..\".");
@@ -309,7 +317,7 @@ pub fn check_launcher_template(template: &str, executable: &str) -> Result<()> {
         "launcher",
         r"plugins\settings.ini",
     )?;
-    for token in tokenize_template(template)? {
+    for token in tokenize_arguments(template, "launcher")? {
         if token != TARGET && (token.contains('{') || token.contains('}')) {
             bail!("The launcher argument \"{token}\" is not allowed: {{target}} must be an argument on its own (like --start {{target}}), and no other placeholders exist.");
         }
@@ -323,7 +331,7 @@ pub fn check_launcher_template(template: &str, executable: &str) -> Result<()> {
 pub fn build_argv(template: &str, target: &str) -> Result<Vec<String>> {
     let mut argv = Vec::new();
     let mut used = false;
-    for token in tokenize_template(template)? {
+    for token in tokenize_arguments(template, "launcher")? {
         if token == TARGET {
             argv.push(target.to_string());
             used = true;
@@ -427,14 +435,14 @@ pub fn accept_renderer_launcher(input: LauncherInput, ctx: SaveContext<'_>) -> R
     }
     let (executable, used_executable_pick) = if input.use_executable_pick {
         let pick = ctx.executable_pick.ok_or_else(|| {
-            anyhow!("Choose the launcher's executable again with Browseâ€¦ (the choice expired).")
+            anyhow!("Choose the launcher's executable again with Browse… (the choice expired).")
         })?;
         (pick, true)
     } else {
         match stored {
             Some(s) => (s.executable.clone(), false),
             None => {
-                bail!("Choose the launcher's executable with Browseâ€¦ (it can't be typed in).")
+                bail!("Choose the launcher's executable with Browse… (it can't be typed in).")
             }
         }
     };
@@ -442,13 +450,13 @@ pub fn accept_renderer_launcher(input: LauncherInput, ctx: SaveContext<'_>) -> R
         "executable" => (None, false),
         "folder" if input.use_folder_pick => {
             let pick = ctx.folder_pick.ok_or_else(|| {
-                anyhow!("Choose the working folder again with Browseâ€¦ (the choice expired).")
+                anyhow!("Choose the working folder again with Browse… (the choice expired).")
             })?;
             (Some(pick), true)
         }
         "folder" => match stored.and_then(|s| s.working_dir.clone()) {
             Some(dir) => (Some(dir), false),
-            None => bail!("Choose the working folder with Browseâ€¦."),
+            None => bail!("Choose the working folder with Browse…."),
         },
         _ => bail!("The working folder setting is invalid."),
     };
@@ -464,7 +472,7 @@ pub fn accept_renderer_launcher(input: LauncherInput, ctx: SaveContext<'_>) -> R
     let unchanged_icon =
         stored.is_some_and(|s| s.icon_kind == input.icon_kind && s.icon_value == input.icon_value);
     if input.icon_kind == "image" && !unchanged_icon && !(ctx.icon_exists)(&input.icon_value) {
-        bail!("The icon image was not found. Choose it again with \"Use an imageâ€¦\".");
+        bail!("The icon image was not found. Choose it again with \"Use an image…\".");
     }
     let launcher = validate(CustomLauncher {
         id: match stored {
@@ -488,6 +496,48 @@ pub fn accept_renderer_launcher(input: LauncherInput, ctx: SaveContext<'_>) -> R
         used_executable_pick,
         used_folder_pick,
     })
+}
+
+/// Whether a renderer save creates a launcher or changes what its launches run (program,
+/// arguments, target kind or working folder). Such a save is confirmed by the user in a native
+/// dialog showing [`confirmation_prompt`], so a compromised renderer can't change it alone.
+/// Name, icon and colour changes save without asking.
+pub fn needs_confirmation(stored: Option<&CustomLauncher>, next: &CustomLauncher) -> bool {
+    stored.is_none_or(|s| {
+        s.executable != next.executable
+            || s.args_template != next.args_template
+            || s.target_kind != next.target_kind
+            || s.working_dir != next.working_dir
+    })
+}
+
+/// The native confirmation text: the launcher's name, its program, the exact argument list
+/// (one argument per line, `{target}` standing for each game) and the working folder.
+pub fn confirmation_prompt(l: &CustomLauncher) -> Result<String> {
+    let argv = build_argv(&l.args_template, TARGET)?;
+    let lines: Vec<String> = argv
+        .iter()
+        .enumerate()
+        .map(|(i, arg)| format!("  {}. {arg}", i + 1))
+        .collect();
+    let what = match l.kind()? {
+        TargetKind::File => "the game's file",
+        TargetKind::Folder => "the game's folder",
+        TargetKind::Identifier => "the game's identifier",
+    };
+    let folder = match &l.working_dir {
+        Some(dir) => dir.clone(),
+        None => Path::new(&l.executable)
+            .parent()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+    };
+    Ok(format!(
+        "Save the launcher \"{}\"?\n\nProgram:\n  {}\n\nArguments (one per line; {TARGET} is {what}):\n{}\n\nWorking folder:\n  {folder}\n\nGame Lobby runs exactly this whenever you play one of this launcher's games. Save it only if you set it up yourself.",
+        l.name,
+        l.executable,
+        lines.join("\n")
+    ))
 }
 
 /// Copies a user-chosen icon image into `covers_dir` and returns its new bare file name.
@@ -751,6 +801,16 @@ pub fn save(conn: &Connection, l: &CustomLauncher) -> Result<()> {
     Ok(())
 }
 
+/// The icon files stored launchers use (for the covers folder's start-up clean-up, which
+/// deletes unreferenced [`icon_file_ok`] files once they are old enough).
+pub fn referenced_icons(conn: &Connection) -> Result<std::collections::HashSet<String>> {
+    let mut stmt = conn.prepare("SELECT iconValue FROM custom_launchers WHERE iconKind='image'")?;
+    let names = stmt
+        .query_map([], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(names)
+}
+
 /// The next sort position (after every stored launcher).
 pub fn next_sort_order(conn: &Connection) -> Result<i64> {
     let max: Option<i64> =
@@ -943,7 +1003,7 @@ mod tests {
             "red",
             "#4f8cff;background:url(x)",
             " #4f8cff",
-            "#ï¼”f8cff",
+            "#４f8cff",
         ] {
             assert!(check_color(bad).is_err(), "{bad}");
         }
@@ -978,11 +1038,14 @@ mod tests {
             ("  Hollow Knight  ", "Hollow Knight"),
             ("legendary:Fortnite@main#1", "legendary:Fortnite@main#1"),
             (
-                "Tom & Jerry (1999), 'Gold'+!",
-                "Tom & Jerry (1999), 'Gold'+!",
+                "Tom and Jerry (1999), 'Gold'+!",
+                "Tom and Jerry (1999), 'Gold'+!",
             ),
             ("a.b_c", "a.b_c"),
             ("x-", "x-"),
+            ("user@host", "user@host"),
+            ("Game: Subtitle", "Game: Subtitle"),
+            ("1:2", "1:2"),
         ] {
             assert_eq!(check_identifier(raw).unwrap(), want, "{raw}");
         }
@@ -1017,6 +1080,16 @@ mod tests {
             "a?b",
             "a=b",
             "a{target}",
+            // `&` is not part of the set; `@` can't start one (a response file to many
+            // programs); a drive letter and colon would be a drive-relative path.
+            "Tom & Jerry",
+            "&",
+            "@args.txt",
+            " @x",
+            "@",
+            "C:evil.exe",
+            "c:",
+            "Z:x y",
             // Look-alikes of \ / : " . that best-fit to the real ones.
             "a\u{FF3C}b",
             "a\u{2215}b",
@@ -1024,12 +1097,77 @@ mod tests {
             "C\u{FF1A}x",
             "a\u{FF0E}\u{FF0E}b",
             "\u{FF0D}x",
-            "PokÃ©mon",
+            "Pokémon",
         ] {
             assert!(check_identifier(bad).is_err(), "{bad:?}");
         }
         assert!(check_identifier(&"a".repeat(MAX_IDENTIFIER_CHARS)).is_ok());
         assert!(check_identifier(&"a".repeat(MAX_IDENTIFIER_CHARS + 1)).is_err());
+    }
+
+    #[test]
+    fn options_that_run_other_programs_are_refused_in_launcher_templates() {
+        for bad in crate::launch::tests::DEBUGGING_TEMPLATES {
+            let template = bad.replace("{rom}", TARGET);
+            let e = check_launcher_template(&template, EXE)
+                .unwrap_err()
+                .to_string();
+            assert!(e.contains("not allowed"), "{template}: {e}");
+            assert!(!e.contains("emulator"), "{e}");
+        }
+        assert!(check_launcher_template("--start {target}", EXE).is_ok());
+        let e = check_launcher_template("\"{target}", EXE)
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("launcher") && !e.contains("emulator"), "{e}");
+    }
+
+    #[test]
+    fn launch_changes_are_confirmed_and_cosmetic_ones_are_not() {
+        let stored = validate(launcher(EXE, "identifier")).unwrap();
+        assert!(needs_confirmation(None, &stored), "a new launcher");
+        let mut same = stored.clone();
+        assert!(!needs_confirmation(Some(&stored), &same), "unchanged");
+        same.name = "Heroic Games".into();
+        same.color = "#000000".into();
+        same.icon_value = "star".into();
+        same.sort_order = 3;
+        assert!(
+            !needs_confirmation(Some(&stored), &same),
+            "name, icon, colour"
+        );
+        let changes: [fn(&mut CustomLauncher); 4] = [
+            |l: &mut CustomLauncher| l.executable = r"D:\Other\x.exe".into(),
+            |l: &mut CustomLauncher| l.args_template = "--run {target}".into(),
+            |l: &mut CustomLauncher| l.target_kind = "file".into(),
+            |l: &mut CustomLauncher| l.working_dir = Some(r"D:\Mods".into()),
+        ];
+        for change in changes {
+            let mut next = stored.clone();
+            change(&mut next);
+            assert!(needs_confirmation(Some(&stored), &next));
+        }
+
+        let mut shown = stored.clone();
+        shown.args_template = r#"-p "My Profile" {target} --fullscreen"#.into();
+        let text = confirmation_prompt(&shown).unwrap();
+        assert!(text.contains("\"Heroic\""), "{text}");
+        assert!(text.contains(EXE), "{text}");
+        assert!(
+            text.contains("  1. -p\n  2. My Profile\n  3. {target}\n  4. --fullscreen"),
+            "{text}"
+        );
+        assert!(text.contains("{target} is the game's identifier"), "{text}");
+        assert!(
+            text.contains(r"D:\Launchers\Heroic"),
+            "working folder: {text}"
+        );
+        // Without {target}, the appended target is shown last.
+        shown.args_template = "--silent".into();
+        shown.working_dir = Some(r"D:\Mods".into());
+        let text = confirmation_prompt(&shown).unwrap();
+        assert!(text.contains("  1. --silent\n  2. {target}"), "{text}");
+        assert!(text.contains(r"  D:\Mods"), "{text}");
     }
 
     #[test]
@@ -1429,6 +1567,24 @@ mod tests {
         link[0].app_id = None;
         assert!(crate::validation::check_renderer_routes(&[], &link).is_err());
         assert!(crate::validation::check_renderer_routes(&[], &stored).is_err());
+
+        // The prefix is exact: other spellings are refused, not treated as another source.
+        let patch = |source: &str| {
+            crate::validation::game_patch(&serde_json::json!({
+                "id": "g",
+                "routes": [{ "sourceId": source, "store": "Custom", "launchTarget": "hk" }]
+            }))
+        };
+        assert!(patch("launcher:heroic").is_ok());
+        for bad in [
+            "LAUNCHER:heroic",
+            "Launcher:heroic",
+            "launcheR:x",
+            "LAUNCHER:",
+        ] {
+            assert!(patch(bad).is_err(), "{bad}");
+        }
+        assert!(patch("launch").is_ok(), "an unrelated short source");
     }
 
     #[test]
@@ -1516,6 +1672,50 @@ mod tests {
         assert!(
             all.iter().all(|g| g.id != again.id),
             "the existing game is reused"
+        );
+    }
+
+    #[test]
+    fn unused_icon_files_are_cleaned_up_at_start_up_once_old() {
+        let covers = TempDir::new("launcher-icon-sweep");
+        let db = Db::memory().unwrap();
+        let name = |c: char| format!("launcher-icon-{}.png", c.to_string().repeat(32));
+        let (used, orphan, fresh) = (name('a'), name('b'), name('c'));
+        let mut l = validate(launcher(EXE, "identifier")).unwrap();
+        l.icon_kind = "image".into();
+        l.icon_value = used.clone();
+        save(&db.lock(), &l).unwrap();
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3_600);
+        for file in [&used, &orphan, &fresh] {
+            covers.write(file, b"\x89PNG\r\n\x1a\n");
+        }
+        for file in [used.as_str(), orphan.as_str(), "hero-g-1.png"] {
+            let path = covers.path().join(file);
+            if !path.exists() {
+                covers.write(file, b"x");
+            }
+            std::fs::File::options()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_modified(old)
+                .unwrap();
+        }
+        // The cover cache's own pattern never claims launcher icons.
+        for file in [&used, &orphan, &fresh] {
+            assert!(!crate::covercache::is_cache_file_name(file), "{file}");
+        }
+        assert_eq!(referenced_icons(&db.lock()).unwrap().len(), 1);
+        crate::covercache::sweep_files(&db.lock(), covers.path()).unwrap();
+        assert!(covers.path().join(&used).exists(), "still used");
+        assert!(!covers.path().join(&orphan).exists(), "unused and old");
+        assert!(
+            covers.path().join(&fresh).exists(),
+            "just chosen, not saved yet"
+        );
+        assert!(
+            covers.path().join("hero-g-1.png").exists(),
+            "other covers are left alone"
         );
     }
 

@@ -94,6 +94,11 @@ pub fn parse_launch_arguments(value: Option<&str>) -> Vec<String> {
 /// - Backslashes are always literal (Windows paths); there are no escapes.
 /// - An unterminated quote or more than [`MAX_TEMPLATE_TOKENS`] tokens is an error.
 pub fn tokenize_template(template: &str) -> Result<Vec<String>> {
+    tokenize_arguments(template, "emulator")
+}
+
+/// [`tokenize_template`] for any program's arguments; `noun` names the program in messages.
+pub(crate) fn tokenize_arguments(template: &str, noun: &str) -> Result<Vec<String>> {
     let mut tokens = Vec::new();
     let mut current = String::new();
     let mut in_token = false;
@@ -119,13 +124,13 @@ pub fn tokenize_template(template: &str) -> Result<Vec<String>> {
         }
     }
     if quote.is_some() {
-        bail!("The emulator arguments have an unclosed quote.");
+        bail!("The {noun} arguments have an unclosed quote.");
     }
     if in_token {
         tokens.push(current);
     }
     if tokens.len() > MAX_TEMPLATE_TOKENS {
-        bail!("The emulator arguments have too many parts (at most {MAX_TEMPLATE_TOKENS}).");
+        bail!("The {noun} arguments have too many parts (at most {MAX_TEMPLATE_TOKENS}).");
     }
     Ok(tokens)
 }
@@ -201,6 +206,46 @@ const PLACEHOLDERS: [&str; 3] = ["{rom}", "{romdir}", "{romname}"];
 /// them is almost certainly an attempt to run something else, so it is refused.
 const SHELL_CHARACTERS: [char; 7] = ['&', '|', '<', '>', '^', '%', '`'];
 
+/// Option names (without their `--`, `-` or `/`, lower case) that make a Chromium/Electron or
+/// Node based program (Heroic, Playnite add-ons, many launchers) run another program, load code
+/// or accept remote control. A name that starts with one of these is refused, as is any
+/// `*cmd-prefix` option. No emulator in the catalog needs them.
+const DEBUGGING_OPTIONS: [&str; 9] = [
+    "inspect",
+    "remote-debugging",
+    "gpu-launcher",
+    "no-sandbox",
+    "load-extension",
+    "disable-web-security",
+    "renderer-cmd-prefix",
+    "js-flags",
+    "browser-subprocess-path",
+];
+
+/// The refused option `piece` names (see [`DEBUGGING_OPTIONS`]), compared case-insensitively;
+/// Chromium reads `--x`, `-x` and `/x` alike on Windows.
+/// Refuses a template that uses one of the [`DEBUGGING_OPTIONS`] (also checked right before
+/// an emulator launch, so a profile saved before this check can't use them either).
+pub(crate) fn check_no_debugging_options(template: &str, noun: &str) -> Result<()> {
+    for token in tokenize_arguments(template, noun)? {
+        if let Some(option) = token.split('=').find_map(debugging_option) {
+            bail!("The {noun} argument \"{token}\" is not allowed: {option} options can run other programs or open the {noun} to remote control.");
+        }
+    }
+    Ok(())
+}
+
+fn debugging_option(piece: &str) -> Option<String> {
+    let lower = piece.trim().to_ascii_lowercase();
+    let name = lower
+        .strip_prefix("--")
+        .or_else(|| lower.strip_prefix('-'))
+        .or_else(|| lower.strip_prefix('/'))?;
+    let refused =
+        DEBUGGING_OPTIONS.iter().any(|o| name.starts_with(o)) || name.contains("cmd-prefix");
+    refused.then(|| format!("--{name}"))
+}
+
 /// Checks an emulator argument template that the renderer sent (`emulators_save`), on top of
 /// what [`build_emulator_argv`] already guarantees at launch (no shell, the ROM path is always
 /// exactly one argument).
@@ -267,7 +312,8 @@ pub(crate) fn check_arguments(
         .parent()
         .and_then(|p| crate::tracker::normalize_path(&p.to_string_lossy()))
         .ok_or_else(|| anyhow!("The {noun} executable must be a full path to an .exe file."))?;
-    for token in tokenize_template(template)? {
+    check_no_debugging_options(template, noun)?;
+    for token in tokenize_arguments(template, noun)? {
         for piece in token.split('=') {
             check_template_piece(piece, &folder, placeholders, noun).map_err(|reason| {
                 anyhow!("The {noun} argument \"{token}\" is not allowed: {reason} Paths in the arguments must be inside the {noun}'s folder, like {example}.")
@@ -410,6 +456,7 @@ pub fn prepare_emulator_launch(
     if !rom.exists() {
         bail!("The game file was not found: {}", route.launch_target);
     }
+    check_no_debugging_options(&profile.args, "emulator")?;
     let argv = build_emulator_argv(&profile.args, rom)?;
     let cwd = exe
         .parent()
@@ -599,7 +646,7 @@ pub async fn launch_game(app: &AppHandle, game: &Game, route_index: usize) -> Re
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::localscan::tests::TempDir;
 
@@ -765,6 +812,84 @@ mod tests {
             build_emulator_argv("", path).unwrap(),
             [path.to_string_lossy()]
         );
+    }
+
+    /// Options that make Chromium/Electron/Node programs run other code; refused in every
+    /// template (emulators and custom launchers alike).
+    pub(crate) const DEBUGGING_TEMPLATES: [&str; 24] = [
+        "--gpu-launcher=calc.exe {rom}",
+        "--gpu-launcher calc.exe",
+        "\"--utility-cmd-prefix=cmd /c calc\" {rom}",
+        "--renderer-cmd-prefix=calc",
+        "--plugin-cmd-prefix=x",
+        "--inspect {rom}",
+        "--inspect=9229",
+        "--inspect-brk=0.0.0.0:9229",
+        "--INSPECT",
+        "-inspect",
+        "/inspect",
+        "--remote-debugging-port=9222",
+        "--remote-debugging-pipe",
+        "--Remote-Debugging-Address=0.0.0.0",
+        "--no-sandbox {rom}",
+        "--load-extension=ext",
+        "--disable-web-security",
+        "--js-flags=--allow-natives-syntax",
+        "--browser-subprocess-path=calc.exe",
+        "--x=--inspect",
+        "'--gpu-launcher=calc'",
+        "--NO-SANDBOX",
+        "--js-flags",
+        "-remote-debugging-port=1",
+    ];
+
+    #[test]
+    fn options_that_run_other_programs_are_refused() {
+        let exe = r"D:\Emulators\RetroArch\retroarch.exe";
+        for bad in DEBUGGING_TEMPLATES {
+            let e = check_template(bad, exe).unwrap_err().to_string();
+            assert!(e.contains("not allowed"), "{bad}: {e}");
+        }
+        for known in crate::catalog::EMULATORS {
+            assert!(
+                debugging_option(known.default_args).is_none(),
+                "{}",
+                known.id
+            );
+            for token in tokenize_template(known.default_args).unwrap() {
+                assert!(
+                    token.split('=').find_map(debugging_option).is_none(),
+                    "{}",
+                    known.id
+                );
+            }
+        }
+        for good in [
+            "--fullscreen",
+            "--no-gui",
+            "--sandboxed",
+            "/f",
+            "-batch",
+            "{rom}",
+        ] {
+            assert!(debugging_option(good).is_none(), "{good}");
+            assert!(check_template(good, exe).is_ok(), "{good}");
+        }
+    }
+
+    #[test]
+    fn tokenizer_messages_name_the_program() {
+        let e = tokenize_arguments("\"x", "launcher")
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("launcher") && !e.contains("emulator"), "{e}");
+        let e = tokenize_template("\"x").unwrap_err().to_string();
+        assert!(e.contains("emulator"), "{e}");
+        let many = "a ".repeat(MAX_TEMPLATE_TOKENS + 1);
+        assert!(tokenize_arguments(&many, "launcher")
+            .unwrap_err()
+            .to_string()
+            .contains("launcher"));
     }
 
     #[test]
