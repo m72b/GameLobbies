@@ -532,7 +532,7 @@ export default function App() {
           </>}
           {launcher?.targetKind === 'identifier' && <>
             <label>Identifier<input required value={addIdentifier} onChange={event => setAddIdentifier(event.target.value)} placeholder="The game’s id in this launcher" spellCheck={false} aria-invalid={!!identifierError} /></label>
-            {identifierError ? <div className="form-error" role="alert">{identifierError}</div> : <p className="muted-text">Passed to {launcher.name} as one argument, exactly as typed. Up to 200 letters, digits, spaces and . _ : @ # ( ) ' &amp; + , ! - characters; it can’t start with “-”.</p>}
+            {identifierError ? <div className="form-error" role="alert">{identifierError}</div> : <p className="muted-text">Passed to {launcher.name} as one argument, exactly as typed. Up to 200 letters, digits, spaces and . _ : @ # ( ) ' + , ! - characters; it can’t start with “-” or “@”, or like a drive (“C:”).</p>}
           </>}
           {launcher && launcher.targetKind !== 'identifier' && <p className="muted-text">Choose the game’s {launcher.targetKind} next. It is passed to {launcher.name} as one argument.</p>}
           <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setAdding(false)}>Cancel</button><button className="primary-button" disabled={addBusy || !!identifierError}>{launcher && launcher.targetKind !== 'identifier' ? 'Choose ' + launcher.targetKind + '…' : 'Add game'}</button></div>

@@ -49,7 +49,7 @@ function LauncherEditor({ initial, gameCount, onSaved, onCancel }: { initial: Dr
   }
   return <form className="emulator-editor launcher-editor" onSubmit={event => { event.preventDefault(); void submit() }}>
     <h4>{isNew ? 'Add launcher' : 'Edit ' + initial.name}</h4>
-    <label className="field-label">Name<input value={draft.name} onChange={event => set({ name: event.target.value })} maxLength={64} placeholder="Heroic, Playnite, Mod Organizer…" required /></label>
+    <label className="field-label">Name<input value={draft.name} onChange={event => set({ name: event.target.value })} maxLength={64} placeholder="Playnite, Mod Organizer…" required /></label>
 
     <div className="field-label">Icon
       <div className="launcher-icon-grid" role="group" aria-label="Built-in icons">
@@ -136,7 +136,7 @@ export function LaunchersSection({ say }: { say(text: string): void }) {
   }
   const saved = (list: CustomLauncher[]) => { setLaunchers(list); setEditing(null); say('Launcher saved') }
   return <div className="settings-card">
-    <div className="card-heading"><div><h3>Custom launchers</h3><p>Add your own launchers, such as Heroic, Playnite, a mod manager or an older store client. Each one gets its own entry in the side bar and library filter, and you can add games to it with Add game.</p></div>
+    <div className="card-heading"><div><h3>Custom launchers</h3><p>Add your own launchers, such as Playnite, a mod manager or an older store client. Each one gets its own entry in the side bar and library filter, and you can add games to it with Add game. Saving a new launcher, or a new program or arguments, asks you to confirm exactly what will run.</p></div>
       <button type="button" className="primary-button" onClick={() => setEditing({ draft: blankDraft() })}>Add launcher</button></div>
     {error && <div className="form-error" role="alert">{error}</div>}
     {editing && !editing.id && <LauncherEditor initial={editing.draft} gameCount={0} onSaved={saved} onCancel={() => setEditing(null)} />}

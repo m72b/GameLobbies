@@ -82,9 +82,11 @@ export function identifierProblem(raw: string): string {
   if (!id) return 'Enter the game’s identifier.'
   if ([...id].length > MAX_IDENTIFIER_CHARS) return 'At most ' + MAX_IDENTIFIER_CHARS + ' characters.'
   if (id.includes('\\') || id.includes('/')) return 'No “\\” or “/”. To use a file or folder, set the launcher to File or Folder.'
-  const bad = [...id].find(c => !/^[A-Za-z0-9 ._:@#()'&+,!-]$/.test(c))
-  if (bad) return 'It can’t contain “' + bad + '”. Use letters, digits, spaces and . _ : @ # ( ) \' & + , ! -'
+  const bad = [...id].find(c => !/^[A-Za-z0-9 ._:@#()'+,!-]$/.test(c))
+  if (bad) return 'It can’t contain “' + bad + '”. Use letters, digits, spaces and . _ : @ # ( ) \' + , ! -'
   if (id.startsWith('-')) return 'It can’t start with “-” (the launcher would read it as an option).'
+  if (id.startsWith('@')) return 'It can’t start with “@” (the launcher could read it as a file of more arguments).'
+  if (/^[A-Za-z]:/.test(id)) return 'It can’t start like a drive (“C:”): the launcher could read it as a file path.'
   if (id.includes('..')) return 'It can’t contain “..”.'
   return ''
 }

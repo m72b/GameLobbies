@@ -35,10 +35,10 @@ test('custom games show their launcher name while it exists', () => {
 })
 
 test('identifiers mirror the backend rules', () => {
-  for (const ok of ['Hollow Knight', '1a2b-3c4d', 'legendary:Fortnite@main#1', "Tom & Jerry (1999), 'Gold'+!", '  padded  ', 'a'.repeat(200)]) {
+  for (const ok of ['Hollow Knight', '1a2b-3c4d', 'legendary:Fortnite@main#1', "Tom and Jerry (1999), 'Gold'+!", '  padded  ', 'user@host', 'Game: Subtitle', '1:2', 'a'.repeat(200)]) {
     assert.equal(identifierProblem(ok), '', ok)
   }
-  for (const bad of ['', '   ', '-x', ' --exec', '/c', 'a/b', 'a\\b', '..', 'a..b', 'a\nb', 'a\tb', 'a"b', 'a;b', 'a|b', 'a%b', 'a=b', 'a\uFF3Cb', 'a\u2215b', 'C\uFF1Ax', 'Pokémon', 'a'.repeat(201)]) {
+  for (const bad of ['', '   ', '-x', 'Tom & Jerry', '&', '@args.txt', ' @x', 'C:evil.exe', 'c:', 'Z:x y', ' --exec', '/c', 'a/b', 'a\\b', '..', 'a..b', 'a\nb', 'a\tb', 'a"b', 'a;b', 'a|b', 'a%b', 'a=b', 'a\uFF3Cb', 'a\u2215b', 'C\uFF1Ax', 'Pokémon', 'a'.repeat(201)]) {
     assert.notEqual(identifierProblem(bad), '', JSON.stringify(bad))
   }
 })
