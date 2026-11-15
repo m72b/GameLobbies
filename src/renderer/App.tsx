@@ -4,7 +4,7 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import { Clock3, CloudDownload, EyeOff, Gamepad2, HardDrive, Heart, History, Library, ListFilter, MoreHorizontal, Pencil, Play, Plus, Search, Settings2, Star, X } from 'lucide-react'
 import { StoreIcon } from './store-icons'
 import { GlMark } from './gl-mark'
-import type { Game, RunningGame, Settings, Store as StoreName, SteamGridDbCover, UpdateInfo } from '../shared/types'
+import type { CustomLauncher, Game, RunningGame, Settings, Store as StoreName, SteamGridDbCover, UpdateInfo } from '../shared/types'
 import { defaultSettings } from '../shared/defaults'
 import { applyTheme } from './theme'
 import { coverStyle } from './cover'
@@ -15,6 +15,8 @@ import { RecentShelf } from './recent-shelf'
 import { GamePage, type GamePageActions } from './game-page'
 import { SessionHistory } from './session-history'
 import { elapsedSeconds, formatClock, useNow } from './format'
+import { LauncherIcon, useLaunchers } from './launcher-icon'
+import { displayStore, filterLauncherId, gameLauncher, gameMatchesFilter, identifierProblem, launcherFilter } from '../shared/launchers'
 
 type View = 'All Games' | 'Favorites' | 'Recently Played' | 'Hidden'
 type SortBy = 'title' | 'lastPlayed' | 'playtime' | 'library'
@@ -59,6 +61,11 @@ export default function App() {
   const [toast, setToast] = useState('')
   const [updateNotice, setUpdateNotice] = useState<UpdateInfo | null>(null)
   const [adding, setAdding] = useState(false)
+  // The add-game dialog's source: '' = a store link, otherwise a custom launcher's id.
+  const [addSource, setAddSource] = useState('')
+  const [addIdentifier, setAddIdentifier] = useState('')
+  const [addBusy, setAddBusy] = useState(false)
+  const launchers = useLaunchers()
   const [editingGame, setEditingGame] = useState<Game | null>(null)
   const [editTitle, setEditTitle] = useState('')
   const [editGenre, setEditGenre] = useState('')
@@ -213,9 +220,33 @@ export default function App() {
       setLocalBusy(false)
     }
   }
+  const openAdd = (source = '') => {
+    setAddSource(source)
+    setAddIdentifier('')
+    setAdding(true)
+  }
   const addGame = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     const data = new FormData(event.currentTarget)
+    const launcher = launchers.find(item => item.id === addSource)
+    if (launcher) {
+      if (launcher.targetKind === 'identifier' && identifierProblem(addIdentifier)) return
+      setAddBusy(true)
+      try {
+        const result = await window.lobby.launchers.addGame(launcher.id, String(data.get('title') ?? ''), launcher.targetKind === 'identifier' ? addIdentifier : null)
+        if (!result) return
+        setGames(result.games)
+        setAdding(false)
+        const added = result.games.find(game => game.id === result.gameId)
+        if (added) openGame(added)
+        notice(added ? 'Added ' + added.title + ' to ' + launcher.name : 'Game added')
+      } catch (error) {
+        notice(error instanceof Error ? error.message : 'Could not add the game')
+      } finally {
+        setAddBusy(false)
+      }
+      return
+    }
     try {
       await window.lobby.library.add(String(data.get('title')), String(data.get('target')))
       setAdding(false)
@@ -332,20 +363,25 @@ export default function App() {
     return candidates.filter(game =>
       (!onlyInstalled || isInstalled(game)) &&
       (view === 'Hidden' ? game.hidden : !game.hidden) &&
-      (store === 'All Games' || game.store === store) &&
+      gameMatchesFilter(game, store) &&
       (view !== 'Favorites' || game.favorite) &&
       (view !== 'Recently Played' || !!game.lastPlayed)
     )
   }, [games, query, store, view, fuzzy, onlyInstalled])
   const railStores = useMemo(() => stores.filter(item => item === store || games.some(game => game.store === item && !game.hidden && (!onlyInstalled || isInstalled(game)))).slice(0, 8), [games, store, onlyInstalled])
+  const activeLauncher = useMemo(() => { const id = filterLauncherId(store); return id ? launchers.find(item => item.id === id) : undefined }, [store, launchers])
+  // A launcher filter whose launcher was deleted goes back to all games.
+  useEffect(() => { if (filterLauncherId(store) && !activeLauncher) setStore('All Games') }, [store, activeLauncher])
+  const storeName = (game: Game) => displayStore(game, launchers)
   const ordered = useMemo(() => {
     if (query.trim()) return filtered
+    const name = (game: Game) => displayStore(game, launchers)
     return [...filtered].sort((a, b) =>
       sortBy === 'lastPlayed' ? (b.lastPlayed || 0) - (a.lastPlayed || 0) :
         sortBy === 'playtime' ? b.playtimeMinutes - a.playtimeMinutes :
-          sortBy === 'library' ? a.store.localeCompare(b.store) || a.title.localeCompare(b.title) : a.title.localeCompare(b.title)
+          sortBy === 'library' ? name(a).localeCompare(name(b)) || a.title.localeCompare(b.title) : a.title.localeCompare(b.title)
     )
-  }, [filtered, query, sortBy])
+  }, [filtered, query, sortBy, launchers])
   const cols = Math.max(2, Math.floor(gridWidth / (settings.posterWidth + Number.parseInt(settings.theme.gap || '9'))))
   filteredRef.current = ordered
   focusedIdRef.current = focusedId
@@ -409,7 +445,10 @@ export default function App() {
       <div className="rail-sep" />
       <div className="rail-stores">{railStores.map(item =>
         <button key={item} className={'rail-button mini ' + (store === item ? 'active' : '')} title={item} onClick={() => { setStore(store === item ? 'All Games' : item); setView('All Games') }}><StoreIcon store={item} size={16} /></button>
-      )}<button className="rail-button mini" title="Add source" onClick={() => window.lobby.settings.open()}><Plus /></button></div>
+      )}{launchers.map(item => {
+        const filter = launcherFilter(item.id)
+        return <button key={filter} className={'rail-button mini ' + (store === filter ? 'active' : '')} title={item.name} aria-label={item.name} onClick={() => { setStore(store === filter ? 'All Games' : filter); setView('All Games') }}><LauncherIcon launcher={item} size={16} /></button>
+      })}<button className="rail-button mini" title="Add source" onClick={() => window.lobby.settings.open()}><Plus /></button></div>
       <div className="rail-bottom">
         <button className="rail-button" title="Export library" onClick={() => void window.lobby.backup.export()}><CloudDownload /></button>
         <button className={'rail-button ' + (editMode ? 'active' : '')} title="Edit mode" onClick={() => setEditMode(!editMode)}><Pencil /></button>
@@ -418,16 +457,18 @@ export default function App() {
       </div>
     </aside>
     <main className={'main' + (pageOpen ? ' page-open' : '')}>
-      {openGameData && <GamePage game={openGameData} index={Math.max(0, games.findIndex(game => game.id === openGameData.id))} settings={settings} running={runningById.get(openGameData.id)} libraryVersion={libraryVersion} actions={pageActions} />}
+      {openGameData && <GamePage game={openGameData} index={Math.max(0, games.findIndex(game => game.id === openGameData.id))} settings={settings} launchers={launchers} running={runningById.get(openGameData.id)} libraryVersion={libraryVersion} actions={pageActions} />}
       {!pageOpen && storageOpen && <StorageView notice={notice} onClose={() => setStorageOpen(false)} onOpen={id => { const game = games.find(item => item.id === id); if (game) { setStorageOpen(false); openGame(game) } }} />}
       {!pageOpen && !storageOpen && <>
       <div className="toolbar">
-        <div><div className="eyebrow">YOUR COLLECTION</div><h1>{view === 'All Games' ? (store === 'All Games' ? 'All games' : store) : view}</h1></div>
+        <div><div className="eyebrow">YOUR COLLECTION</div><h1>{view === 'All Games' ? (store === 'All Games' ? 'All games' : activeLauncher ? activeLauncher.name : store) : view}</h1></div>
         <div className="toolbar-actions">
           <label className="searchbox"><Search size={16} /><input ref={searchRef} value={query} onChange={event => setQuery(event.target.value)} placeholder="Search your library" /><kbd>Ctrl K</kbd></label>
           <button className="icon-button" title="Scan libraries" onClick={() => void scan()} disabled={scanBusy}><CloudDownload size={17} className={scanBusy ? 'spin' : ''} /></button>
           <button className="secondary-button" onClick={() => void addLocalGame()} disabled={localBusy} title="Pick a PC game (.exe, .lnk, .url) or a ROM file"><Plus size={16} /> Add local game</button>
-          <button className="primary-button" onClick={() => setAdding(true)}><Plus size={16} /> Add game</button>
+          {activeLauncher
+            ? <button className="primary-button" onClick={() => openAdd(activeLauncher.id)}><Plus size={16} /> Add game to {activeLauncher.name}</button>
+            : <button className="primary-button" onClick={() => openAdd()}><Plus size={16} /> Add game</button>}
         </div>
       </div>
       <div className="library-meta">
@@ -456,17 +497,17 @@ export default function App() {
               >
                 <CardPoster game={game} index={row.index * cols + index}>
                   {runningById.has(game.id) && <span className={'run-badge ' + runningById.get(game.id)!.state}><span className="gp-live-dot" />{runningById.get(game.id)!.state === 'launching' ? 'Launching' : 'Playing'}</span>}
-                  {settings.showBadges && <span className="store-badge" title={game.store}><StoreIcon store={game.store} /></span>}
+                  {settings.showBadges && <CardBadge game={game} launchers={launchers} />}
                   <button className="play-overlay" onClick={event => { event.stopPropagation(); void launch(game) }}><Play size={14} fill="currentColor" /> Play</button>
                   <button className="card-more" aria-label="Game actions" onClick={event => { event.stopPropagation(); setMenu({ x: event.clientX, y: event.clientY, game }) }}><MoreHorizontal size={17} /></button>
                 </CardPoster>
                 <div className="card-title">{game.title}</div>
-                <div className="card-subtitle">{game.store}{game.playtimeMinutes > 0 ? ' · ' + Math.floor(game.playtimeMinutes / 60) + 'h played' : ''}</div>
+                <div className="card-subtitle">{storeName(game)}{game.playtimeMinutes > 0 ? ' · ' + Math.floor(game.playtimeMinutes / 60) + 'h played' : ''}</div>
               </article>)}
             </div>
           })}
         </div>
-        {!filtered.length && onlyInstalled && !query && games.some(game => (view === 'Hidden' ? game.hidden : !game.hidden) && (store === 'All Games' || game.store === store) && (view !== 'Favorites' || game.favorite) && (view !== 'Recently Played' || !!game.lastPlayed)) ? <div className="empty"><Gamepad2 size={30} /><h3>No installed games here</h3><p>Uninstalled games are hidden. Show all to see games you own but haven't installed.</p><button className="primary-button" onClick={() => void setInstalledFilter(false)}>Show all games</button></div> : !filtered.length && <div className="empty"><Gamepad2 size={30} /><h3>{query ? 'No matching games' : view === 'Hidden' ? 'No hidden games' : 'Your library is empty'}</h3><p>{view === 'Hidden' ? 'Games you hide will appear here.' : 'Scan your stores or add a game manually.'}</p><button className="primary-button" onClick={() => void scan()}><CloudDownload size={15} /> Scan libraries</button></div>}
+        {!filtered.length && onlyInstalled && !query && games.some(game => (view === 'Hidden' ? game.hidden : !game.hidden) && gameMatchesFilter(game, store) && (view !== 'Favorites' || game.favorite) && (view !== 'Recently Played' || !!game.lastPlayed)) ? <div className="empty"><Gamepad2 size={30} /><h3>No installed games here</h3><p>Uninstalled games are hidden. Show all to see games you own but haven't installed.</p><button className="primary-button" onClick={() => void setInstalledFilter(false)}>Show all games</button></div> : !filtered.length && <div className="empty"><Gamepad2 size={30} /><h3>{query ? 'No matching games' : view === 'Hidden' ? 'No hidden games' : 'Your library is empty'}</h3><p>{view === 'Hidden' ? 'Games you hide will appear here.' : 'Scan your stores or add a game manually.'}</p><button className="primary-button" onClick={() => void scan()}><CloudDownload size={15} /> Scan libraries</button></div>}
       </section>
       </>}
     </main>
@@ -475,11 +516,28 @@ export default function App() {
     </div></>}
     {historyOpen && <SessionHistory running={running} onClose={() => setHistoryOpen(false)} />}
     {adding && <div className="modal-scrim"><form className="modal" onSubmit={addGame}>
-      <div className="modal-head"><h2>Add a game</h2><button type="button" onClick={() => setAdding(false)}><X size={17} /></button></div>
-      <label>Title<input required name="title" placeholder="Game title" autoFocus /></label>
-      <label>Store link<input required name="target" placeholder="steam://run/123" /></label>
-      <p className="muted-text">For a program, shortcut or ROM file on this PC, use Add local game.</p>
-      <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setAdding(false)}>Cancel</button><button className="primary-button">Add game</button></div>
+      {(() => {
+        const launcher = launchers.find(item => item.id === addSource)
+        const identifierError = launcher?.targetKind === 'identifier' && addIdentifier ? identifierProblem(addIdentifier) : ''
+        return <>
+          <div className="modal-head"><h2>{launcher ? 'Add game to ' + launcher.name : 'Add a game'}</h2><button type="button" aria-label="Close" onClick={() => setAdding(false)}><X size={17} /></button></div>
+          {launchers.length > 0 && <label>Launch with<select value={addSource} onChange={event => { setAddSource(event.target.value); setAddIdentifier('') }}>
+            <option value="">A store link</option>
+            {launchers.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+          </select></label>}
+          <label>Title<input required={!launcher || launcher.targetKind === 'identifier'} name="title" placeholder={launcher && launcher.targetKind !== 'identifier' ? 'Optional: the ' + launcher.targetKind + ' name is used' : 'Game title'} autoFocus /></label>
+          {!launcher && <>
+            <label>Store link<input required name="target" placeholder="steam://run/123" /></label>
+            <p className="muted-text">For a program, shortcut or ROM file on this PC, use Add local game.</p>
+          </>}
+          {launcher?.targetKind === 'identifier' && <>
+            <label>Identifier<input required value={addIdentifier} onChange={event => setAddIdentifier(event.target.value)} placeholder="The game’s id in this launcher" spellCheck={false} aria-invalid={!!identifierError} /></label>
+            {identifierError ? <div className="form-error" role="alert">{identifierError}</div> : <p className="muted-text">Passed to {launcher.name} as one argument, exactly as typed. Up to 200 letters, digits, spaces and . _ : @ # ( ) ' &amp; + , ! - characters; it can’t start with “-”.</p>}
+          </>}
+          {launcher && launcher.targetKind !== 'identifier' && <p className="muted-text">Choose the game’s {launcher.targetKind} next. It is passed to {launcher.name} as one argument.</p>}
+          <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setAdding(false)}>Cancel</button><button className="primary-button" disabled={addBusy || !!identifierError}>{launcher && launcher.targetKind !== 'identifier' ? 'Choose ' + launcher.targetKind + '…' : 'Add game'}</button></div>
+        </>
+      })()}
     </form></div>}
     {editingGame && <div className="modal-scrim"><form className="modal edit-modal" onSubmit={saveEdit}>
       <div className="modal-head"><h2>Edit metadata</h2><button type="button" aria-label="Close" onClick={() => setEditingGame(null)}><X size={17} /></button></div>
@@ -494,7 +552,7 @@ export default function App() {
       <label>Find a game<input value={linkQuery} onChange={event => setLinkQuery(event.target.value)} placeholder="Search your library" autoFocus /></label>
       <div className="link-game-list">
         {games.filter(game => game.id !== linkingGame.id && (!linkQuery.trim() || game.title.toLocaleLowerCase().includes(linkQuery.trim().toLocaleLowerCase()))).slice(0, 100).map(game =>
-          <button className="link-game-row" key={game.id} onClick={() => void mergeIntoKeptGame(game)}><span><b>{game.title}</b><small>{game.store} · {game.routes.length} launch source{game.routes.length === 1 ? '' : 's'}</small></span><span>Merge</span></button>
+          <button className="link-game-row" key={game.id} onClick={() => void mergeIntoKeptGame(game)}><span><b>{game.title}</b><small>{storeName(game)} · {game.routes.length} launch source{game.routes.length === 1 ? '' : 's'}</small></span><span>Merge</span></button>
         )}
         {games.filter(game => game.id !== linkingGame.id && (!linkQuery.trim() || game.title.toLocaleLowerCase().includes(linkQuery.trim().toLocaleLowerCase()))).length === 0 && <div className="empty-inline">No other matching games.</div>}
       </div>
@@ -521,6 +579,12 @@ export default function App() {
       <button type="button" className="update-notice-close" title="Dismiss" aria-label="Dismiss update notice" onClick={() => setUpdateNotice(null)}><X size={14} /></button>
     </div>}
   </div>
+}
+
+/** A card's store badge: the launcher's icon for Custom games run by a custom launcher. */
+function CardBadge({ game, launchers }: { game: Game; launchers: CustomLauncher[] }) {
+  const launcher = game.store === 'Custom' ? gameLauncher(game, launchers) : undefined
+  return <span className="store-badge" title={launcher ? launcher.name : game.store}>{launcher ? <LauncherIcon launcher={launcher} /> : <StoreIcon store={game.store} />}</span>
 }
 
 /** A library card's poster: the title on a colored card until the cover has loaded (or when it fails). */

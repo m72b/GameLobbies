@@ -112,6 +112,12 @@ Rescans are safe. Titles, favorites, covers, playtime, and emulator choices are 
 
 Folder rules: use full local paths only. System and program folders, network paths, and links (junctions) are refused. Folders of the same kind cannot overlap, and one folder cannot be both a game folder and an emulator folder. A game folder may contain the emulator folder (and the other way round): each scan skips the other. Emulator folders cannot be Downloads, Desktop, or Temp.
 
+### Custom launchers
+
+**Settings → Custom launchers** sets up your own launchers, such as Heroic, Playnite, a mod manager or an older store client. Each has a name, an icon (24 built-in icons, or a PNG, JPEG, WebP or GIF image of your own), a colour, a program (an `.exe` on a local drive, chosen with **Browse**), launch arguments, and what each of its games uses: a **file**, a **folder** (both chosen with a file picker), or an **identifier** you type (up to 200 letters, digits, spaces and `. _ : @ # ( ) ' & + , ! -`, not starting with `-`). The arguments use `{target}` for the game, as an argument on its own (for example `--start {target}`); without it the game is added last. Like emulator arguments, they never use a shell, the game is always one argument, and files named in them must be inside the launcher's folder. Script files (`.bat`, `.cmd`, `.ps1`) can't be used as launchers.
+
+Each launcher appears in the side bar with its icon and colour and filters the library. **Add game** (or **Add game to …** while a launcher is selected) adds a game to it; covers come from SteamGridDB by title. Playtime is tracked while the launcher's process runs. Deleting a launcher with games asks whether to keep them (as Custom games without the launcher) or remove them. Launchers are included in library backups and checked again when a backup is imported.
+
 For development, debug builds honour `GAME_LOBBY_DATA_DIR` (an absolute folder) to use a separate data folder. Release builds ignore it.
 
 ## Extensions
@@ -149,7 +155,7 @@ Every tracked session (game, start, end, duration and whether it was launched fr
 
 ## Local data and privacy
 
-The SQLite database is managed by `src-tauri/src/db.rs` and is stored in `%APPDATA%\app.gamelobby.desktop`, together with cached cover art. On first launch, Game Lobby copies an existing library and custom covers from the earlier Electron build (`%APPDATA%\game-lobby`), leaving the original untouched; re-enter API keys once, because keys encrypted by the Electron build can't be read. It uses write-ahead logging and foreign-key checks. JSON backups include game metadata, launch routes, settings, emulator profiles and play session history with notes, but never API keys.
+The SQLite database is managed by `src-tauri/src/db.rs` and is stored in `%APPDATA%\app.gamelobby.desktop`, together with cached cover art. On first launch, Game Lobby copies an existing library and custom covers from the earlier Electron build (`%APPDATA%\game-lobby`), leaving the original untouched; re-enter API keys once, because keys encrypted by the Electron build can't be read. It uses write-ahead logging and foreign-key checks. JSON backups include game metadata, launch routes, settings, emulator profiles, custom launchers and play session history with notes, but never API keys.
 
 Game Lobby has no telemetry and no account of its own. It contacts the internet only for the features you use: the services listed under [Data sources and terms](#data-sources-and-terms), remote themes you add, and update checks against GitHub.
 
