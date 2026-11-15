@@ -398,8 +398,10 @@ fn launch_identity(r: &GameRoute) -> [Option<&str>; 9] {
 /// A route the renderer may create or edit by itself: a store link that passes
 /// [`crate::launch::validate_launch_uri`], with no arguments, and not a ROM route (ROM routes
 /// run an emulator with their target as a file, picked by `system`). Its install folder
-/// (opened by "Open install folder") must be empty or one already stored for the game. The
-/// link must have one of the shapes in [`renderer_link_ok`].
+/// (opened by "Open install folder") must be empty or one already stored for the game, and so
+/// must its app id: a launcher linked to the game takes a store id from it
+/// (`launchers::assign_candidates`), so the renderer can't make one up. The link must have one
+/// of the shapes in [`renderer_link_ok`].
 fn is_renderer_uri_route(stored: &[GameRoute], r: &GameRoute) -> bool {
     let text = |v: &Option<String>| v.as_deref().filter(|s| !s.is_empty()).map(str::to_owned);
     let folder_ok = text(&r.install_path).is_none_or(|path| {
@@ -407,6 +409,8 @@ fn is_renderer_uri_route(stored: &[GameRoute], r: &GameRoute) -> bool {
             .iter()
             .any(|s| text(&s.install_path) == Some(path.clone()))
     });
+    let app_id_ok =
+        text(&r.app_id).is_none_or(|id| stored.iter().any(|s| text(&s.app_id) == Some(id.clone())));
     r.source_id != crate::local::ROM_SOURCE
         // Custom launcher routes are made only by `launchers_add_game` (native picker or a
         // checked identifier).
@@ -417,6 +421,7 @@ fn is_renderer_uri_route(stored: &[GameRoute], r: &GameRoute) -> bool {
         && r.assigned != Some(true)
         && r.launch_args.as_deref().is_none_or(str::is_empty)
         && folder_ok
+        && app_id_ok
         && crate::launch::validate_launch_uri(&r.launch_target)
             .is_ok_and(|uri| renderer_link_ok(&uri))
 }
@@ -1326,6 +1331,34 @@ mod tests {
                 "{bad}"
             );
         }
+    }
+
+    #[test]
+    fn renderer_links_keep_only_app_ids_the_game_already_has() {
+        // A launcher linked to the game passes a route's app id as the game's store id, so the
+        // renderer can't make one up on a store link it adds or edits.
+        let stored = vec![route_of(&route())];
+        let push = |link: Value| {
+            renderer_save(&stored, move |g| {
+                g["routes"].as_array_mut().unwrap().push(link)
+            })
+        };
+        // No app id, or one the game already has, is fine (what the UI never sends anyway).
+        assert!(push(
+            json!({ "sourceId": "custom", "store": "Custom", "launchTarget": "steam://run/730" })
+        )
+        .is_ok());
+        assert!(push(json!({ "sourceId": "custom", "store": "Custom", "launchTarget": "steam://run/730", "appId": "" })).is_ok());
+        assert!(push(json!({ "sourceId": "custom", "store": "Custom", "launchTarget": "steam://run/730", "appId": "570" })).is_ok());
+        // The stored route may change its link and keep its app id.
+        assert!(renderer_save(&stored, |g| g["routes"][0]["launchTarget"] =
+            json!("steam://run/730"))
+        .is_ok());
+        // A new one is refused, on a new link and on an edited one.
+        assert!(push(json!({ "sourceId": "custom", "store": "Custom", "launchTarget": "steam://run/730", "appId": "730" })).is_err());
+        assert!(push(json!({ "sourceId": "custom", "store": "Custom", "launchTarget": "steam://run/730", "appId": "--config=x" })).is_err());
+        assert!(renderer_save(&stored, |g| g["routes"][0]["appId"] = json!("730")).is_err());
+        assert!(renderer_save(&[], |g| g["routes"] = json!([route()])).is_err());
     }
 
     #[test]

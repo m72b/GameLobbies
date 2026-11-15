@@ -4010,7 +4010,7 @@ mod tests {
             .unwrap();
         let prompt = crate::launchers::assign_prompt(&l, &g.title, &c, &options).unwrap();
         assert!(prompt.starts_with(&format!(
-            "Game Lobby will run:\n  {HUB}\n\nArguments (one per line, with the game's file):\n  1. --start\n  2. {HK}\n  3. -windowed\n  4. -nosplash\n\nWorking folder:\n  D:\\Launchers\\Hub\n\nFor the game: Hollow Knight\nLauncher: Hub\n"
+            "Game Lobby will run:\n  {HUB}\n\nGames you link to this launcher later run the same way, each with its own file or store id, without asking again until the launcher's command changes.\n\nArguments (one per line, with the game's file):\n  1. --start\n  2. {HK}\n  3. -windowed\n  4. -nosplash\n\nWorking folder:\n  D:\\Launchers\\Hub\n\nFor the game: Hollow Knight\nLauncher: Hub\n"
         )), "{prompt}");
         assert!(prompt.contains("Arguments 3 to 4 are this game's launch options"));
         // The target is shown once, so the dialog stays within what the options were checked

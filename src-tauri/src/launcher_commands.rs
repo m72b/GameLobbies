@@ -109,48 +109,19 @@ pub async fn launchers_save(
         .map_err(err)?;
         (stored, accepted)
     };
-    let confirmed = launchers::needs_confirmation(stored.as_ref(), &accepted.launcher);
-    if confirmed {
-        let prompt = launchers::confirmation_prompt(&accepted.launcher).map_err(err)?;
-        if !confirm_natively(&window, "Confirm launcher", &prompt, "Save").await {
-            return Err("The launcher was not saved.".into());
-        }
-    }
-    let mut launcher = accepted.launcher;
-    {
-        let conn = state.db.lock();
-        // The dialog may have been open for a while: save only over what was confirmed.
-        let now = match &id {
-            Some(id) => launchers::get(&conn, id).map_err(err)?,
-            None => None,
-        };
-        if now != stored {
-            return Err("The launcher changed in the meantime. Open it again and save.".into());
-        }
-        // Its games or folders may have changed too (a scan, Add game): the checks above relied
-        // on them.
-        if let Some(id) = &id {
-            if launcher_usage(&conn, id).map_err(err)? != usage {
-                return Err(
-                    "The launcher's games changed in the meantime. Open it again and save.".into(),
-                );
-            }
-        }
-        if stored.is_none() {
-            if launchers::list(&conn).map_err(err)?.len() >= launchers::MAX_LAUNCHERS {
-                return Err(format!(
-                    "You can have at most {} custom launchers.",
-                    launchers::MAX_LAUNCHERS
-                ));
-            }
-            launcher.sort_order = launchers::next_sort_order(&conn).map_err(err)?;
-        }
-        launchers::save(&conn, &launcher).map_err(err)?;
-        if confirmed {
-            // The dialog above showed exactly this program, template, working folder and kinds.
-            launchers::record_confirmed(&conn, &launcher).map_err(err)?;
-        }
-    }
+    let window = &window;
+    let launcher =
+        save_launcher(
+            &state.db,
+            id.as_deref(),
+            stored,
+            &usage,
+            accepted.launcher,
+            move |prompt| async move {
+                confirm_natively(window, "Confirm launcher", &prompt, "Save").await
+            },
+        )
+        .await?;
     if accepted.used_executable_pick {
         state
             .picks
@@ -165,6 +136,68 @@ pub async fn launchers_save(
     // Launcher names and icons show on the library cards.
     let _ = app.emit("library:changed", ());
     list(&state)
+}
+
+/// The confirmation and the save of [`launchers_save`], after the input was accepted
+/// (`launcher`, checked against `stored` and the launcher's games `usage`, both read before):
+/// the native dialog when [`launchers::needs_confirmation`] says so (`confirm` shows it with the
+/// prompt it gets and says whether the user chose Save; a parameter so tests can answer it),
+/// then the save, only over what was checked (compare-and-save). A confirmed dialog also
+/// remembers the launcher's command as confirmed ([`launchers::record_confirmed`]); a save
+/// without one (name, icon, colour) leaves that confirmation as it is. Nothing is written when
+/// the dialog is cancelled.
+async fn save_launcher<F, Fut>(
+    db: &db::Db,
+    id: Option<&str>,
+    stored: Option<CustomLauncher>,
+    usage: &(bool, Vec<String>),
+    mut launcher: CustomLauncher,
+    confirm: F,
+) -> CmdResult<CustomLauncher>
+where
+    F: FnOnce(String) -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    let asked = launchers::needs_confirmation(stored.as_ref(), &launcher);
+    if asked {
+        let prompt = launchers::confirmation_prompt(&launcher).map_err(err)?;
+        if !confirm(prompt).await {
+            return Err("The launcher was not saved.".into());
+        }
+    }
+    let conn = db.lock();
+    // The dialog may have been open for a while: save only over what was confirmed.
+    let now = match id {
+        Some(id) => launchers::get(&conn, id).map_err(err)?,
+        None => None,
+    };
+    if now != stored {
+        return Err("The launcher changed in the meantime. Open it again and save.".into());
+    }
+    // Its games or folders may have changed too (a scan, Add game): the checks before relied on
+    // them.
+    if let Some(id) = id {
+        if launcher_usage(&conn, id).map_err(err)? != *usage {
+            return Err(
+                "The launcher's games changed in the meantime. Open it again and save.".into(),
+            );
+        }
+    }
+    if stored.is_none() {
+        if launchers::list(&conn).map_err(err)?.len() >= launchers::MAX_LAUNCHERS {
+            return Err(format!(
+                "You can have at most {} custom launchers.",
+                launchers::MAX_LAUNCHERS
+            ));
+        }
+        launcher.sort_order = launchers::next_sort_order(&conn).map_err(err)?;
+    }
+    launchers::save(&conn, &launcher).map_err(err)?;
+    if asked {
+        // The dialog above showed exactly this program, template, working folder and kinds.
+        launchers::record_confirmed(&conn, &launcher).map_err(err)?;
+    }
+    Ok(launcher)
 }
 
 /// Deletes a launcher and its games folders. `mode` `keep`: its games stay without the
@@ -763,7 +796,8 @@ struct Assigned {
 /// ([`launchers::is_confirmed`]): the route then runs that command with the game's own target,
 /// which is what that confirmation covered. When the dialog is confirmed, the launcher's
 /// command is remembered as confirmed too ([`launchers::record_confirmed`]), so the next link
-/// needs none. Everything is saved only over what was checked (compare-and-save).
+/// needs none, unless the dialog was too long to be sure it was read whole
+/// (`links::MAX_CONFIRM_CHARS` plus 1,000 characters). Everything is saved only over what was checked (compare-and-save).
 async fn assign_game<F, Fut>(
     db: &db::Db,
     game_id: &str,
@@ -800,6 +834,9 @@ where
         return Err(reason);
     }
     let mut asked = false;
+    // Whether the dialog was short enough to be read whole, so its confirmation can cover later
+    // links too (see below).
+    let mut record = false;
     let candidate = if launchers::is_label_only(&launcher) {
         if !options.trim().is_empty() {
             return Err(format!(
@@ -859,6 +896,10 @@ where
                 shown.unwrap_or_default(),
             )
             .map_err(err)?;
+            // A dialog this long may be clipped on screen, hiding what confirming it means: it
+            // still links this game, but the launcher stays unconfirmed (the next link asks
+            // again).
+            let fits = prompt.chars().count() <= crate::links::MAX_CONFIRM_CHARS + 1_000;
             if !confirm(prompt).await {
                 return Err(format!(
                     "{} was not added to {}.",
@@ -866,6 +907,7 @@ where
                 ));
             }
             asked = true;
+            record = fits;
         }
         Some((chosen, checked))
     };
@@ -905,8 +947,9 @@ where
         } else {
             db::set_routes(&tx, game_id, routes).map_err(err)?;
         }
-        if asked {
-            // The dialog showed this launcher's program, arguments and working folder.
+        if record {
+            // The dialog showed this launcher's program, arguments and working folder, and was
+            // short enough to be read whole.
             launchers::record_confirmed(&tx, &launcher).map_err(err)?;
         }
         tx.commit().map_err(err)?;
@@ -1401,6 +1444,152 @@ mod tests {
         assert_eq!(now.routes[0].assigned, Some(true));
         assert_eq!(confirmations(&db), 0);
         assert_eq!(launchers::unassign(&now, "app").unwrap(), g.routes);
+    }
+
+    #[tokio::test]
+    async fn an_over_long_dialog_links_but_leaves_the_launcher_unconfirmed() {
+        let dir = TempDir::new("link-long");
+        let exe = dir.file("Hub/Hub.exe");
+        let a = game("a", vec![local_route(&dir.file("Games/a/a.exe"))]);
+        let b = game("b", vec![local_route(&dir.file("Games/b/b.exe"))]);
+        // As many arguments as a launcher can have, each long: a dialog too long to be sure it
+        // was read whole.
+        let mut l = launcher("hub", &exe.to_string_lossy(), &["file"]);
+        l.args_template = format!("{}{{target}}", "-abcdefghijklm ".repeat(127));
+        let l = launchers::validate(l).unwrap();
+        let db = library(&[&l], &[&a, &b]);
+        let shown = std::cell::RefCell::new(String::new());
+        let result = assign_game(&db, "a", "hub", None, None, String::new(), |prompt| {
+            *shown.borrow_mut() = prompt;
+            async move { true }
+        })
+        .await;
+        assert!(
+            shown.borrow().chars().count() > crate::links::MAX_CONFIRM_CHARS + 1_000,
+            "the test needs an over-long dialog"
+        );
+        // The game is linked, as confirmed...
+        assert!(result.unwrap().asked);
+        assert_eq!(stored(&db, "a").routes[0].source_id, "launcher:hub");
+        // ...but the launcher's command isn't remembered: the next link asks again.
+        assert_eq!(confirmations(&db), 0);
+        assert!(!launchers::is_confirmed(&db.lock(), &l).unwrap());
+        let (result, asked) = link(&db, "b", "hub", true).await;
+        assert!(result.unwrap().asked);
+        assert_eq!(asked, 1);
+        assert_eq!(confirmations(&db), 0);
+    }
+
+    /// [`save_launcher`] for `next` over the stored launcher `id` (`None`: a new launcher), with
+    /// the dialog answered `answer`; returns the result and how often the dialog was shown.
+    async fn save(
+        db: &Db,
+        id: Option<&str>,
+        next: &CustomLauncher,
+        answer: bool,
+    ) -> (CmdResult<CustomLauncher>, usize) {
+        let (stored, usage) = {
+            let conn = db.lock();
+            match id {
+                Some(id) => (
+                    launchers::get(&conn, id).unwrap(),
+                    launcher_usage(&conn, id).unwrap(),
+                ),
+                None => (None, (false, Vec::new())),
+            }
+        };
+        let shown = Cell::new(0);
+        let result = save_launcher(db, id, stored, &usage, next.clone(), |prompt| {
+            assert!(prompt.starts_with("Save this launcher?"), "{prompt}");
+            shown.set(shown.get() + 1);
+            async move { answer }
+        })
+        .await;
+        (result, shown.get())
+    }
+
+    fn confirmed_at(db: &Db, id: &str) -> Option<i64> {
+        db.lock()
+            .query_row(
+                "SELECT confirmedAt FROM launcher_confirmed WHERE launcherId=?",
+                [id],
+                |r| r.get(0),
+            )
+            .ok()
+    }
+
+    #[tokio::test]
+    async fn saving_a_launcher_records_only_what_its_dialog_showed() {
+        let dir = TempDir::new("save-confirmed");
+        let exe = dir.file("Hub/Hub.exe");
+        let l = launcher("hub", &exe.to_string_lossy(), &["file"]);
+        let db = Db::memory().unwrap();
+
+        // A new launcher: cancelled writes nothing; confirmed saves it and its confirmation.
+        let (result, shown) = save(&db, None, &l, false).await;
+        assert!(result.err().unwrap().contains("not saved"));
+        assert_eq!(shown, 1);
+        assert!(launchers::list(&db.lock()).unwrap().is_empty());
+        assert_eq!(confirmations(&db), 0);
+        let (result, shown) = save(&db, None, &l, true).await;
+        let saved = result.unwrap();
+        assert_eq!(shown, 1);
+        assert!(launchers::is_confirmed(&db.lock(), &saved).unwrap());
+        let first = confirmed_at(&db, "hub").unwrap();
+
+        // A cosmetic change (name, icon, colour) saves without a dialog and keeps the row.
+        let mut renamed = saved.clone();
+        renamed.name = "Hub 2".into();
+        renamed.color = "#FF0000".into();
+        let (result, shown) = save(&db, Some("hub"), &renamed, false).await;
+        let renamed = result.unwrap();
+        assert_eq!(shown, 0);
+        assert_eq!(
+            launchers::get(&db.lock(), "hub").unwrap().unwrap().name,
+            "Hub 2"
+        );
+        assert_eq!(confirmations(&db), 1);
+        assert_eq!(confirmed_at(&db, "hub"), Some(first));
+        assert!(launchers::is_confirmed(&db.lock(), &renamed).unwrap());
+
+        // A command change asks; cancelled, nothing changes: the launcher and its row stay.
+        let mut changed = renamed.clone();
+        changed.args_template = "--run {target}".into();
+        let (result, shown) = save(&db, Some("hub"), &changed, false).await;
+        assert!(result.err().unwrap().contains("not saved"));
+        assert_eq!(shown, 1);
+        assert_eq!(
+            launchers::get(&db.lock(), "hub").unwrap(),
+            Some(renamed.clone())
+        );
+        assert_eq!(confirmed_at(&db, "hub"), Some(first));
+        assert!(launchers::is_confirmed(&db.lock(), &renamed).unwrap());
+        assert!(!launchers::is_confirmed(&db.lock(), &changed).unwrap());
+
+        // Confirmed, the row is replaced by the new command: the old one is no longer covered.
+        let (result, shown) = save(&db, Some("hub"), &changed, true).await;
+        let changed = result.unwrap();
+        assert_eq!(shown, 1);
+        assert_eq!(confirmations(&db), 1);
+        assert!(launchers::is_confirmed(&db.lock(), &changed).unwrap());
+        assert!(!launchers::is_confirmed(&db.lock(), &renamed).unwrap());
+
+        // A save over a launcher that changed meanwhile writes nothing either.
+        let mut other = changed.clone();
+        other.executable = dir.file("Other/Other.exe").to_string_lossy().into_owned();
+        let stale = Some(renamed.clone());
+        let usage = launcher_usage(&db.lock(), "hub").unwrap();
+        let result = save_launcher(&db, Some("hub"), stale, &usage, other.clone(), |_| async {
+            true
+        })
+        .await;
+        assert!(result.err().unwrap().contains("changed in the meantime"));
+        assert_eq!(
+            launchers::get(&db.lock(), "hub").unwrap(),
+            Some(changed.clone())
+        );
+        assert!(launchers::is_confirmed(&db.lock(), &changed).unwrap());
+        assert!(!launchers::is_confirmed(&db.lock(), &other).unwrap());
     }
 
     #[test]

@@ -155,6 +155,24 @@ impl TargetKind {
     }
 }
 
+/// The target kinds as the confirmation dialogs name them, joined naturally: "file",
+/// "file or folder", "file, folder or store id".
+fn kinds_text(kinds: &[TargetKind]) -> String {
+    let nouns: Vec<&str> = kinds
+        .iter()
+        .map(|k| match k {
+            TargetKind::File => "file",
+            TargetKind::Folder => "folder",
+            TargetKind::Identifier => "store id",
+        })
+        .collect();
+    match nouns.split_last() {
+        None => String::new(),
+        Some((last, [])) => (*last).to_string(),
+        Some((last, rest)) => format!("{} or {last}", rest.join(", ")),
+    }
+}
+
 /// A kind set from its names: known names only, at least one, de-duplicated, in canonical order
 /// (file, folder, identifier).
 pub fn parse_kinds(raw: &[String]) -> Result<Vec<TargetKind>> {
@@ -731,8 +749,10 @@ pub fn confirmation_prompt(l: &CustomLauncher) -> Result<String> {
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_default(),
     };
+    // Right after the program, so a long argument list can't push it out of the dialog.
+    let kinds = kinds_text(&l.kinds()?);
     Ok(format!(
-        "Save this launcher?\n\nProgram:\n  {}\n\nArguments (one per line; {TARGET} is {what}):\n{}\n\nWorking folder:\n  {}\n\nName: {}\n\nGame Lobby runs exactly this whenever you play one of this launcher's games. If you give the launcher games folders, they are also searched for emulators, which are added to your emulator list with their standard settings. Save it only if you set it up yourself.",
+        "Save this launcher?\n\nProgram:\n  {}\n\nAny game in your library can then be linked to this launcher without asking again; it runs this command with that game's own {kinds}.\n\nArguments (one per line; {TARGET} is {what}):\n{}\n\nWorking folder:\n  {}\n\nName: {}\n\nGame Lobby runs exactly this whenever you play one of this launcher's games. If you give the launcher games folders, they are also searched for emulators, which are added to your emulator list with their standard settings. Save it only if you set it up yourself.",
         crate::validation::escape_for_prompt(&l.executable),
         crate::links::numbered(&argv),
         crate::validation::escape_for_prompt(&folder),
@@ -1067,11 +1087,11 @@ pub fn assign_prompt(
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_default(),
     };
-    let what = match c.kind {
-        TargetKind::File => "file",
-        TargetKind::Folder => "folder",
-        TargetKind::Identifier => "store id",
-    };
+    let what = kinds_text(&[c.kind]);
+    // Confirming also confirms the launcher's command for later links of every kind it takes
+    // (`record_confirmed` stores them all), so the dialog names them all, right after the
+    // program where a long argument list can't push it out of the dialog.
+    let kinds = kinds_text(&l.kinds()?);
     // Facts first: names and titles are user-editable text, so they come last, sanitised.
     let name = crate::validation::display_text(&l.name, 80);
     let title = crate::validation::display_text(game_title, 80);
@@ -1087,7 +1107,7 @@ pub fn assign_prompt(
     // is kept short enough for the dialog (`links::MAX_CONFIRM_CHARS`), and a second copy of a
     // long target would push the options off it.
     Ok(format!(
-        "Game Lobby will run:\n  {}\n\nArguments (one per line, with the game's {what}):\n{}\n\nWorking folder:\n  {}\n\nFor the game: {title}\nLauncher: {name}\n\nPlay will use {name} from now on.{note} The game's current way to start stays under Play from, and you can remove {name} from the game page at any time.\n\nGames you link to this launcher later run the same way, each with its own file, folder or store id, without asking again until the launcher's command changes.",
+        "Game Lobby will run:\n  {}\n\nGames you link to this launcher later run the same way, each with its own {kinds}, without asking again until the launcher's command changes.\n\nArguments (one per line, with the game's {what}):\n{}\n\nWorking folder:\n  {}\n\nFor the game: {title}\nLauncher: {name}\n\nPlay will use {name} from now on.{note} The game's current way to start stays under Play from, and you can remove {name} from the game page at any time.",
         crate::validation::escape_for_prompt(&l.executable),
         crate::links::numbered(&argv),
         crate::validation::escape_for_prompt(&folder),
@@ -1889,7 +1909,7 @@ mod tests {
         let text = confirmation_prompt(&raw).unwrap();
         assert!(
             text.starts_with(
-                "Save this launcher?\n\nProgram:\n  D:\\Launchers\\<U+202E>exe.gnp\\Heroic.exe\n\nArguments (one per line; {target} is the game's identifier):\n  1. --a<U+0007>b\n  2. {target}\n\nWorking folder:\n  D:\\Mods<U+000A><U+2066>x\n\nName: Heroic\n"
+                "Save this launcher?\n\nProgram:\n  D:\\Launchers\\<U+202E>exe.gnp\\Heroic.exe\n\nAny game in your library can then be linked to this launcher without asking again; it runs this command with that game's own store id.\n\nArguments (one per line; {target} is the game's identifier):\n  1. --a<U+0007>b\n  2. {target}\n\nWorking folder:\n  D:\\Mods<U+000A><U+2066>x\n\nName: Heroic\n"
             ),
             "{text}"
         );
@@ -2121,6 +2141,30 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("searched for emulators"), "{text}");
+        // Saving confirms the command for later one-click links of every kind, which the dialog
+        // says right after the program (above the arguments, so it can't be clipped).
+        let sentence = "Any game in your library can then be linked to this launcher without asking again; it runs this command with that game's own file or store id.";
+        let at = text.find(sentence).expect(&text);
+        assert!(at > text.find("Program:").unwrap(), "{text}");
+        assert!(at < text.find("Arguments").unwrap(), "{text}");
+        let mut all = l.clone();
+        all.target_kinds = vec!["file".into(), "folder".into(), "identifier".into()];
+        assert!(confirmation_prompt(&all)
+            .unwrap()
+            .contains("that game's own file, folder or store id."));
+        all.target_kinds = vec!["folder".into()];
+        all.target_kind = "folder".into();
+        assert!(confirmation_prompt(&all)
+            .unwrap()
+            .contains("that game's own folder."));
+        // A launcher without a program confirms nothing for later links.
+        assert!(!confirmation_prompt(&CustomLauncher {
+            executable: String::new(),
+            args_template: String::new(),
+            ..l.clone()
+        })
+        .unwrap()
+        .contains("without asking again"));
     }
 
     #[test]
@@ -2804,15 +2848,55 @@ mod tests {
         // A title can't fake the dialog: the facts come first, and the title is one clean line.
         let spoof = "Fine\n\nGame Lobby will run:\n  safe.exe\u{202e}\t\u{7}";
         let prompt = assign_prompt(&l, spoof, &candidates[0], &[]).unwrap();
-        let first: Vec<&str> = prompt.lines().take(5).collect();
+        let first: Vec<&str> = prompt.lines().take(7).collect();
         assert_eq!(first[0], "Game Lobby will run:");
         assert_eq!(first[1], format!("  {}", exe.to_string_lossy()));
-        assert!(first[4].ends_with("  1. --start"), "{first:?}");
+        assert!(
+            first[3].starts_with("Games you link to this launcher later"),
+            "{first:?}"
+        );
+        assert!(first[6].ends_with("  1. --start"), "{first:?}");
         assert!(!prompt
             .chars()
             .any(|c| (c.is_control() && c != '\n') || ('\u{202a}'..='\u{202e}').contains(&c)));
         let long = assign_prompt(&l, &"x".repeat(500), &candidates[0], &[]).unwrap();
         assert!(long.contains(&format!("For the game: {}\u{2026}", "x".repeat(79))));
+
+        // Confirming covers later links of every kind the launcher takes (`record_confirmed`
+        // stores them all), so the dialog names them all, not only the kind used now, and says
+        // so right after the program, above the arguments, where it can't be clipped.
+        let both = named("hub", &exe.to_string_lossy(), &["file", "identifier"]);
+        let prompt = assign_prompt(&both, &game.title, &candidates[0], &[]).unwrap();
+        let sentence = "Games you link to this launcher later run the same way, each with its own file or store id, without asking again until the launcher's command changes.";
+        let at = prompt.find(sentence).expect(&prompt);
+        assert!(
+            at > prompt.find(&*exe.to_string_lossy()).unwrap(),
+            "{prompt}"
+        );
+        assert!(at < prompt.find("Arguments").unwrap(), "{prompt}");
+        assert!(
+            prompt.contains("Arguments (one per line, with the game's file):"),
+            "{prompt}"
+        );
+        let id = AssignCandidate {
+            route_index: 0,
+            kind: TargetKind::Identifier,
+            target: "400".into(),
+        };
+        let prompt = assign_prompt(&both, &game.title, &id, &[]).unwrap();
+        assert!(prompt.contains(sentence), "{prompt}");
+        assert!(prompt.contains("with the game's store id):"), "{prompt}");
+        let all = named(
+            "all",
+            &exe.to_string_lossy(),
+            &["file", "folder", "identifier"],
+        );
+        assert!(assign_prompt(&all, &game.title, &candidates[0], &[])
+            .unwrap()
+            .contains("each with its own file, folder or store id, without"));
+        assert!(assign_prompt(&l, &game.title, &candidates[0], &[])
+            .unwrap()
+            .contains("each with its own file, without"));
 
         // The renderer can't add that route itself, nor mark or unmark a route as assigned.
         let check = crate::validation::check_renderer_routes;
