@@ -2,9 +2,9 @@
 
 All notable changes to Game Lobby are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
-## [Unreleased] — 1.0.0
+## [0.4.0] — 2026-11-15
 
-The first public release.
+The first public release. Version 1.0.0 follows once the release pipeline and hands-on test pass are done.
 
 ### Library
 - Detects installed games from Steam, Epic Games, GOG, Xbox / Microsoft Store, Ubisoft Connect, EA app, Battle.net, itch.io and Amazon Games, grouped by library.
