@@ -385,12 +385,7 @@ fn check_template_piece(
     if !piece.contains(is_separator) {
         return Ok(());
     }
-    // `/fullscreen` is an option; `/evil.dll` is a file at the root of the drive.
-    let mut rest = piece.chars();
-    if rest.next() == Some('/')
-        && rest.next().is_some_and(|c| c.is_ascii_alphabetic())
-        && rest.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-    {
+    if is_slash_option(piece) {
         return Ok(());
     }
     let first = piece.chars().next().unwrap_or(' ');
@@ -401,6 +396,26 @@ fn check_template_piece(
         return Err(format!("it leaves the {noun}'s folder with \"..\"."));
     }
     Ok(())
+}
+
+/// `/fullscreen` is an option; `/evil.dll` is a file at the root of the drive.
+fn is_slash_option(piece: &str) -> bool {
+    let mut rest = piece.chars();
+    rest.next() == Some('/')
+        && rest.next().is_some_and(|c| c.is_ascii_alphabetic())
+        && rest.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+/// The first relative path in `argv` (already accepted by [`check_arguments`]), split into
+/// pieces like there: a piece with `\` or `/` that isn't a full path (no `:`) and isn't an
+/// option like `/fullscreen`. [`check_arguments`] confines such a path against the program's
+/// folder, so it is only meaningful when that folder is also the working folder.
+pub(crate) fn first_relative_path(argv: &[String]) -> Option<&str> {
+    argv.iter().map(String::as_str).find(|token| {
+        token.split(['=', ';', ',']).any(|piece| {
+            piece.contains(['\\', '/']) && !piece.contains(':') && !is_slash_option(piece)
+        })
+    })
 }
 
 /// The profile a ROM route launches with: its assigned profile, or (when none is assigned or

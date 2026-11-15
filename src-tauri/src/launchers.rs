@@ -714,11 +714,6 @@ pub fn confirmation_prompt(l: &CustomLauncher) -> Result<String> {
         ));
     }
     let argv = build_argv(&l.args_template, TARGET)?;
-    let lines: Vec<String> = argv
-        .iter()
-        .enumerate()
-        .map(|(i, arg)| format!("  {}. {arg}", i + 1))
-        .collect();
     let nouns: Vec<&str> = l
         .kinds()?
         .into_iter()
@@ -737,9 +732,10 @@ pub fn confirmation_prompt(l: &CustomLauncher) -> Result<String> {
             .unwrap_or_default(),
     };
     Ok(format!(
-        "Save this launcher?\n\nProgram:\n  {}\n\nArguments (one per line; {TARGET} is {what}):\n{}\n\nWorking folder:\n  {folder}\n\nName: {}\n\nGame Lobby runs exactly this whenever you play one of this launcher's games. If you give the launcher games folders, they are also searched for emulators, which are added to your emulator list with their standard settings. Save it only if you set it up yourself.",
-        l.executable,
-        lines.join("\n"),
+        "Save this launcher?\n\nProgram:\n  {}\n\nArguments (one per line; {TARGET} is {what}):\n{}\n\nWorking folder:\n  {}\n\nName: {}\n\nGame Lobby runs exactly this whenever you play one of this launcher's games. If you give the launcher games folders, they are also searched for emulators, which are added to your emulator list with their standard settings. Save it only if you set it up yourself.",
+        crate::validation::escape_for_prompt(&l.executable),
+        crate::links::numbered(&argv),
+        crate::validation::escape_for_prompt(&folder),
         crate::validation::display_text(&l.name, 80)
     ))
 }
@@ -1086,10 +1082,12 @@ pub fn assign_prompt(
             crate::links::options_note(base, options.len(), &name)
         )
     };
+    // The target is shown once, in the arguments: with launch options the whole command line
+    // is kept short enough for the dialog (`links::MAX_CONFIRM_CHARS`), and a second copy of a
+    // long target would push the options off it.
     Ok(format!(
-        "Game Lobby will run:\n  {}\n\nArguments (one per line; the game's {what} is {}):\n{}\n\nWorking folder:\n  {}\n\nFor the game: {title}\nLauncher: {name}\n\nPlay will use {name} from now on.{note} The game's current way to start stays under Play from, and you can remove {name} from the game page at any time.",
+        "Game Lobby will run:\n  {}\n\nArguments (one per line, with the game's {what}):\n{}\n\nWorking folder:\n  {}\n\nFor the game: {title}\nLauncher: {name}\n\nPlay will use {name} from now on.{note} The game's current way to start stays under Play from, and you can remove {name} from the game page at any time.",
         crate::validation::escape_for_prompt(&l.executable),
-        crate::validation::escape_for_prompt(&c.target),
         crate::links::numbered(&argv),
         crate::validation::escape_for_prompt(&folder),
     ))
@@ -1801,6 +1799,22 @@ mod tests {
         let text = confirmation_prompt(&shown).unwrap();
         assert!(text.contains("  1. --silent\n  2. {target}"), "{text}");
         assert!(text.contains(r"  D:\Mods"), "{text}");
+        // The program, arguments and folder are shown exactly, with control and bidi characters
+        // written out, like every other confirmation (`links::numbered`).
+        let raw = CustomLauncher {
+            executable: "D:\\Launchers\\\u{202e}exe.gnp\\Heroic.exe".into(),
+            args_template: "--a\u{7}b {target}".into(),
+            working_dir: Some("D:\\Mods\n\u{2066}x".into()),
+            ..shown.clone()
+        };
+        let text = confirmation_prompt(&raw).unwrap();
+        assert!(
+            text.starts_with(
+                "Save this launcher?\n\nProgram:\n  D:\\Launchers\\<U+202E>exe.gnp\\Heroic.exe\n\nArguments (one per line; {target} is the game's identifier):\n  1. --a<U+0007>b\n  2. {target}\n\nWorking folder:\n  D:\\Mods<U+000A><U+2066>x\n\nName: Heroic\n"
+            ),
+            "{text}"
+        );
+        assert!(!text.contains(['\u{202e}', '\u{2066}', '\u{7}']));
     }
 
     #[test]

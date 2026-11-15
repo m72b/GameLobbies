@@ -65,6 +65,11 @@ pub const MAX_ARGS_CHARS: usize = 1_000;
 pub const MAX_ARGS: usize = 24;
 /// Longest single launch option, in characters.
 pub const MAX_ARG_CHARS: usize = 200;
+/// Longest launcher command line with launch options that can be confirmed: the program, every
+/// argument (template, target and options) and the working folder, as the native dialog shows
+/// them (`validation::escape_for_prompt`), in characters. A message box doesn't scroll and the
+/// options are its last numbered lines, so the whole command line must fit.
+pub const MAX_CONFIRM_CHARS: usize = 2_000;
 
 /// The links table and the launch options the user confirmed (idempotent added tables, no
 /// `user_version` change; older builds ignore them). Called from `db::migrate`.
@@ -1012,7 +1017,45 @@ pub fn prepare_options(host: &ArgsHost, text: &str) -> Result<Option<Vec<String>
     if args_text(&argv).is_none() {
         bail!("A launch option can't contain both kinds of quotes.");
     }
+    if host.launcher.is_some() {
+        check_launcher_options(host, &argv)?;
+    }
     Ok(Some(argv))
+}
+
+/// The extra rules for options on a launcher route ([`prepare_options`]):
+/// - the whole command line (program, template, target, options and working folder) must fit
+///   the native confirmation: at most [`MAX_ARGS`] arguments in all and [`MAX_CONFIRM_CHARS`]
+///   characters as shown;
+/// - when the launcher runs in a working folder other than its program's folder, no relative
+///   paths: they are checked against the program's folder (`launch::check_arguments`) but the
+///   launcher would look them up in the working folder.
+fn check_launcher_options(host: &ArgsHost, options: &[String]) -> Result<()> {
+    let name = host.launcher.as_deref().unwrap_or("This launcher");
+    let argv = host.argv(options);
+    let shown = |s: &str| validation::escape_for_prompt(s).chars().count();
+    let chars =
+        shown(&host.program) + shown(&host.cwd) + argv.iter().map(|a| shown(a)).sum::<usize>();
+    if argv.len() > MAX_ARGS || chars > MAX_CONFIRM_CHARS {
+        bail!("{name}'s command line is too long to confirm with launch options. Shorten its arguments or the game's path, or use fewer options: the whole command line can have at most {MAX_ARGS} arguments and {MAX_CONFIRM_CHARS} characters, counting {name}'s own arguments and the game's path.");
+    }
+    let program_folder = std::path::Path::new(&host.program)
+        .parent()
+        .and_then(|p| crate::tracker::normalize_path(&p.to_string_lossy()));
+    let same_folder =
+        program_folder.is_some() && program_folder == crate::tracker::normalize_path(&host.cwd);
+    if !same_folder {
+        if let Some(token) = crate::launch::first_relative_path(options) {
+            bail!(
+                "The launch option \"{}\" is a relative path, but {name} runs in a working folder other than its program's folder, so it wouldn't be looked up where it is checked. Use a full path inside {name}'s folder instead, like {}.",
+                validation::escape_for_prompt(token),
+                std::path::Path::new(&host.program)
+                    .with_file_name(r"plugins\settings.ini")
+                    .display()
+            );
+        }
+    }
+    Ok(())
 }
 
 /// The stored launch options of a game's own `.exe` route, checked again (see
@@ -3618,8 +3661,10 @@ mod tests {
                 "{bad} should be refused"
             );
         }
+        // At most 24 arguments in all, the launcher's two included.
         let many = (0..25).map(|i| format!("-o{i}")).collect::<Vec<_>>();
-        assert!(prepare_options(&host, &many[..24].join(" ")).is_ok());
+        assert!(prepare_options(&host, &many[..22].join(" ")).is_ok());
+        assert!(prepare_options(&host, &many[..23].join(" ")).is_err());
         assert!(prepare_options(&host, &many.join(" ")).is_err());
         assert!(prepare_options(&host, &"a".repeat(201)).is_err());
         assert!(prepare_options(&host, &"-x ".repeat(400)).is_err());
@@ -3644,6 +3689,166 @@ mod tests {
         }
         assert!(launcher_host(&l, &route("launcher:other", "Custom", HK)).is_err());
         assert!(launcher_host(&l, &hub_route("bad/target", None)).is_err());
+    }
+
+    /// A stored route of `l` with `options` and a confirmation row for them, as if they had
+    /// been confirmed before the launcher or route changed: the launch and both checks must
+    /// still refuse them when they no longer pass [`prepare_options`].
+    fn stored_with_row(
+        conn: &Connection,
+        l: &CustomLauncher,
+        target: &str,
+        options: &[&str],
+    ) -> GameRoute {
+        crate::launchers::save(conn, l).unwrap();
+        let options: Vec<String> = options.iter().map(|o| o.to_string()).collect();
+        let r = hub_route(target, Some(&serde_json::to_string(&options).unwrap()));
+        let host = launcher_host(l, &r).unwrap();
+        confirm_host_args(conn, &host, &options).unwrap();
+        r
+    }
+
+    fn refused_everywhere(conn: &Connection, l: &CustomLauncher, r: &GameRoute, says: &str) {
+        let e = checked_stored_args(conn, r).unwrap_err().to_string();
+        assert!(e.contains(says), "{e}");
+        assert!(args_need_confirmation(conn, r));
+        let target = r.launch_target.as_str();
+        assert!(launcher_launch_argv(conn, l, r, &hub_launch(l, target)).is_err());
+        // The game page's check (`link_commands`) and the assignment's check
+        // (`launcher_commands`) refuse them too.
+        let text = args_text(&crate::launch::parse_launch_arguments(
+            r.launch_args.as_deref(),
+        ))
+        .unwrap();
+        let e = prepare_route_args(conn, r, &text).unwrap_err().to_string();
+        assert!(e.contains(says), "{e}");
+        let host = launcher_host(l, r).unwrap();
+        assert!(prepare_options(&host, &text).is_err());
+    }
+
+    #[test]
+    fn launcher_options_need_a_command_line_that_fits_the_confirmation() {
+        // A template of 30 arguments: no launch options at all (the dialog would list 31
+        // arguments before them), though the launcher itself runs fine.
+        let long: Vec<String> = (0..30).map(|i| format!("-a{i}")).collect();
+        let l = hub(HUB, &format!("{} {{target}}", long.join(" ")));
+        let r = hub_route(HK, None);
+        let host = launcher_host(&l, &r).unwrap();
+        assert_eq!(host.base.len(), 31);
+        let e = prepare_options(&host, "-x").unwrap_err().to_string();
+        assert!(e.contains("too long to confirm with launch options"), "{e}");
+        assert_eq!(prepare_options(&host, " ").unwrap(), None);
+        // Just under the count: 22 template arguments and the target leave one option.
+        let l22 = hub(HUB, &format!("{} {{target}}", long[..22].join(" ")));
+        let host22 = launcher_host(&l22, &r).unwrap();
+        assert!(prepare_options(&host22, "-x").is_ok());
+        assert!(prepare_options(&host22, "-x -y").is_err());
+
+        // A very long target: refused once the whole command line, as shown, passes 2000
+        // characters (program, working folder, template, target and options).
+        let l = hub(HUB, "--start {target}");
+        let fixed = HUB.len() + r"D:\Launchers\Hub".len() + "--start".len() + "-x".len();
+        let target_of = |len: usize| format!(r"D:\G\{}", "a".repeat(len - 5));
+        let fits =
+            launcher_host(&l, &hub_route(&target_of(MAX_CONFIRM_CHARS - fixed), None)).unwrap();
+        let x = prepare_options(&fits, "-x").unwrap().unwrap();
+        assert!(prepare_options(&fits, "-xy").is_err());
+        // The longest command line that fits leaves the rest of the dialog short: names are cut
+        // (`display_text`) and the sentences are fixed.
+        let prompt = route_args_prompt(&fits, &"t".repeat(500), &hub_route(HK, None), &x);
+        assert!(
+            prompt.chars().count() < MAX_CONFIRM_CHARS + 700,
+            "{}",
+            prompt.len()
+        );
+        assert!(prompt.ends_with("Save only options you trust."));
+        let huge = launcher_host(&l, &hub_route(&target_of(8_000), None)).unwrap();
+        let e = prepare_options(&huge, "-x").unwrap_err().to_string();
+        assert!(
+            e.contains("Shorten its arguments or the game's path"),
+            "{e}"
+        );
+        // A game's own .exe keeps its own limits (no launcher template before the options).
+        let exe = exe_host(&route("local", "Custom", HK)).unwrap();
+        let many = (0..24).map(|i| format!("-o{i}")).collect::<Vec<_>>();
+        assert!(prepare_options(&exe, &many.join(" ")).is_ok());
+
+        // Stored and confirmed before the launcher grew: refused at launch and in both checks.
+        let db = db::Db::memory().unwrap();
+        let conn = db.lock();
+        let short = hub(HUB, "--start {target}");
+        let r = stored_with_row(&conn, &short, HK, &["-x"]);
+        assert_eq!(checked_stored_args(&conn, &r).unwrap(), ["-x"]);
+        let grown = hub(HUB, &format!("{} {{target}}", long.join(" ")));
+        crate::launchers::save(&conn, &grown).unwrap();
+        refused_everywhere(&conn, &grown, &r, "too long to confirm");
+        // And a route whose target is too long for its options.
+        let r = stored_with_row(&conn, &short, &target_of(8_000), &[]);
+        let r = GameRoute {
+            launch_args: Some(r#"["-x"]"#.into()),
+            ..r
+        };
+        refused_everywhere(&conn, &short, &r, "too long to confirm");
+    }
+
+    #[test]
+    fn launcher_options_have_no_relative_paths_when_the_working_folder_is_elsewhere() {
+        let l = CustomLauncher {
+            working_dir: Some(r"D:\Launchers\Hub\data".into()),
+            ..hub(HUB, "--start {target}")
+        };
+        let r = hub_route(HK, None);
+        let host = launcher_host(&l, &r).unwrap();
+        for bad in [
+            r"-cfg plugins\a.ini",
+            "-cfg plugins/a.ini",
+            r"--cfg=plugins\a.ini",
+            r"--mods=a;plugins\b.dll",
+            r".\a.ini",
+        ] {
+            let e = prepare_options(&host, bad).unwrap_err().to_string();
+            assert!(
+                e.contains("relative path") && e.contains(r"D:\Launchers\Hub\plugins\settings.ini"),
+                "{bad}: {e}"
+            );
+        }
+        // Full paths inside the launcher's folder, options like /fullscreen and plain words
+        // are fine; full paths elsewhere stay refused.
+        for good in [
+            r"-cfg D:\Launchers\Hub\plugins\a.ini",
+            "/fullscreen -windowed",
+            "-name a.ini",
+        ] {
+            assert!(prepare_options(&host, good).is_ok(), "{good}");
+        }
+        assert!(prepare_options(&host, r"-cfg D:\Games\x.ini").is_err());
+        // The launcher's own template is checked as before.
+        let templated = CustomLauncher {
+            working_dir: Some(r"D:\Launchers\Hub\data".into()),
+            ..hub(HUB, r"--config config\hub.json {target}")
+        };
+        assert!(launcher_host(&templated, &r).is_ok());
+        // Working in the program's own folder (however it is written): relative paths are fine.
+        for same in [r"D:\Launchers\Hub", r"d:\launchers\HUB"] {
+            let here = CustomLauncher {
+                working_dir: Some(same.into()),
+                ..l.clone()
+            };
+            let host = launcher_host(&here, &r).unwrap();
+            assert!(
+                prepare_options(&host, r"-cfg plugins\a.ini").is_ok(),
+                "{same}"
+            );
+        }
+        // Stored and confirmed before the working folder moved: refused at launch and in
+        // both checks.
+        let db = db::Db::memory().unwrap();
+        let conn = db.lock();
+        let at_home = hub(HUB, "--start {target}");
+        let r = stored_with_row(&conn, &at_home, HK, &["-cfg", r"plugins\a.ini"]);
+        assert!(checked_stored_args(&conn, &r).is_ok());
+        crate::launchers::save(&conn, &l).unwrap();
+        refused_everywhere(&conn, &l, &r, "relative path");
     }
 
     #[test]
@@ -3805,9 +4010,13 @@ mod tests {
             .unwrap();
         let prompt = crate::launchers::assign_prompt(&l, &g.title, &c, &options).unwrap();
         assert!(prompt.starts_with(&format!(
-            "Game Lobby will run:\n  {HUB}\n\nArguments (one per line; the game's file is {HK}):\n  1. --start\n  2. {HK}\n  3. -windowed\n  4. -nosplash\n\nWorking folder:\n  D:\\Launchers\\Hub\n\nFor the game: Hollow Knight\nLauncher: Hub\n"
+            "Game Lobby will run:\n  {HUB}\n\nArguments (one per line, with the game's file):\n  1. --start\n  2. {HK}\n  3. -windowed\n  4. -nosplash\n\nWorking folder:\n  D:\\Launchers\\Hub\n\nFor the game: Hollow Knight\nLauncher: Hub\n"
         )), "{prompt}");
         assert!(prompt.contains("Arguments 3 to 4 are this game's launch options"));
+        // The target is shown once, so the dialog stays within what the options were checked
+        // for (`MAX_CONFIRM_CHARS`, plus the bounded names and sentences).
+        assert_eq!(prompt.matches(HK).count(), 1, "{prompt}");
+        assert!(prompt.chars().count() < MAX_CONFIRM_CHARS + 1_000);
         let plain = crate::launchers::assign_prompt(&l, &g.title, &c, &[]).unwrap();
         assert!(!plain.contains("launch options") && !plain.contains("  3."));
         let mut routes = crate::launchers::assign(&l, &g, Some(&c), None).unwrap();
