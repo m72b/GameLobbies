@@ -1,5 +1,5 @@
 import './lobby-api'
-import { useEffect, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import { ArrowLeft, Blocks, ChevronRight, CircleHelp, Cloud, FolderSearch, Gamepad2, Keyboard, Library, ListChecks, Puzzle, Rocket, RotateCcw, Settings2, SlidersHorizontal, Sparkles, Star } from 'lucide-react'
 import type { IgdbBulkProgress, IgdbCredentialStatus, Settings, SettingsSection, SteamGridDbStyle, StoreId, StoreStatus } from '../shared/types'
 import { steamGridDbStyles } from '../shared/types'
@@ -12,6 +12,7 @@ import { LaunchersSection } from './launcher-settings'
 import { UpdatesSection } from './updates-section'
 import { IgdbAttribution } from './igdb-details'
 import { IgdbSetup, cleanPaste } from './igdb-setup'
+import { SteamOwnedSetup } from './steam-owned-setup'
 import { createRoot } from 'react-dom/client'
 import './styles.css'
 
@@ -238,12 +239,15 @@ export function SettingsApp() {
         {section === 'Libraries' && <>
           <div className="settings-card">
             <h3>Detected stores and launchers</h3>
-            <p className="muted-text">Game Lobby finds installed games on its own by reading each launcher's local files on this PC. No accounts or keys are needed. Turn a store off to stop scanning it; games already in the library stay until you remove them.</p>
-            {stores.map(store => <div className="toggle-row store-row" key={store.id}>
-              <span className="store-badge small"><StoreIcon store={store.name} /></span>
-              <div><b>{store.name}</b><small className={store.error ? 'store-error' : ''}>{storeStatusText(store)}</small></div>
-              <input type="checkbox" aria-label={'Scan ' + store.name} checked={store.enabled} onChange={event => toggleStore(store.id, event.target.checked)} />
-            </div>)}
+            <p className="muted-text">Game Lobby finds installed games on its own by reading each launcher's local files on this PC. No accounts or keys are needed for installed games. Turn a store off to stop scanning it; games already in the library stay until you remove them.</p>
+            {stores.map(store => <Fragment key={store.id}>
+              <div className="toggle-row store-row">
+                <span className="store-badge small"><StoreIcon store={store.name} /></span>
+                <div><b>{store.name}</b><small className={store.error ? 'store-error' : ''}>{storeStatusText(store)}</small></div>
+                <input type="checkbox" aria-label={'Scan ' + store.name} checked={store.enabled} onChange={event => toggleStore(store.id, event.target.checked)} />
+              </div>
+              {store.id === 'steam' && <SteamOwnedSetup say={say} />}
+            </Fragment>)}
             <div className="settings-actions"><button className="primary-button" onClick={() => void scanLibraries()}><Library size={15} /> Scan libraries</button></div>
           </div>
           <div className="settings-card"><div className="toggle-row"><div><b>Show only installed games</b><small>Hide games that are not installed</small></div><input type="checkbox" checked={settings.showOnlyInstalled} onChange={event => void save({ showOnlyInstalled: event.target.checked })} /></div><div className="toggle-row"><div><b>Minimize when a game starts</b><small>Game Lobby moves to the taskbar after you press Play</small></div><input type="checkbox" checked={settings.minimizeOnLaunch} onChange={event => void save({ minimizeOnLaunch: event.target.checked })} /></div></div>

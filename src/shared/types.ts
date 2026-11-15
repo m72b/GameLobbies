@@ -507,6 +507,17 @@ export interface IgdbMetadataView { configured: boolean; pending: boolean; check
 export interface IgdbSearchResult { igdbId: number; name: string; releaseDate?: number; platforms: string[]; mainGame: boolean }
 export interface IgdbCredentialStatus { clientIdSet: boolean; clientSecretSet: boolean }
 export interface IgdbTestResult { ok: boolean; message: string }
+/** Outcome of the last Steam owned-games request; `message` never contains the key or the SteamID. */
+export interface SteamOwnedImportStatus { ok: boolean; message: string; checkedAt: number; needsNewCredentials: boolean }
+/** The optional Steam Web API owned-games import. The key and SteamID64 are write-only: only whether each is saved comes back. */
+export interface SteamOwnedStatus { keySet: boolean; steamIdSet: boolean; last: SteamOwnedImportStatus | null }
+export interface SteamOwnedAPI {
+  status(): Promise<SteamOwnedStatus>
+  /** Validates and saves the non-empty fields (an empty field keeps the stored value), then imports owned games at once when both are saved. */
+  save(key: string, steamId: string): Promise<SteamOwnedStatus>
+  /** Clears the key and the SteamID64 and removes the not-installed games the import added (games with your data stay). */
+  remove(): Promise<SteamOwnedStatus>
+}
 export interface IgdbBulkProgress { running: boolean; done: number; total: number; updated: number; notFound: number; failed: number; message?: string }
 export interface IgdbMetadataEvent { gameId: string; changed: boolean }
 export interface IgdbAPI {
@@ -585,6 +596,7 @@ export interface LobbyAPI {
   backup: { export(): Promise<string | null>; import(): Promise<number> }
   plugins: { list(): Promise<PluginManifest[]>; install(): Promise<PluginManifest[]> }
   steamGridDb: SteamGridDbAPI
+  steamOwned: SteamOwnedAPI
   tracking: TrackingAPI
   art: ArtAPI
   igdb: IgdbAPI

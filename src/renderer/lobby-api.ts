@@ -128,6 +128,11 @@ const api: LobbyAPI = {
     fetchMissing: () => call('steamgriddb_fetch_missing'),
     onFetched: callback => subscribe<SteamGridDbFetchSummary>('steamgriddb:fetched', callback)
   },
+  steamOwned: {
+    status: () => call('steam_owned_status'),
+    save: (key, steamId) => call('steam_owned_save', { key, steamId }),
+    remove: () => call('steam_owned_remove')
+  },
   tracking: {
     status: () => call('tracking_status'),
     onChanged: callback => subscribe<RunningGame[]>('tracking:changed', callback),
