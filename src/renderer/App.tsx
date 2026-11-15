@@ -13,6 +13,8 @@ import { CoverTiles, LoadMore, pickerCovers, useSgdbPages } from './cover-picker
 import { StorageView } from './storage-view'
 import { RecentShelf } from './recent-shelf'
 import { GamePage, type GamePageActions } from './game-page'
+import { LinkReview } from './link-review'
+import { routeRef } from '../shared/routes'
 import { SessionHistory } from './session-history'
 import { elapsedSeconds, formatClock, useNow } from './format'
 import { LauncherIcon, useLaunchers } from './launcher-icon'
@@ -56,6 +58,8 @@ export default function App() {
   const savedScroll = useRef(0)
   const [linkingGame, setLinkingGame] = useState<Game | null>(null)
   const [linkQuery, setLinkQuery] = useState('')
+  const [linkPicked, setLinkPicked] = useState<string[]>([])
+  const [linkReview, setLinkReview] = useState<string[] | null>(null)
   const [menu, setMenu] = useState<{ x: number; y: number; game: Game } | null>(null)
   const [scanBusy, setScanBusy] = useState(false)
   const [localBusy, setLocalBusy] = useState(false)
@@ -170,18 +174,17 @@ export default function App() {
   const linkAnotherGame = (game: Game) => {
     setLinkingGame(game)
     setLinkQuery('')
+    setLinkPicked([])
     setMenu(null)
   }
-  const mergeIntoKeptGame = async (source: Game) => {
-    if (!linkingGame) return
-    try {
-      const nextGames = await window.lobby.library.merge(linkingGame.id, source.id)
-      setGames(nextGames)
-      setLinkingGame(null)
-      notice(`Linked ${source.title} to ${linkingGame.title}`)
-    } catch (error) {
-      notice(error instanceof Error ? error.message : 'Could not link these games')
-    }
+  // Linking always goes through the review step (`LinkReview`): nothing merges from this list.
+  const toggleLinkPick = (id: string) => setLinkPicked(current => current.includes(id) ? current.filter(other => other !== id) : [...current, id])
+  const linked = (nextGames: Game[], keptId: string) => {
+    setGames(nextGames)
+    setLinkReview(null)
+    setLinkingGame(null)
+    if (openId && !nextGames.some(game => game.id === openId)) setOpenId(keptId)
+    notice('Games linked')
   }
   const menuAction = async (action: MenuAction, game: Game) => {
     setMenu(null)
@@ -294,7 +297,7 @@ export default function App() {
         return
       }
       if (event.key === 'Escape') {
-        if (!menu && !adding && !editingGame && !sgdbGame && !linkingGame) setOpenId(null)
+        if (!menu && !adding && !editingGame && !sgdbGame && !linkingGame && !linkReview) setOpenId(null)
         setMenu(null)
         setAdding(false)
         setEditingGame(null)
@@ -333,7 +336,7 @@ export default function App() {
       observer.disconnect()
       window.removeEventListener('keydown', key)
     }
-  }, [openId, menu, adding, editingGame, sgdbGame, linkingGame])
+  }, [openId, menu, adding, editingGame, sgdbGame, linkingGame, linkReview])
 
   useEffect(() => { applyTheme(settings.theme, settings) }, [settings])
   useEffect(() => {
@@ -441,7 +444,16 @@ export default function App() {
     remove: game => void menuAction('Remove', game),
     setEmulator: async (game, routeIndex, emulatorId) => { setGames(await window.lobby.library.setEmulator(game.id, routeIndex, emulatorId)) },
     assignLauncher: async (game, launcherId, routeIndex, kind) => { setGames(await window.lobby.launchers.assign(game.id, launcherId, routeIndex, kind)) },
-    unassignLauncher: async (game, launcherId) => { setGames(await window.lobby.launchers.unassign(game.id, launcherId)) }
+    unassignLauncher: async (game, launcherId) => { setGames(await window.lobby.launchers.unassign(game.id, launcherId)) },
+    renameRoute: async (game, index, name) => { setGames(await window.lobby.library.renameRoute(game.id, routeRef(game.routes[index], index), name)) },
+    setRouteArgs: async (game, index, args) => { setGames(await window.lobby.library.setRouteArgs(game.id, routeRef(game.routes[index], index), args)) },
+    unlinkPreview: (game, index) => window.lobby.library.unlinkPreview(game.id, routeRef(game.routes[index], index)),
+    unlink: async (game, index) => {
+      const result = await window.lobby.library.unlink(game.id, routeRef(game.routes[index], index))
+      setGames(result.games)
+      const split = result.games.find(other => other.id === result.gameId)
+      notice(split ? 'Unlinked: ' + split.title + ' is its own game again' : 'Unlinked')
+    }
   }
 
   return <div className="app-shell">
@@ -573,18 +585,19 @@ export default function App() {
       <label className="toggle-row"><span>Favorite</span><input type="checkbox" checked={editFavorite} onChange={event => setEditFavorite(event.target.checked)} /></label>
       <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setEditingGame(null)}>Cancel</button><button className="primary-button">Save changes</button></div>
     </form></div>}
-    {linkingGame && <div className="modal-scrim"><div className="modal link-modal">
-      <div className="modal-head"><h2>Link another game</h2><button type="button" aria-label="Close" onClick={() => setLinkingGame(null)}><X size={17} /></button></div>
-      <p>Choose a duplicate to combine into <b>{linkingGame.title}</b>. Its title and metadata stay as the primary entry; launch sources and playtime are combined.</p>
+    {linkingGame && !linkReview && <div className="modal-scrim"><div className="modal link-modal">
+      <div className="modal-head"><h2>Link games</h2><button type="button" aria-label="Close" onClick={() => setLinkingGame(null)}><X size={17} /></button></div>
+      <p>Choose the other entries of <b>{linkingGame.title}</b> (other stores, editions or versions, even from the same store). Next you review what is combined and pick the title, cover and other details. Each entry becomes a route under “Play from”.</p>
       <label>Find a game<input value={linkQuery} onChange={event => setLinkQuery(event.target.value)} placeholder="Search your library" autoFocus /></label>
       <div className="link-game-list">
         {games.filter(game => game.id !== linkingGame.id && (!linkQuery.trim() || game.title.toLocaleLowerCase().includes(linkQuery.trim().toLocaleLowerCase()))).slice(0, 100).map(game =>
-          <button className="link-game-row" key={game.id} onClick={() => void mergeIntoKeptGame(game)}><span><b>{game.title}</b><small>{storeName(game)} · {game.routes.length} launch source{game.routes.length === 1 ? '' : 's'}</small></span><span>Merge</span></button>
+          <button className={'link-game-row' + (linkPicked.includes(game.id) ? ' picked' : '')} key={game.id} aria-pressed={linkPicked.includes(game.id)} onClick={() => toggleLinkPick(game.id)}><span><b>{game.title}</b><small>{storeName(game)} · {game.routes.length} launch source{game.routes.length === 1 ? '' : 's'}</small></span><span>{linkPicked.includes(game.id) ? 'Selected' : 'Select'}</span></button>
         )}
         {games.filter(game => game.id !== linkingGame.id && (!linkQuery.trim() || game.title.toLocaleLowerCase().includes(linkQuery.trim().toLocaleLowerCase()))).length === 0 && <div className="empty-inline">No other matching games.</div>}
       </div>
-      <div className="modal-actions"><button className="secondary-button" onClick={() => setLinkingGame(null)}>Cancel</button></div>
+      <div className="modal-actions"><button className="secondary-button" onClick={() => setLinkingGame(null)}>Cancel</button><button className="primary-button" disabled={linkPicked.length === 0} onClick={() => setLinkReview([linkingGame.id, ...linkPicked])}>Review link{linkPicked.length > 1 ? ' (' + (linkPicked.length + 1) + ' games)' : ''}…</button></div>
     </div></div>}
+    {linkReview && <LinkReview gameIds={linkReview} onClose={() => setLinkReview(null)} onLinked={linked} />}
     {sgdbGame && <div className="modal-scrim"><div className="modal sgdb-modal" role="dialog" aria-label={'Find cover for ' + sgdbGame.title}>
       <div className="modal-head"><h2>{sgdbGame.title}</h2><button type="button" aria-label="Close" onClick={closeFindCover}><X size={17} /></button></div>
       {sgdbPages.state === 'loading' && <div className="empty-inline">Searching SteamGridDB…</div>}

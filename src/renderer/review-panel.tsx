@@ -1,27 +1,23 @@
 import { useCallback, useEffect, useState } from 'react'
 import { HealthCheckCard, HealthItem, healthLabels, healthTitle, isHealthItem, type HealthKind } from './health-items'
+import { LinkReview } from './link-review'
 import type { IgnoredPath, ReviewItem, ReviewResolution } from '../shared/types'
 
 const errorText = (error: unknown) => error instanceof Error ? error.message : typeof error === 'string' ? error : 'Could not apply this decision'
 
 type ItemProps<K extends ReviewItem['kind']> = { item: Extract<ReviewItem, { kind: K }>; apply(resolution: ReviewResolution): void; busy: boolean }
 
-function DuplicateItem({ item, apply, busy }: ItemProps<'duplicate'>) {
-  const [linking, setLinking] = useState(false)
-  const [target, setTarget] = useState(item.details.games[0]?.gameId ?? '')
+function DuplicateItem({ item, apply, busy, onLinked }: ItemProps<'duplicate'> & { onLinked(): void }) {
+  const [reviewing, setReviewing] = useState(false)
   return <>
-    <p className="muted-text">Same system and title found as different games. They are never merged automatically.</p>
+    <p className="muted-text">Same system and title found as different games. They are never merged automatically: link them only after reviewing what is combined.</p>
     <ul className="review-games">{item.details.games.map(game => <li key={game.gameId}><b>{game.title}</b>{game.paths.map(path => <div className="root-path" key={path} title={path}>{path}</div>)}</li>)}</ul>
-    {linking && <fieldset className="review-choices"><legend>Keep which game? The others are merged into it.</legend>
-      {item.details.games.map(game => <label key={game.gameId}><input type="radio" name={'target-' + item.id} checked={target === game.gameId} onChange={() => setTarget(game.gameId)} /> {game.title}{game.paths[0] ? ' · ' + game.paths[0] : ''}</label>)}</fieldset>}
     <div className="settings-actions">
-      {linking
-        ? <><button type="button" className="primary-button" disabled={busy || !target} onClick={() => apply({ action: 'link', targetGameId: target })}>Link games</button><button type="button" className="secondary-button" onClick={() => setLinking(false)}>Cancel</button></>
-        : <><button type="button" className="secondary-button" disabled={busy} onClick={() => apply({ action: 'keep-separate' })}>Keep separate</button><button type="button" className="secondary-button" disabled={busy} onClick={() => setLinking(true)}>Link…</button><button type="button" className="secondary-button" disabled={busy} onClick={() => apply({ action: 'dismiss' })}>Dismiss</button></>}
+      <button type="button" className="secondary-button" disabled={busy} onClick={() => apply({ action: 'keep-separate' })}>Keep separate</button><button type="button" className="secondary-button" disabled={busy} onClick={() => setReviewing(true)}>Link…</button><button type="button" className="secondary-button" disabled={busy} onClick={() => apply({ action: 'dismiss' })}>Dismiss</button>
     </div>
+    {reviewing && <LinkReview gameIds={item.details.games.map(game => game.gameId)} reviewId={item.id} onClose={() => setReviewing(false)} onLinked={() => { setReviewing(false); onLinked() }} />}
   </>
 }
-
 function ExeItem({ item, apply, busy }: ItemProps<'ambiguous-exe'>) {
   const [exe, setExe] = useState('')
   return <>
@@ -105,7 +101,7 @@ export function ReviewSection({ say }: { say(text: string): void }) {
       {items.map(item => <div className="review-item" key={item.id}>
         <div className="emu-name"><span className="status-pill">{isHealthItem(item) ? healthLabels[item.kind] : kindLabels[item.kind]}</span><b>{itemTitle(item)}</b></div>
         {isHealthItem(item) && <HealthItem item={item} busy={busyId === item.id} run={(action, done) => void run(item.id, action, done)} />}
-        {item.kind === 'duplicate' && <DuplicateItem item={item} busy={busyId === item.id} apply={resolution => void apply(item.id, resolution)} />}
+        {item.kind === 'duplicate' && <DuplicateItem item={item} busy={busyId === item.id} apply={resolution => void apply(item.id, resolution)} onLinked={() => { say('Games linked'); void reload() }} />}
         {item.kind === 'ambiguous-exe' && <ExeItem item={item} busy={busyId === item.id} apply={resolution => void apply(item.id, resolution)} />}
         {(item.kind === 'unsupported' || item.kind === 'unreadable') && <PathItem item={item} busy={busyId === item.id} apply={resolution => void apply(item.id, resolution)} />}
         {item.kind === 'shortcut' && <ShortcutItem item={item} busy={busyId === item.id} apply={resolution => void apply(item.id, resolution)} />}

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, ChevronDown, FolderOpen, Heart, MoreHorizontal, Pencil, Play } from 'lucide-react'
+import { ArrowLeft, ChevronDown, FolderOpen, Heart, MoreHorizontal, Pencil, Play, SlidersHorizontal, Unlink } from 'lucide-react'
 import { LauncherIcon, RouteIcon } from './launcher-icon'
 import { CustomizePanel, useLogoLayout } from './customize-page'
 import { coverUrl } from './lobby-api'
@@ -7,7 +7,7 @@ import { defaultGamePageCustom } from '../shared/defaults'
 import { coverLayerStyle, coverStyle } from './cover'
 import { CoverLayer, useCover } from './poster'
 import { GenreBlock, IgdbAbout, IgdbPicker, IgdbRatings, useIgdb } from './igdb-details'
-import { isEmulatorRoute, routeLabel, routeTitle } from '../shared/routes'
+import { isEmulatorRoute, routeLabel, routeTitle, withRouteName } from '../shared/routes'
 import { launcherOfRoute, playLauncher } from '../shared/launchers'
 import { LauncherBlock } from './launcher-assign'
 import { ImageWall, useScreenshots } from './image-wall'
@@ -16,7 +16,8 @@ import { ControllerBadge, ControllerBlock, useGameInput } from './controller-inf
 import { SessionHistory } from './session-history'
 import { formatRange } from '../shared/sessions'
 import { elapsedSeconds, formatClock, formatDate, formatSession, formatTime, formatTotal, useNow } from './format'
-import type { CustomLauncher, EmulatorCatalog, EmulatorProfile, Game, GamePageArt, GameRoute, LauncherTargetKind, PlaySession, PlayStats, RunningGame, Settings } from '../shared/types'
+import { RouteToolPanel, type RouteTool } from './route-tools'
+import type { CustomLauncher, EmulatorCatalog, EmulatorProfile, Game, GamePageArt, GameRoute, LauncherTargetKind, PlaySession, PlayStats, RunningGame, Settings, UnlinkPreview } from '../shared/types'
 
 export interface GamePageActions {
   back(): void
@@ -34,6 +35,13 @@ export interface GamePageActions {
   assignLauncher(game: Game, launcherId: string, routeIndex?: number, kind?: LauncherTargetKind): Promise<void>
   /** Removes only what `assignLauncher` added. */
   unassignLauncher(game: Game, launcherId: string): Promise<void>
+  /** Names a route (display only); empty clears it. */
+  renameRoute(game: Game, routeIndex: number, name: string): Promise<void>
+  /** Launch options for a route (Rust checks them and confirms natively). */
+  setRouteArgs(game: Game, routeIndex: number, args: string): Promise<void>
+  unlinkPreview(game: Game, routeIndex: number): Promise<UnlinkPreview>
+  /** Splits a route (and the routes that came in with it) off into its own game. */
+  unlink(game: Game, routeIndex: number): Promise<void>
 }
 
 const emptyArt: GamePageArt = { hero: [], logo: [], custom: defaultGamePageCustom }
@@ -52,6 +60,8 @@ export function GamePage({ game, index, settings, launchers, running, libraryVer
   const [customizing, setCustomizing] = useState(false)
   const [igdbPicking, setIgdbPicking] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
+  const [tool, setTool] = useState<{ index: number; tool: RouteTool } | null>(null)
+  const toggleTool = (index: number, next: RouteTool) => setTool(current => current && current.index === index && current.tool === next ? null : { index, tool: next })
   const { view: igdb, setView: setIgdb } = useIgdb(game.id)
   const { shots, setShots } = useScreenshots(game.id)
   const inputState = useGameInput(game.id)
@@ -63,7 +73,7 @@ export function GamePage({ game, index, settings, launchers, running, libraryVer
   const routesKey = game.routes.map(route => route.sourceId + '|' + route.launchTarget).join('\n')
   const defaultRoute = useMemo(() => Math.max(0, game.routes.findIndex(route => route.installed)), [game.id, routesKey]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { setMenuOpen(false); setCustomizing(false); setIgdbPicking(false) }, [game.id])
-  useEffect(() => { setRouteIdx(defaultRoute) }, [game.id, routesKey, defaultRoute])
+  useEffect(() => { setRouteIdx(defaultRoute); setTool(null) }, [game.id, routesKey, defaultRoute])
 
   useEffect(() => {
     let live = true
@@ -105,14 +115,17 @@ export function GamePage({ game, index, settings, launchers, running, libraryVer
   const playVia = playLauncher(route, launchers)
   // A route run by or labelled with a launcher reads as that launcher ("Play from: My Arcade";
   // the store once the launcher is deleted), with the file when the launcher has several routes here.
+  // A route's own name (e.g. "Java Edition") follows the store or launcher, so two routes of one
+  // store read apart: "Xbox · Java Edition", "Xbox · Bedrock Edition".
   const label = (item: GameRoute) => {
     const launcher = launcherOfRoute(item, launchers)
     if (!launcher) return routeLabel(item, game.routes)
+    if (item.name) return withRouteName(launcher.name, item)
     const several = game.routes.filter(other => launcherOfRoute(other, launchers)?.id === launcher.id).length > 1
     const file = item.launchTarget.split(/[\\/]/).filter(Boolean).pop()
     return several && file ? launcher.name + ' · ' + file : launcher.name
   }
-  const labelTitle = (item: GameRoute) => { const launcher = launcherOfRoute(item, launchers); return launcher ? launcher.name + ' · ' + item.launchTarget : routeTitle(item, game.routes, systemLabel(item)) }
+  const labelTitle = (item: GameRoute) => { const launcher = launcherOfRoute(item, launchers); return launcher ? withRouteName(launcher.name, item) + ' · ' + item.launchTarget : routeTitle(item, game.routes, systemLabel(item)) }
   const systemLabel = (item: GameRoute) => item.system ? catalog?.systems.find(system => system.id === item.system)?.name ?? item.system : undefined
   const launching = running?.state === 'launching'
   const isRunning = running?.state === 'running'
@@ -127,7 +140,7 @@ export function GamePage({ game, index, settings, launchers, running, libraryVer
     ['Set custom cover', () => actions.setCover(game)],
     ['Find cover on SteamGridDB', () => actions.findCover(game)],
     ['Find details on IGDB', () => setIgdbPicking(true)],
-    ['Link another game', () => actions.link(game)],
+    ['Link other games…', () => actions.link(game)],
     [game.hidden ? 'Unhide' : 'Hide', () => actions.toggleHidden(game)],
     ['Open install folder', () => actions.openFolder(game)],
     ['Remove from library', () => actions.remove(game)]
@@ -156,7 +169,9 @@ export function GamePage({ game, index, settings, launchers, running, libraryVer
         ? <button className="gp-play" disabled><Play size={18} fill="currentColor" /> Launching…</button>
         : isRunning
           ? <button className="gp-play running" disabled><span className="gp-live-dot" /> Running <span className="gp-clock">{formatClock(elapsedSeconds(running.startedAt, now))}</span></button>
-          : <button className="gp-play" onClick={() => actions.play(game, routeIdx)} title={playVia ? 'Play through ' + playVia.name : undefined}><Play size={18} fill="currentColor" /> Play{playVia && <span className="gp-play-via"><LauncherIcon launcher={playVia} size={12} /> {playVia.name}</span>}</button>}
+          : <button className="gp-play" onClick={() => actions.play(game, routeIdx)} title={route ? 'Play from ' + labelTitle(route) : undefined}><Play size={18} fill="currentColor" /> Play{playVia
+            ? <span className="gp-play-via"><LauncherIcon launcher={playVia} size={12} /> {route ? label(route) : playVia.name}</span>
+            : route && (game.routes.length > 1 || route.name) && <span className="gp-play-via">{label(route)}</span>}</button>}
       {game.routes.length > 0 && <label className="gp-route">
         <span className="gp-route-label">Play from</span>
         <span className="gp-route-select">
@@ -227,9 +242,19 @@ export function GamePage({ game, index, settings, launchers, running, libraryVer
         <div className={'gp-poster cover-' + cover.status} style={coverStyle(game, index)}><CoverLayer src={cover.src} status={cover.status} />{cover.status !== 'loaded' && <span>{game.title}</span>}</div>
         <div className="gp-side-block"><div className="detail-label">STORES</div>
           {game.routes.length === 0 && <div className="muted-text">No launch routes</div>}
-          {game.routes.map((item, i) => <div className="gp-route-row" key={item.sourceId + '-' + i}>
-            <span className="store-badge small"><RouteIcon route={item} launchers={launchers} /></span>
-            <span className="route-name"><span className="route-label" title={labelTitle(item)}>{label(item)}</span><small>{item.installed ? 'Installed' : item.owned ? 'Owned · not installed' : 'Launch route'}</small></span>
+          {game.routes.map((item, i) => <div key={item.sourceId + '-' + i}>
+            <div className="gp-route-row">
+              <span className="store-badge small"><RouteIcon route={item} launchers={launchers} /></span>
+              <span className="route-name"><span className="route-label" title={labelTitle(item)}>{label(item)}</span><small>{item.installed ? 'Installed' : item.owned ? 'Owned · not installed' : 'Launch route'}{item.launchArgs ? ' · launch options' : ''}</small></span>
+              <span className="gp-route-actions">
+                <button type="button" title="Name this route" aria-label={'Rename ' + label(item)} onClick={() => toggleTool(i, 'name')}><Pencil size={12} /></button>
+                <button type="button" title="Launch options" aria-label={'Launch options for ' + label(item)} onClick={() => toggleTool(i, 'args')}><SlidersHorizontal size={12} /></button>
+                {game.routes.length > 1 && <button type="button" title="Unlink into its own game" aria-label={'Unlink ' + label(item)} onClick={() => toggleTool(i, 'unlink')}><Unlink size={12} /></button>}
+              </span>
+            </div>
+            {tool && tool.index === i && <RouteToolPanel key={tool.tool + i} tool={tool.tool} route={item} canUnlink={game.routes.length > 1}
+              onRename={name => actions.renameRoute(game, i, name)} onArgs={args => actions.setRouteArgs(game, i, args)}
+              onUnlinkPreview={() => actions.unlinkPreview(game, i)} onUnlink={() => actions.unlink(game, i)} onClose={() => setTool(null)} />}
           </div>)}
           {game.routes.map((item, i) => {
             if (!isEmulatorRoute(item)) return null

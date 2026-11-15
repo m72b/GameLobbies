@@ -17,7 +17,7 @@ export type Store = 'Steam' | 'Epic Games' | 'GOG' | 'EA app' | 'Battle.net' | '
  *   falls back to automatic. Change it with `library.setEmulator`.
  * - `system`: a `CatalogSystem.id` (`'ps2'`, `'switch'`, `'pc'`, ...).
  */
-export interface GameRoute { sourceId: string; store: Store; appId?: string; launchTarget: string; launchArgs?: string; installPath?: string; owned?: boolean; installed?: boolean; installStates?: Record<string, boolean>; playtimeMinutes?: number; lastPlayed?: number; emulatorId?: string; system?: string; /** A label only: the custom launcher whose games folder this local or ROM route was found in ("Play from" shows its name). Set by Game Lobby; saves must send it back unchanged. */ launcherId?: string; /** Added from the game page (`launchers.assign`): a `launcher:<id>` route made from another of the game's routes, or (on any other route) its `launcherId` label. `launchers.unassign` removes exactly that. Set by Game Lobby; saves must send it back unchanged. */ assigned?: boolean }
+export interface GameRoute { sourceId: string; store: Store; appId?: string; launchTarget: string; launchArgs?: string; installPath?: string; owned?: boolean; installed?: boolean; installStates?: Record<string, boolean>; playtimeMinutes?: number; lastPlayed?: number; emulatorId?: string; system?: string; /** A label only: the custom launcher whose games folder this local or ROM route was found in ("Play from" shows its name). Set by Game Lobby; saves must send it back unchanged. */ launcherId?: string; /** Added from the game page (`launchers.assign`): a `launcher:<id>` route made from another of the game's routes, or (on any other route) its `launcherId` label. `launchers.unassign` removes exactly that. Set by Game Lobby; saves must send it back unchanged. */ assigned?: boolean; /** The route's own name (library.renameRoute), shown after the store or launcher ("Xbox · Java Edition"). Display only: it never changes what runs. At most 60 characters. */ name?: string }
 export interface Game { id: string; title: string; cover?: string; defaultCover?: string; store: Store; genre?: string; playtimeMinutes: number; playtimeSeconds?: number; lastPlayed?: number; hidden: boolean; favorite: boolean; routes: GameRoute[] }
 /** `library.scan()` result. `local` is the library folder part, present when any folder was scanned (store scans and folder scans run side by side). */
 export interface LibraryStats { total: number; imported?: number; errors?: string[]; scannedAt?: number; local?: LocalScanSummary }
@@ -189,8 +189,9 @@ export type ReviewItem = ReviewItemBase & (
 /**
  * How to resolve a review item:
  * - `keep-separate` (duplicate): they are different games; this exact set isn't reported again.
- * - `link` (duplicate): merge the listed games into `targetGameId` (default: the first listed), as
- *   `library.merge` does (playtime summed, sessions moved).
+ * - `link` (duplicate): link the listed games into `targetGameId` (default: the first listed) with the
+ *   default choices (playtime summed, sessions moved). The interface uses the review step instead
+ *   (`library.linkPreview` / `library.link` with the item's id).
  * - `ignore` (any kind): `path` must be one of the item's paths (or its folder). Scans skip it from
  *   now on (undo with `review.unignore`); its game becomes not installed, or is removed when it
  *   has no user data.
@@ -331,11 +332,23 @@ export interface EmulatorsAPI { list(): Promise<EmulatorProfile[]>; save(profile
  * - check(): looks for missing and moved files and for duplicates (also done quickly after each scan).
  * - removeRoute(id): removes the launch route (the caller must have confirmed it with the user).
  * - dismiss(id): "Ignore" / "Not duplicates" / "Keep both"; remembered.
- * - merge(id, targetGameId?): merges a duplicate pair like `library.merge`. mergeRoutes(id): joins duplicate routes of one game.
+ * - mergeRoutes(id): joins duplicate routes of one game. A duplicate pair is linked with the review step (`library.linkPreview` / `library.link` with the item's id).
  */
 export interface HealthSummary { missing: number; offline: number; withSuggestions: number; duplicateGames: number; duplicateRoutes: number }
-export interface HealthAPI { check(): Promise<HealthSummary>; useFound(id: string, index: number): Promise<ReviewItem[]>; locate(id: string): Promise<ReviewItem[]>; removeRoute(id: string, confirmed: boolean): Promise<ReviewItem[]>; dismiss(id: string): Promise<ReviewItem[]>; merge(id: string, targetGameId?: string): Promise<ReviewItem[]>; mergeRoutes(id: string): Promise<ReviewItem[]> }
+export interface HealthAPI { check(): Promise<HealthSummary>; useFound(id: string, index: number): Promise<ReviewItem[]>; locate(id: string): Promise<ReviewItem[]>; removeRoute(id: string, confirmed: boolean): Promise<ReviewItem[]>; dismiss(id: string): Promise<ReviewItem[]>; mergeRoutes(id: string): Promise<ReviewItem[]> }
 export interface ReviewAPI { list(includeResolved?: boolean): Promise<ReviewItem[]>; resolve(id: string, resolution: ReviewResolution): Promise<ReviewItem[]>; ignored(): Promise<IgnoredPath[]>; unignore(path: string): Promise<IgnoredPath[]>; onChanged(callback: () => void): () => void }
+/**
+ * Linked games (`library.linkPreview` / `library.link` / `library.unlink`). A route is named by a
+ * `RouteRef`: its position plus its stored `sourceId` and `launchTarget`, which must still match
+ * (it only selects; nothing in it is saved). Link choices are game ids from the linked set, a
+ * favourite flag and an optional custom title.
+ */
+export interface RouteRef { index: number; sourceId: string; launchTarget: string }
+export interface LinkChoices { keep: string; titleFrom: string; customTitle?: string; coverFrom: string; heroFrom: string; notesFrom: string; igdbFrom: string; favorite: boolean }
+export interface LinkPreviewGame { id: string; title: string; store: string; cover?: string; customCover: boolean; favorite: boolean; hidden: boolean; playtimeSeconds: number; sessions: number; screenshots: number; hasHero: boolean; hasNotes: boolean; igdbName?: string; igdbChosen: boolean; linked: number }
+export interface LinkPreviewRoute { gameId: string; store: Store; sourceId: string; name?: string; suggested: boolean; installed?: boolean; owned?: boolean; target: string }
+export interface LinkPreview { games: LinkPreviewGame[]; routes: LinkPreviewRoute[]; conflicts: { title: boolean; cover: boolean; hero: boolean; notes: boolean; igdb: boolean; favorite: boolean }; defaults: LinkChoices; playtimeSeconds: number; sessions: number }
+export interface UnlinkPreview { title: string; routes: string[]; remaining: string[]; restores: boolean; sessions: number; playtimeSeconds: number }
 export interface PluginManifest { id: string; name: string; version: string; kind: 'library'; store: Store; manifestFolder?: string }
 /** A SteamGridDB poster candidate. `url`/`thumb` are https://*.steamgriddb.com images. */
 export interface SteamGridDbCover { id: number; url: string; thumb: string; width: number; height: number; style?: string; score?: number; upvotes?: number; downvotes?: number; author?: string }
@@ -593,7 +606,7 @@ export interface StorageProgress { done: number; total: number; title: string }
 export interface RecentGame { gameId: string; addedAt: number }
 export interface LobbyAPI {
   window: { minimize(): Promise<void>; toggleMaximize(): Promise<void>; close(): Promise<void>; isMaximized(): Promise<boolean> }
-  library: { list(): Promise<Game[]>; scan(): Promise<LibraryStats>; launch(id: string, route?: number): Promise<LaunchOutcome>; continueLaunch(id: string, pendingId: string): Promise<LaunchOutcome>; cancelLaunch(pendingId: string): Promise<void>; pendingLaunch(pendingId: string): Promise<PendingLaunchStatus>; save(game: Partial<Game> & { id: string }): Promise<Game[]>; remove(id: string): Promise<Game[]>; merge(targetId: string, sourceId: string): Promise<Game[]>; resetPlaytime(): Promise<Game[]>; setCover(id: string, dataUrl: string | null): Promise<Game[]>; chooseCover(id: string): Promise<Game[]>; chooseInstallFolder(id: string): Promise<void>; add(title: string, target: string): Promise<Game[]>; stores(): Promise<StoreStatus[]>; onChanged(callback: () => void): () => void
+  library: { list(): Promise<Game[]>; scan(): Promise<LibraryStats>; launch(id: string, route?: number): Promise<LaunchOutcome>; continueLaunch(id: string, pendingId: string): Promise<LaunchOutcome>; cancelLaunch(pendingId: string): Promise<void>; pendingLaunch(pendingId: string): Promise<PendingLaunchStatus>; save(game: Partial<Game> & { id: string }): Promise<Game[]>; remove(id: string): Promise<Game[]>; linkPreview(gameIds: string[], title?: string): Promise<LinkPreview>; link(gameIds: string[], choices: LinkChoices, reviewId?: string): Promise<Game[]>; unlinkPreview(gameId: string, route: RouteRef): Promise<UnlinkPreview>; unlink(gameId: string, route: RouteRef): Promise<{ gameId: string; games: Game[] }>; renameRoute(gameId: string, route: RouteRef, name: string): Promise<Game[]>; setRouteArgs(gameId: string, route: RouteRef, args: string): Promise<Game[]>; resetPlaytime(): Promise<Game[]>; setCover(id: string, dataUrl: string | null): Promise<Game[]>; chooseCover(id: string): Promise<Game[]>; chooseInstallFolder(id: string): Promise<void>; add(title: string, target: string): Promise<Game[]>; stores(): Promise<StoreStatus[]>; onChanged(callback: () => void): () => void
     /** Sets the emulator of a `rom` route (`routeIndex` into `game.routes`); `null` = automatic. The profile must exist; other route kinds are rejected. Returns the library. */
     setEmulator(gameId: string, routeIndex: number, emulatorId: string | null): Promise<Game[]>
     /**

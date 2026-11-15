@@ -1,4 +1,4 @@
-import type { Game, GameRoute } from './types'
+import type { Game, GameRoute, RouteRef } from './types'
 
 /**
  * Whether a route runs through an emulator, so the game page offers an emulator picker: ROM
@@ -24,6 +24,7 @@ function emulatorSuffix(route: GameRoute, withFolder: boolean): string {
  * if two emulator routes would still read the same, the ROM's parent folder is added.
  */
 export function routeLabel(route: GameRoute, allRoutes: GameRoute[] = [route]): string {
+  if (route.name) return withRouteName(route.store, route)
   if (!isEmulatorRoute(route)) return route.store
   const plain = emulatorSuffix(route, false)
   if (!plain) return route.store
@@ -40,4 +41,44 @@ export function routeTitle(route: GameRoute, allRoutes: GameRoute[] = [route], s
 /** Whether a game has a Steam route with a numeric app id (Steam screenshots can be imported). */
 export function isSteamGame(game: Pick<Game, 'routes'>): boolean {
   return game.routes.some(route => route.sourceId === 'steam' && /^\d{1,12}$/.test(route.appId ?? ''))
+}
+
+/** `base` followed by the route's own name, when it has one ("Xbox · Java Edition"). */
+export function withRouteName(base: string, route: Pick<GameRoute, 'name'>): string {
+  const name = route.name?.trim()
+  return name ? base + ' · ' + name : base
+}
+
+/** How the backend finds a route again (`RouteRef`): its position plus its stored source and target. */
+export function routeRef(route: Pick<GameRoute, 'sourceId' | 'launchTarget'>, index: number): RouteRef {
+  return { index, sourceId: route.sourceId, launchTarget: route.launchTarget }
+}
+
+export type ArgsSupport = { ok: true } | { ok: false; reason: string }
+
+/**
+ * Whether a route can take launch options, mirroring the backend's `links::args_exe` (which decides):
+ * only a local PC route that starts its own `.exe`. Store links, Xbox apps, launchers and emulators
+ * start the game themselves.
+ */
+export function argsSupport(route: Pick<GameRoute, 'sourceId' | 'store' | 'launchTarget' | 'emulatorId'>): ArgsSupport {
+  if (route.sourceId.startsWith('launcher:')) return { ok: false, reason: 'This route runs through a custom launcher. Its arguments are set on the launcher (Settings → Launchers).' }
+  if (route.sourceId === 'rom' || route.emulatorId) return { ok: false, reason: 'ROMs start with their emulator’s arguments. Change them under Settings → Emulators.' }
+  if (route.sourceId !== 'local') return { ok: false, reason: `${route.store} starts this game itself, so Game Lobby can’t pass launch options to it. Set them in ${route.store} instead.` }
+  const target = route.launchTarget.trim()
+  if (!/^[a-z]:[\\/]/i.test(target) || !/\.exe$/i.test(target)) return { ok: false, reason: 'Only a game started from its own .exe can have launch options here (not a shortcut, folder or link).' }
+  return { ok: true }
+}
+
+/** Stored launch options (a JSON list, or older plain text) as text for the editor. */
+export function argsText(launchArgs: string | undefined): string {
+  if (!launchArgs) return ''
+  let argv: unknown
+  try { argv = JSON.parse(launchArgs) } catch { return launchArgs }
+  if (!Array.isArray(argv)) return launchArgs
+  return argv.map(arg => {
+    const text = String(arg)
+    if (text && !/[\s"']/.test(text)) return text
+    return text.includes('"') ? "'" + text + "'" : '"' + text + '"'
+  }).join(' ')
 }
