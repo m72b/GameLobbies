@@ -173,18 +173,43 @@ fn decode<T: DeserializeOwned>(value: Value, what: &str) -> Result<T> {
     serde_json::from_value(value).map_err(|e| anyhow!("{what} is invalid: {e}"))
 }
 
-/// Plain one-line text: control characters and bidi or other hidden format characters dropped,
-/// every run of whitespace (line breaks and tabs included) collapsed to one space. Used for
-/// titles when they are saved and for every name shown in a native confirmation, so text can't
-/// fake lines or reorder what the user reads.
+/// Bidirectional controls and invisible marks that can reorder or disguise text. The zero-width
+/// joiner family (U+200B to U+200D) is not included: emoji sequences and Persian text need it.
+pub fn is_bidi_or_hidden(c: char) -> bool {
+    matches!(
+        c,
+        '\u{200E}'
+            | '\u{200F}'
+            | '\u{061C}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2066}'..='\u{2069}'
+            | '\u{FEFF}'
+    )
+}
+
+/// Text for a native prompt, verbatim except that control and bidi or hidden characters are
+/// shown as `<U+XXXX>`. Nothing is collapsed or cut, so what the user reads is what is there.
+pub fn escape_for_prompt(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if c.is_control() || is_bidi_or_hidden(c) {
+            out.push_str(&format!("<U+{:04X}>", c as u32));
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Plain one-line text: control characters and bidi or hidden characters dropped, every run of
+/// whitespace (line breaks and tabs included) collapsed to one space. Used for titles when they
+/// are saved and for every name shown in a native confirmation, so text can't fake lines or
+/// reorder what the user reads.
 pub fn plain_text(raw: &str) -> String {
     let text: String = raw
         .chars()
         .map(|c| if c.is_whitespace() { ' ' } else { c })
-        .filter(|c| {
-            !c.is_control()
-                && !matches!(c, '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{feff}')
-        })
+        .filter(|c| !c.is_control() && !is_bidi_or_hidden(*c))
         .collect();
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
@@ -258,6 +283,15 @@ fn route(value: &Value) -> Result<GameRoute> {
         }
     }
     short_text(&mut r.launch_target, 8_192, "Launch target")?;
+    if r.launch_target.chars().any(char::is_control) {
+        bail!("Launch target contains control characters.");
+    }
+    if r.install_path
+        .as_deref()
+        .is_some_and(|p| p.chars().any(char::is_control))
+    {
+        bail!("Install path contains control characters.");
+    }
     // Custom launcher routes: a valid launcher id, and a target that is a drive path or a
     // valid identifier (checked against the launcher's own kind again at launch).
     // Route identities are compared lower-case: `Launcher:x` must not pass as a non-launcher
@@ -1451,6 +1485,52 @@ mod tests {
         assert_eq!(crate::db::restore_backup(&mut conn, &parsed).unwrap(), 1);
         let stored = crate::db::get_game(&conn, "steam:570").unwrap().unwrap();
         assert_eq!(stored.title, "Dota 2 x");
+    }
+
+    #[test]
+    fn joiners_survive_titles_and_backup_restore() {
+        for title in ["👨\u{200d}👩", "می\u{200c}خواهم", "a\u{200b}b"] {
+            let g = with(game_json(), "title", json!(title));
+            let parsed = backup(&json!({ "games": [g] })).unwrap();
+            assert_eq!(parsed.games[0].title, title);
+            let database = crate::db::Db::memory().unwrap();
+            let mut conn = database.lock();
+            assert_eq!(crate::db::restore_backup(&mut conn, &parsed).unwrap(), 1);
+            let stored = crate::db::get_game(&conn, "steam:570").unwrap().unwrap();
+            assert_eq!(stored.title, title);
+        }
+        assert_eq!(plain_text("a\u{200e}\u{feff}\u{061c}b"), "ab");
+    }
+
+    #[test]
+    fn prompt_escaping_is_verbatim_except_hidden_characters() {
+        assert_eq!(
+            escape_for_prompt("C:\\a  b\n\u{202e}x\u{200d}y\u{7}"),
+            "C:\\a  b<U+000A><U+202E>x\u{200d}y<U+0007>"
+        );
+        let long = "x".repeat(1000);
+        assert_eq!(escape_for_prompt(&long), long);
+        for c in [
+            '\u{200e}', '\u{200f}', '\u{061c}', '\u{202a}', '\u{2069}', '\u{feff}',
+        ] {
+            assert!(is_bidi_or_hidden(c));
+        }
+        for c in ['\u{200b}', '\u{200c}', '\u{200d}', 'a'] {
+            assert!(!is_bidi_or_hidden(c));
+        }
+    }
+
+    #[test]
+    fn routes_with_control_characters_in_paths_are_rejected() {
+        for key in ["launchTarget", "installPath"] {
+            for bad in ["C:\\Games\\a\nb.exe", "C:\\Games\\a\u{7}.exe"] {
+                let r = with(route(), key, json!(bad));
+                assert!(
+                    game(&with(game_json(), "routes", json!([r]))).is_err(),
+                    "{key} {bad:?}"
+                );
+            }
+        }
     }
 
     #[test]

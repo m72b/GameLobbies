@@ -84,12 +84,13 @@ pub async fn health_use_found(
     let prompt = format!(
         "Use this location for the missing file?
 
-Old path:
-{old}
-
 New path:
+{}
+
+Old path:
 {}",
-        path.display()
+        path.display(),
+        crate::validation::escape_for_prompt(&old)
     );
     if !crate::local_commands::confirm_natively(&window, "Use this location", &prompt, "Use it")
         .await

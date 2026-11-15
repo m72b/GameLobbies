@@ -504,16 +504,7 @@ impl std::error::Error for IgdbError {}
 
 /// Bidirectional controls and invisible characters that could disguise text.
 fn is_hidden(c: char) -> bool {
-    matches!(
-        c,
-        '\u{061C}'
-            | '\u{200B}'
-            | '\u{200E}'
-            | '\u{200F}'
-            | '\u{202A}'..='\u{202E}'
-            | '\u{2066}'..='\u{2069}'
-            | '\u{FEFF}'
-    )
+    c == '\u{200B}' || crate::validation::is_bidi_or_hidden(c)
 }
 
 fn truncate_bytes(text: &str, max: usize) -> String {

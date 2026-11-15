@@ -237,6 +237,13 @@ pub enum ShortcutKind {
     Unreadable,
 }
 
+/// Control, bidi or hidden characters: text that could fake lines or reorder what a native
+/// confirmation shows.
+fn has_odd_chars(text: &str) -> bool {
+    text.chars()
+        .any(|c| c.is_control() || crate::validation::is_bidi_or_hidden(c))
+}
+
 /// Classifies a shortcut file. `confirmations`: normalized `.lnk` path → (target, arguments)
 /// the user confirmed.
 pub fn classify_shortcut(
@@ -260,6 +267,11 @@ pub fn classify_shortcut(
         },
         ".lnk" => match crate::platform::resolve_shortcut(path) {
             Ok((target, arguments)) => {
+                if has_odd_chars(&target) || has_odd_chars(&arguments) {
+                    return ShortcutKind::Invalid(
+                        "This shortcut contains hidden or line-break characters.".into(),
+                    );
+                }
                 if arguments.trim().is_empty() && crate::emulators::executable_ok(&target) {
                     return ShortcutKind::Exe(PathBuf::from(target));
                 }
@@ -1224,6 +1236,16 @@ pub fn scan_games(
 pub(crate) mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn shortcut_text_with_line_breaks_or_bidi_controls_is_flagged() {
+        for bad in ["a\nb", "a\r", "x\u{202e}y", "\u{200e}", "a\tb"] {
+            assert!(has_odd_chars(bad), "{bad:?}");
+        }
+        assert!(!has_odd_chars(
+            "C:\\Games\\Cairn\\cairn.exe --windowed \u{200d}"
+        ));
+    }
 
     /// A temporary folder under the system temp directory, removed on drop.
     pub struct TempDir(PathBuf);

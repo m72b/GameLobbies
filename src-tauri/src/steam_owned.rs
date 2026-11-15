@@ -285,6 +285,10 @@ pub struct ImportState {
     /// only dropped when the next successful fetch reports them gone too.
     #[serde(default)]
     pub pending_gone: Vec<String>,
+    /// When `pending_gone` was first held back: the removal is only applied once it has stood
+    /// for [`PENDING_MIN_AGE_MS`].
+    #[serde(default)]
+    pub pending_since: i64,
     /// When the last request was made (0 = never, or credentials changed since).
     #[serde(default)]
     pub attempted_at: i64,
@@ -354,6 +358,8 @@ pub fn owned_game(app: &OwnedApp) -> Game {
 
 /// Smallest earlier list the mass-removal guard applies to.
 const MASS_REMOVAL_MIN: usize = 20;
+/// How long a held-back removal must stand before a later fetch may apply it.
+const PENDING_MIN_AGE_MS: i64 = 6 * 60 * 60 * 1000;
 const HELD_BACK_MESSAGE: &str =
     "Steam returned far fewer games than before; nothing was removed. It will be checked again later.";
 
@@ -375,6 +381,9 @@ pub fn apply(
     let status = match outcome {
         Ok(list) => {
             let installed = db::installed_steam_app_ids(conn)?;
+            // Every steam route that exists now, in any state: the import must never claim
+            // (and later drop) a route it didn't create.
+            let existing = db::steam_app_ids_any(conn)?;
             let games: Vec<Game> = list
                 .apps
                 .iter()
@@ -389,27 +398,48 @@ pub fn apply(
                 .cloned()
                 .collect();
             // A response far smaller than the last one is more likely degraded than true:
-            // drop only what two successful fetches in a row report gone.
+            // a removal is only applied when a later fetch, at least PENDING_MIN_AGE_MS after
+            // the first, reports (nearly) the same apps gone.
             let suspicious = previous.len() >= MASS_REMOVAL_MIN && gone.len() * 2 > previous.len();
+            let was_pending: HashSet<String> = state.pending_gone.iter().cloned().collect();
             let (to_drop, held): (HashSet<String>, HashSet<String>) = if suspicious {
-                let pending: HashSet<&String> = state.pending_gone.iter().collect();
-                gone.iter().cloned().partition(|id| pending.contains(id))
+                let agreed: HashSet<String> = gone.intersection(&was_pending).cloned().collect();
+                let old_enough = !was_pending.is_empty()
+                    && state.pending_since > 0
+                    && now >= state.pending_since
+                    && now - state.pending_since >= PENDING_MIN_AGE_MS;
+                if old_enough && agreed.len() * 10 >= was_pending.len() * 9 {
+                    let held = gone.difference(&agreed).cloned().collect();
+                    (agreed, held)
+                } else {
+                    (HashSet::new(), gone)
+                }
             } else {
                 (gone, HashSet::new())
             };
             db::drop_steam_owned(conn, &to_drop)?;
             let mut ids: HashSet<String> = previous
-                .into_iter()
-                .filter(|id| list.ids.contains(id) || held.contains(id))
+                .iter()
+                .filter(|id| list.ids.contains(*id) || held.contains(*id))
+                .cloned()
                 .collect();
             ids.extend(
                 games
                     .iter()
-                    .filter_map(|g| g.routes.first()?.app_id.clone()),
+                    .filter_map(|g| g.routes.first()?.app_id.clone())
+                    .filter(|id| !existing.contains(id) || previous.contains(id)),
             );
             let mut ids: Vec<String> = ids.into_iter().collect();
             ids.sort();
             state.app_ids = ids;
+            // The clock starts when a removal is first held; a different held set restarts it.
+            state.pending_since = if held.is_empty() {
+                0
+            } else if !was_pending.is_empty() && state.pending_since > 0 && held == was_pending {
+                state.pending_since
+            } else {
+                now
+            };
             let mut pending: Vec<String> = held.into_iter().collect();
             pending.sort();
             state.pending_gone = pending;
@@ -422,8 +452,14 @@ pub fn apply(
                         plural(apps.len(), "owned game"),
                         games.len()
                     )
-                } else {
+                } else if to_drop.is_empty() {
                     HELD_BACK_MESSAGE.to_string()
+                } else {
+                    format!(
+                        "Steam returned far fewer games than before; removed {} that stayed missing, {} still held back.",
+                        plural(to_drop.len(), "game"),
+                        state.pending_gone.len()
+                    )
                 },
                 checked_at: now,
                 needs_new_credentials: false,
@@ -988,10 +1024,15 @@ mod tests {
         apply(&mut conn, &Ok(many(100)), 3000).unwrap();
         assert!(load_import_state(&conn).unwrap().pending_gone.is_empty());
         assert_eq!(db::game_count(&conn).unwrap(), 100);
-        // Two agreeing fetches apply it.
+        // Two agreeing fetches six hours apart apply it.
         apply(&mut conn, &Ok(apps(&[("1", "Game 1")])), 4000).unwrap();
         assert_eq!(db::game_count(&conn).unwrap(), 100);
-        let status = apply(&mut conn, &Ok(apps(&[("1", "Game 1")])), 5000).unwrap();
+        let status = apply(
+            &mut conn,
+            &Ok(apps(&[("1", "Game 1")])),
+            4000 + 6 * 60 * 60 * 1000,
+        )
+        .unwrap();
         assert_eq!(status.message, "1 owned game on Steam · 1 not installed");
         assert_eq!(db::game_count(&conn).unwrap(), 1);
         let state = load_import_state(&conn).unwrap();
@@ -999,6 +1040,84 @@ mod tests {
         assert!(state.pending_gone.is_empty());
     }
 
+    const SIX_HOURS: i64 = 6 * 60 * 60 * 1000;
+
+    #[test]
+    fn a_second_fetch_within_six_hours_does_not_confirm_a_mass_removal() {
+        let database = db::Db::memory().unwrap();
+        let mut conn = database.lock();
+        apply(&mut conn, &Ok(many(100)), 1000).unwrap();
+        let tiny = apps(&[("1", "Game 1")]);
+        apply(&mut conn, &Ok(tiny.clone()), 2000).unwrap();
+        let state = load_import_state(&conn).unwrap();
+        assert_eq!((state.pending_since, state.pending_gone.len()), (2000, 99));
+        for at in [3000, 2000 + SIX_HOURS - 1] {
+            let status = apply(&mut conn, &Ok(tiny.clone()), at).unwrap();
+            assert_eq!(status.message, HELD_BACK_MESSAGE);
+            assert_eq!(db::game_count(&conn).unwrap(), 100);
+            assert_eq!(load_import_state(&conn).unwrap().pending_since, 2000);
+        }
+        // A fetch that sees nothing suspicious clears the marker and the clock.
+        apply(&mut conn, &Ok(many(100)), 4000).unwrap();
+        let state = load_import_state(&conn).unwrap();
+        assert!(state.pending_gone.is_empty());
+        assert_eq!(state.pending_since, 0);
+    }
+
+    #[test]
+    fn two_different_partial_responses_do_not_confirm_each_other() {
+        let database = db::Db::memory().unwrap();
+        let mut conn = database.lock();
+        apply(&mut conn, &Ok(many(100)), 1000).unwrap();
+        // Response A lists 1..=10, response B lists 51..=60: the gone sets are disjoint.
+        let part = |from: usize| {
+            let list: Vec<(String, String)> = (from..from + 10)
+                .map(|i| (i.to_string(), format!("Game {i}")))
+                .collect();
+            let refs: Vec<(&str, &str)> =
+                list.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+            apps(&refs)
+        };
+        apply(&mut conn, &Ok(part(1)), 2000).unwrap();
+        let status = apply(&mut conn, &Ok(part(51)), 2000 + SIX_HOURS).unwrap();
+        assert_eq!(status.message, HELD_BACK_MESSAGE);
+        assert_eq!(db::game_count(&conn).unwrap(), 100);
+        // The held set changed, so the clock restarted at the second response.
+        assert_eq!(
+            load_import_state(&conn).unwrap().pending_since,
+            2000 + SIX_HOURS
+        );
+    }
+
+    #[test]
+    fn an_agreeing_fetch_after_six_hours_applies_the_removal() {
+        let database = db::Db::memory().unwrap();
+        let mut conn = database.lock();
+        apply(&mut conn, &Ok(many(100)), 1000).unwrap();
+        let tiny = apps(&[("1", "Game 1")]);
+        apply(&mut conn, &Ok(tiny.clone()), 2000).unwrap();
+        let status = apply(&mut conn, &Ok(tiny), 2000 + SIX_HOURS).unwrap();
+        assert_eq!(status.message, "1 owned game on Steam · 1 not installed");
+        assert_eq!(db::game_count(&conn).unwrap(), 1);
+        let state = load_import_state(&conn).unwrap();
+        assert_eq!(state.app_ids, ["1"]);
+        assert!(state.pending_gone.is_empty());
+        assert_eq!(state.pending_since, 0);
+    }
+
+    #[test]
+    fn a_route_the_import_did_not_create_is_never_tracked() {
+        let database = db::Db::memory().unwrap();
+        let mut conn = database.lock();
+        // A steam route that exists but is not owned and not installed.
+        let mut pre = owned_game(&apps(&[("77", "Mine")]).apps[0]);
+        pre.routes[0].owned = None;
+        db::upsert_imported_games(&mut conn, &[pre]).unwrap();
+        apply(&mut conn, &Ok(apps(&[("10", "A"), ("77", "Mine")])), 1000).unwrap();
+        assert_eq!(load_import_state(&conn).unwrap().app_ids, ["10"]);
+        apply(&mut conn, &Ok(apps(&[("10", "A")])), 2000).unwrap();
+        assert!(db::get_game(&conn, "steam:77").unwrap().is_some());
+    }
     #[test]
     fn a_manual_igdb_match_is_user_data() {
         let database = db::Db::memory().unwrap();

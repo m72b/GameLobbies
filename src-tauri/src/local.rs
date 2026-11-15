@@ -1438,7 +1438,7 @@ pub fn shortcut_confirmation_prompt(item: &review::ReviewItem) -> Result<String>
     };
     Ok(format!(
         "Add this shortcut as a game?\n\nRuns: {target}\nArguments: {arguments}\nShortcut: {}\n\nOnly continue if you recognise this program and these arguments. Game Lobby will run them every time you play this game.",
-        crate::validation::display_text(&shortcut, 300)
+        crate::validation::escape_for_prompt(&shortcut)
     ))
 }
 

@@ -802,6 +802,16 @@ pub fn installed_steam_app_ids(db: &Connection) -> Result<HashSet<String>> {
         .collect())
 }
 
+/// App ids of every `steam` route in any state (installed or not, owned or not).
+pub fn steam_app_ids_any(db: &Connection) -> Result<HashSet<String>> {
+    Ok(all_rows(db)?
+        .iter()
+        .flat_map(|row| row.routes.iter())
+        .filter(|r| r.source_id == "steam")
+        .filter_map(|r| non_empty(&r.app_id).map(str::to_owned))
+        .collect())
+}
+
 /// Undoes the optional Steam owned-games import (`steam_owned`) for exactly the app ids in
 /// `app_ids` (ones an earlier import listed that are no longer owned, or all of them when the
 /// import is removed). Only `steam` routes with one of those app ids that are marked owned and
