@@ -76,7 +76,7 @@ pub fn migrate(db: &Connection) -> Result<()> {
 
 /// What a linked entry brought into the combined game (see the module docs).
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
-#[serde(rename_all = "camelCase", default, deny_unknown_fields)]
+#[serde(rename_all = "camelCase", default)]
 pub struct LinkSnapshot {
     pub title: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -90,8 +90,13 @@ pub struct LinkSnapshot {
     pub playtime_seconds: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_played: Option<i64>,
-    /// `db::route_identity` of every route it brought.
+    /// `db::route_identity` of the routes it brought that the game didn't have yet: unlinking
+    /// moves these out of the game.
     pub route_keys: Vec<String>,
+    /// `db::route_identity` of its routes the game already had (same store and target): they
+    /// stay with the game, and unlinking gives the entry a copy.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub shared_keys: Vec<String>,
     /// Start times of the sessions it brought (unique per game, and kept by session backups).
     pub session_starts: Vec<i64>,
     pub screenshot_ids: Vec<String>,
@@ -101,9 +106,30 @@ pub struct LinkSnapshot {
     pub took: Vec<String>,
 }
 
+/// Field names a backup's link record and snapshot may have (a backup is checked strictly,
+/// [`validate_backup`]; rows already stored are read leniently, [`to_record`]). A test keeps
+/// these in step with the structs.
+const RECORD_FIELDS: [&str; 4] = ["memberId", "gameId", "linkedAt", "snapshot"];
+const SNAPSHOT_FIELDS: [&str; 14] = [
+    "title",
+    "cover",
+    "defaultCover",
+    "genre",
+    "favorite",
+    "hidden",
+    "playtimeSeconds",
+    "lastPlayed",
+    "routeKeys",
+    "sharedKeys",
+    "sessionStarts",
+    "screenshotIds",
+    "memoryIds",
+    "took",
+];
+
 /// One `game_links` row.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct LinkRecord {
     pub member_id: String,
     pub game_id: String,
@@ -120,7 +146,16 @@ fn to_record((member_id, game_id, linked_at, raw): (String, String, i64, String)
         member_id,
         game_id,
         linked_at,
-        snapshot: serde_json::from_str(&raw).unwrap_or_default(),
+        // A row written by a newer version may have fields this one doesn't know; they are
+        // ignored. A row that can't be read at all reads as empty (and is logged, without its
+        // content).
+        snapshot: serde_json::from_str(&raw).unwrap_or_else(|e| {
+            log::warn!(
+                "A game link record could not be read and is treated as empty ({:?} error).",
+                e.classify()
+            );
+            LinkSnapshot::default()
+        }),
     }
 }
 
@@ -170,6 +205,18 @@ pub fn validate_backup(value: &serde_json::Value) -> Result<Vec<LinkRecord>> {
     let mut seen = HashSet::new();
     let mut out = Vec::with_capacity(list.len());
     for entry in list {
+        let unknown_field = |value: &serde_json::Value, known: &[&str]| {
+            value
+                .as_object()
+                .is_none_or(|o| o.keys().any(|k| !known.contains(&k.as_str())))
+        };
+        if unknown_field(entry, &RECORD_FIELDS)
+            || entry
+                .get("snapshot")
+                .is_some_and(|s| unknown_field(s, &SNAPSHOT_FIELDS))
+        {
+            bail!("Backup game links are invalid.");
+        }
         let mut record: LinkRecord = serde_json::from_value(entry.clone())
             .map_err(|e| anyhow!("Backup game links are invalid: {e}"))?;
         let s = &mut record.snapshot;
@@ -188,9 +235,13 @@ pub fn validate_backup(value: &serde_json::Value) -> Result<Vec<LinkRecord>> {
             || !(0..=MAX_TIME_MS).contains(&record.linked_at)
             || s.last_played
                 .is_some_and(|t| !(0..=MAX_TIME_MS).contains(&t))
-            || s.route_keys.is_empty()
+            || (s.route_keys.is_empty() && s.shared_keys.is_empty())
             || s.route_keys.len() > 128
-            || s.route_keys.iter().any(|k| k.chars().count() > 8_400)
+            || s.shared_keys.len() > 128
+            || s.route_keys
+                .iter()
+                .chain(&s.shared_keys)
+                .any(|k| k.is_empty() || k.chars().count() > 8_400)
             || s.session_starts.len() > crate::sessions::MAX_BACKUP_SESSIONS
             || s.took.iter().any(|k| Part::from_key(k).is_none())
         {
@@ -245,17 +296,22 @@ pub fn restore_records(conn: &Connection, records: &[LinkRecord]) -> Result<Hash
             continue;
         };
         let keys: HashSet<String> = game.routes.iter().map(db::route_identity).collect();
-        let matched = keys
+        let own = keys
             .iter()
             .filter(|k| record.snapshot.route_keys.contains(k))
             .count();
+        let matched = own
+            + keys
+                .iter()
+                .filter(|k| record.snapshot.shared_keys.contains(k))
+                .count();
         let linked: bool = conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM game_links WHERE memberId=?1 OR gameId=?1)",
             [member],
             |r| r.get(0),
         )?;
         if matched == 0
-            || matched == keys.len()
+            || own == keys.len()
             || linked
             || backup_games.contains(member)
             || db::get_game(conn, member)?.is_some()
@@ -285,14 +341,17 @@ fn ordered_records(conn: &Connection, game_id: &str) -> Result<Vec<LinkRecord>> 
     Ok(list)
 }
 
-/// `inner` came in with `outer` (a chained link: `outer`'s routes include all of `inner`'s).
+/// `inner` came in with `outer` (a chained link: `outer`'s routes, its own and the shared ones,
+/// include all the routes `inner` brought). An entry that brought no routes of its own (all
+/// were shared) is not tied to another entry this way.
 fn within(inner: &LinkRecord, outer: &LinkRecord) -> bool {
+    let outer = &outer.snapshot;
     !inner.snapshot.route_keys.is_empty()
         && inner
             .snapshot
             .route_keys
             .iter()
-            .all(|k| outer.snapshot.route_keys.contains(k))
+            .all(|k| outer.route_keys.contains(k) || outer.shared_keys.contains(k))
 }
 
 fn took(record: &LinkRecord, part: Part) -> bool {
@@ -686,8 +745,67 @@ pub fn args_exe(route: &GameRoute) -> Result<&str> {
     if !crate::emulators::drive_path_ok(target) || !target.to_lowercase().ends_with(".exe") {
         bail!("Only a game started from its own .exe can have launch options here (not a shortcut, folder or link).");
     }
+    refuse_host_program(target)?;
     Ok(target)
 }
+
+/// Programs that run whatever their arguments say (shells, script hosts, interpreters) or are
+/// part of Windows. With launch options they would be a way to start any other program or
+/// script, so a route to one can't take launch options (the game itself is the program that
+/// takes them).
+fn refuse_host_program(exe: &str) -> Result<()> {
+    let refuse = || {
+        anyhow!("Launch options can't be used with this program: it runs other programs or scripts from its arguments, or is part of Windows.")
+    };
+    let normal = crate::tracker::normalize_path(exe).ok_or_else(refuse)?;
+    let windows = std::env::var_os("SystemRoot")
+        .or_else(|| std::env::var_os("windir"))
+        .map(|w| w.to_string_lossy().into_owned())
+        .and_then(|w| crate::tracker::normalize_path(&w));
+    let in_windows = |folder: &str| crate::tracker::is_within(folder, &normal);
+    if windows.as_deref().is_some_and(in_windows) || in_windows(r"c:\windows") {
+        return Err(refuse());
+    }
+    let name = normal.rsplit('\\').next().unwrap_or_default();
+    let stem = name.strip_suffix(".exe").unwrap_or(name);
+    let numbered = |prefix: &str| {
+        stem.strip_prefix(prefix)
+            .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
+    };
+    if HOST_PROGRAMS.contains(&stem)
+        || stem.starts_with("python")
+        || numbered("java")
+        || numbered("node")
+    {
+        return Err(refuse());
+    }
+    Ok(())
+}
+
+/// Program names (lower case, without `.exe`) refused by [`refuse_host_program`], besides
+/// `python*` and numbered `java*`/`node*` builds.
+const HOST_PROGRAMS: [&str; 20] = [
+    "cmd",
+    "powershell",
+    "pwsh",
+    "wscript",
+    "cscript",
+    "mshta",
+    "rundll32",
+    "regsvr32",
+    "msiexec",
+    "node",
+    "java",
+    "javaw",
+    "javaws",
+    "javac",
+    "bash",
+    "sh",
+    "wsl",
+    "conhost",
+    "pythonw",
+    "powershell_ise",
+];
 
 /// The argument text for one argv entry, quoted so [`crate::launch::tokenize_arguments`] reads it
 /// back as exactly that entry. `None` when it can't be written (both quote characters).
@@ -1021,11 +1139,20 @@ pub fn link(
     let mut linked = Vec::new();
     for (source, (_, source_routes)) in sources.iter().zip(named.iter().skip(1)) {
         let sid = source.id.as_str();
+        // Routes the game already has (the kept game's, or an earlier entry's) stay the game's
+        // when this entry is unlinked; the entry gets a copy instead.
+        let have: HashSet<String> = routes.iter().map(db::route_identity).collect();
         let mut route_keys: Vec<String> = Vec::new();
+        let mut shared_keys: Vec<String> = Vec::new();
         for route in source_routes {
             let key = db::route_identity(route);
-            if !route_keys.contains(&key) {
-                route_keys.push(key);
+            let list = if have.contains(&key) {
+                &mut shared_keys
+            } else {
+                &mut route_keys
+            };
+            if !list.contains(&key) {
+                list.push(key);
             }
         }
         db::merge_routes_into(&mut routes, source_routes);
@@ -1039,6 +1166,7 @@ pub fn link(
             playtime_seconds: seconds(source),
             last_played: source.last_played,
             route_keys,
+            shared_keys,
             session_starts: column(
                 &tx,
                 "SELECT startedAt FROM play_sessions WHERE gameId=? ORDER BY startedAt",
@@ -1085,6 +1213,14 @@ pub fn link(
             if winner(&tx, part, &keep_id, sid, &resolved)? {
                 swap(&tx, part, &keep_id, sid)?;
                 snapshot.took.push(part.key().to_string());
+                if part == Part::Igdb && resolved.igdb.as_deref() == Some(sid) {
+                    // The user picked this entry's match in the review: it is their choice now,
+                    // so the automatic matches are dropped below without touching it.
+                    tx.execute(
+                        "UPDATE game_metadata SET source='user' WHERE gameId=?",
+                        [&keep_id],
+                    )?;
+                }
             }
         }
         tx.execute(
@@ -1419,7 +1555,10 @@ pub struct UnlinkPreview {
 
 struct Plan {
     game: Game,
+    /// The routes (indexes) that leave the game.
     moving: Vec<usize>,
+    /// Routes the game keeps that the entry also had when it was linked: the entry gets a copy.
+    copies: Vec<usize>,
     member: Option<LinkRecord>,
     new_id: String,
     restores: bool,
@@ -1432,24 +1571,41 @@ fn plan(conn: &Connection, game_id: &str, route: &RouteRef) -> Result<Plan> {
     let game = game(conn, game_id)?;
     let chosen = route.find(&game)?;
     let key = db::route_identity(chosen);
-    let member = records_of(conn, game_id)?
-        .into_iter()
-        .find(|r| r.snapshot.route_keys.contains(&key));
-    let moving: Vec<usize> = match &member {
-        Some(m) => game
-            .routes
+    // The entry that brought the route; else one that had the same route already (it is still
+    // the game's, and that entry comes back with a copy).
+    let records = records_of(conn, game_id)?;
+    let member = records
+        .iter()
+        .find(|r| r.snapshot.route_keys.contains(&key))
+        .or_else(|| {
+            records
+                .iter()
+                .find(|r| r.snapshot.shared_keys.contains(&key))
+        })
+        .cloned();
+    let indexes = |keys: &[String]| -> Vec<usize> {
+        game.routes
             .iter()
             .enumerate()
-            .filter(|(_, r)| m.snapshot.route_keys.contains(&db::route_identity(r)))
+            .filter(|(_, r)| keys.contains(&db::route_identity(r)))
             .map(|(i, _)| i)
-            .collect(),
-        None => vec![route.index],
+            .collect()
+    };
+    let (moving, copies): (Vec<usize>, Vec<usize>) = match &member {
+        Some(m) => (
+            indexes(&m.snapshot.route_keys),
+            indexes(&m.snapshot.shared_keys),
+        ),
+        None => (vec![route.index], Vec::new()),
     };
     if moving.len() >= game.routes.len() {
         bail!(match &member {
             Some(_) => "Every launch route of this game came from that entry, so there is nothing to split off.",
             None => "This is the game's only launch route.",
         });
+    }
+    if moving.is_empty() && copies.is_empty() {
+        bail!("None of that entry's launch routes are part of this game any more, so there is nothing to split off.");
     }
     let (new_id, restores, title, sessions, seconds) = match &member {
         Some(m) => {
@@ -1498,6 +1654,7 @@ fn plan(conn: &Connection, game_id: &str, route: &RouteRef) -> Result<Plan> {
     Ok(Plan {
         game,
         moving,
+        copies,
         member,
         new_id,
         restores,
@@ -1515,9 +1672,15 @@ pub fn unlink_preview(conn: &Connection, game_id: &str, route: &RouteRef) -> Res
         .iter()
         .enumerate()
         .partition(|(i, _)| p.moving.contains(i));
+    // The entry's own routes first, then its copies of routes the game keeps.
+    let leaving: Vec<String> = moving
+        .iter()
+        .map(|(_, r)| route_display(r))
+        .chain(p.copies.iter().map(|i| route_display(&p.game.routes[*i])))
+        .collect();
     Ok(UnlinkPreview {
         title: p.title,
-        routes: moving.into_iter().map(|(_, r)| route_display(r)).collect(),
+        routes: leaving,
         remaining: remaining
             .into_iter()
             .map(|(_, r)| route_display(r))
@@ -1539,8 +1702,10 @@ pub fn unlink(conn: &mut Connection, game_id: &str, route: &RouteRef) -> Result<
         .cloned()
         .enumerate()
         .partition(|(i, _)| p.moving.contains(i));
-    let moving: Vec<GameRoute> = moving.into_iter().map(|(_, r)| r).collect();
+    let mut moving: Vec<GameRoute> = moving.into_iter().map(|(_, r)| r).collect();
     let remaining: Vec<GameRoute> = remaining.into_iter().map(|(_, r)| r).collect();
+    // The entry also takes a copy of the routes it shared with the game, which keeps them.
+    moving.extend(p.copies.iter().map(|i| p.game.routes[*i].clone()));
     let game = &p.game;
     let tx = conn.transaction()?;
     // The entry's details and the records of the entries that came in with it go first, so the
@@ -2299,6 +2464,75 @@ mod tests {
     }
 
     #[test]
+    fn launch_options_refuse_proxy_options_and_split_values() {
+        let local = route("local", "Custom", r"C:\Games\Doom\gzdoom.exe");
+        for bad in [
+            "--proxy-server=evil.example",
+            "--proxy-pac-url=http://evil.example/p.pac",
+            r#"--host-rules="MAP * evil.example""#,
+            "--host-resolver-rules=x",
+            "--ignore-certificate-errors",
+            "--disable-gpu-sandbox",
+            "--require=x.js",
+            r"a;\Windows\x.dll",
+            r"--x=a,\Windows\x.dll",
+            r"--x=ok;C:\Elsewhere\x.dll",
+        ] {
+            assert!(
+                prepare_args(&local, bad).is_err(),
+                "{bad} should be refused"
+            );
+        }
+        assert!(prepare_args(&local, r"--list=a,b;c --map=cfg\a.ini").is_ok());
+    }
+
+    #[test]
+    fn launch_options_are_refused_for_shells_interpreters_and_windows_programs() {
+        for exe in [
+            r"C:\Windows\System32\cmd.exe",
+            r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            r"C:\Windows\notepad.exe",
+            r"c:\WINDOWS\system32\mshta.exe",
+            r"C:\Tools\pwsh.exe",
+            r"C:\Tools\wscript.exe",
+            r"C:\Tools\cscript.exe",
+            r"C:\Tools\rundll32.exe",
+            r"C:\Tools\regsvr32.exe",
+            r"C:\Tools\msiexec.exe",
+            r"C:\Tools\python.exe",
+            r"C:\Tools\Python311\python3.11.exe",
+            r"C:\Tools\pythonw.exe",
+            r"C:\Tools\node.exe",
+            r"C:\Tools\java.exe",
+            r"C:\Tools\javaw.exe",
+            r"C:\Tools\bash.exe",
+            r"C:\Tools\wsl.exe",
+            r"C:\Tools\conhost.exe",
+        ] {
+            let r = route("local", "Custom", exe);
+            assert!(
+                prepare_args(&r, "-c print(1)").is_err(),
+                "{exe} should be refused"
+            );
+            assert!(args_exe(&r).is_err(), "{exe} takes no options");
+        }
+        // The probes of the review.
+        let python = route("local", "Custom", r"C:\Tools\python.exe");
+        assert!(prepare_args(&python, r#"-c "import os""#).is_err());
+        let cmd = route("local", "Custom", r"C:\Windows\System32\cmd.exe");
+        assert!(prepare_args(&cmd, "/c calc").is_err());
+        // Games with similar names still take them.
+        for exe in [
+            r"C:\Games\Nodes\nodegame.exe",
+            r"C:\Games\Javelin\javelin.exe",
+            r"C:\Games\Doom\gzdoom.exe",
+        ] {
+            let r = route("local", "Custom", exe);
+            assert!(prepare_args(&r, "-x").is_ok(), "{exe} should be allowed");
+        }
+    }
+
+    #[test]
     fn stored_launch_options_are_checked_again() {
         let exe = r"C:\Games\Doom\gzdoom.exe";
         let ok = GameRoute {
@@ -3051,5 +3285,318 @@ mod tests {
             prompt.starts_with("Game Lobby will run:\n  C:\\Games\\<U+202E>gnp.exe\\game.exe\n")
         );
         assert!(prompt.contains("Working folder:\n  C:\\Games\\<U+202E>gnp.exe\n"));
+    }
+
+    fn route_targets(conn: &Connection, id: &str) -> Vec<String> {
+        db::get_game(conn, id)
+            .unwrap()
+            .unwrap()
+            .routes
+            .into_iter()
+            .map(|r| r.launch_target)
+            .collect()
+    }
+
+    #[test]
+    fn unlinking_never_takes_a_route_the_kept_game_already_had() {
+        // The kept game has Steam and GOG; the entry has the same Steam route (and more).
+        let db = db::Db::memory().unwrap();
+        let mut conn = db.lock();
+        put(
+            &mut conn,
+            &[
+                game(
+                    "k",
+                    "Hades",
+                    vec![
+                        route("steam", "Steam", K_ROUTE),
+                        route("gog", "GOG", S2_ROUTE),
+                    ],
+                ),
+                game(
+                    "s",
+                    "Hades (Epic)",
+                    vec![
+                        route("steam", "Steam", K_ROUTE),
+                        route("epic", "Epic Games", S1_ROUTE),
+                    ],
+                ),
+            ],
+        );
+        details(&mut conn, "k", 1);
+        details(&mut conn, "s", 2);
+        link(&mut conn, &ids(&["k", "s"]), Some(&take_from("k", "s"))).unwrap();
+        let record = &records_of(&conn, "k").unwrap()[0];
+        assert_eq!(
+            record.snapshot.route_keys,
+            [db::route_identity(&route("epic", "Epic Games", S1_ROUTE))]
+        );
+        assert_eq!(
+            record.snapshot.shared_keys,
+            [db::route_identity(&route("steam", "Steam", K_ROUTE))]
+        );
+        // The entry leaves with its own route and a copy of the shared one.
+        let preview = unlink_preview(&conn, "k", &route_to(&conn, "k", S1_ROUTE)).unwrap();
+        assert_eq!(preview.routes.len(), 2);
+        assert_eq!(preview.remaining.len(), 2);
+        assert_eq!(unlink_to(&mut conn, "k", S1_ROUTE), "s");
+        assert_eq!(route_targets(&conn, "k"), [K_ROUTE, S2_ROUTE]);
+        let mut s = route_targets(&conn, "s");
+        s.sort();
+        let mut expected = vec![S1_ROUTE.to_string(), K_ROUTE.to_string()];
+        expected.sort();
+        assert_eq!(s, expected);
+        assert!(all_records(&conn).unwrap().is_empty());
+        assert_eq!(notes_of(&conn, "s").as_deref(), Some("notes of s"));
+        assert_eq!(notes_of(&conn, "k").as_deref(), Some("notes of k"));
+    }
+
+    #[test]
+    fn an_entry_whose_routes_were_all_shared_can_still_be_unlinked() {
+        let db = db::Db::memory().unwrap();
+        let mut conn = db.lock();
+        put(
+            &mut conn,
+            &[
+                game("k", "Hades", vec![route("steam", "Steam", K_ROUTE)]),
+                game("s", "Hades (copy)", vec![route("steam", "Steam", K_ROUTE)]),
+            ],
+        );
+        details(&mut conn, "k", 1);
+        details(&mut conn, "s", 2);
+        link(&mut conn, &ids(&["k", "s"]), Some(&take_from("k", "s"))).unwrap();
+        let record = &records_of(&conn, "k").unwrap()[0];
+        assert!(record.snapshot.route_keys.is_empty());
+        assert_eq!(record.snapshot.shared_keys.len(), 1);
+        assert_eq!(unlink_to(&mut conn, "k", K_ROUTE), "s");
+        // Both have the route; the kept game lost nothing and the entry has its details back.
+        assert_eq!(route_targets(&conn, "k"), [K_ROUTE]);
+        assert_eq!(route_targets(&conn, "s"), [K_ROUTE]);
+        assert_eq!(notes_of(&conn, "s").as_deref(), Some("notes of s"));
+        assert_eq!(igdb_of(&conn, "s"), Some(2));
+        assert_eq!(igdb_of(&conn, "k"), Some(1));
+    }
+
+    #[test]
+    fn chained_links_with_shared_routes_still_nest() {
+        // B (Epic + GOG) into A (GOG): GOG is shared. A (with B) into C: both of A's routes
+        // are new to C, so B's own route is within A's.
+        let db = db::Db::memory().unwrap();
+        let mut conn = db.lock();
+        put(
+            &mut conn,
+            &[
+                game("c", "Hades", vec![route("steam", "Steam", K_ROUTE)]),
+                game("a", "Hades (GOG)", vec![route("gog", "GOG", S2_ROUTE)]),
+                game(
+                    "b",
+                    "Hades (Epic)",
+                    vec![
+                        route("gog", "GOG", S2_ROUTE),
+                        route("epic", "Epic Games", S1_ROUTE),
+                    ],
+                ),
+            ],
+        );
+        link(&mut conn, &ids(&["a", "b"]), Some(&choices("a"))).unwrap();
+        link(&mut conn, &ids(&["c", "a"]), Some(&choices("c"))).unwrap();
+        // A brought GOG and Epic (B's), so unlinking A takes both and B comes along.
+        assert_eq!(unlink_to(&mut conn, "c", S2_ROUTE), "a");
+        assert_eq!(route_targets(&conn, "c"), [K_ROUTE]);
+        assert_eq!(route_targets(&conn, "a").len(), 2);
+        assert_eq!(records_of(&conn, "a").unwrap().len(), 1, "B moved with A");
+        assert_eq!(unlink_to(&mut conn, "a", S1_ROUTE), "b");
+        // B had GOG too: A keeps it, B gets a copy.
+        assert_eq!(route_targets(&conn, "a"), [S2_ROUTE]);
+        assert_eq!(route_targets(&conn, "b").len(), 2);
+        assert!(all_records(&conn).unwrap().is_empty());
+    }
+
+    #[test]
+    fn shared_keys_are_backed_up_and_checked() {
+        let db = db::Db::memory().unwrap();
+        let mut conn = db.lock();
+        put(
+            &mut conn,
+            &[
+                game(
+                    "k",
+                    "Hades",
+                    vec![
+                        route("steam", "Steam", K_ROUTE),
+                        route("gog", "GOG", S2_ROUTE),
+                    ],
+                ),
+                game("s", "Hades (copy)", vec![route("steam", "Steam", K_ROUTE)]),
+            ],
+        );
+        link(&mut conn, &ids(&["k", "s"]), Some(&choices("k"))).unwrap();
+        let json = full_backup(&conn);
+        let links = &json["gameLinks"];
+        assert!(links[0]["snapshot"]["sharedKeys"].is_array());
+        let fresh = db::Db::memory().unwrap();
+        let mut restored = fresh.lock();
+        restore(&mut restored, &json);
+        assert_eq!(
+            records_of(&restored, "k").unwrap(),
+            records_of(&conn, "k").unwrap()
+        );
+        // A record with no routes at all, empty keys or too many keys.
+        let with = |keys: serde_json::Value, shared: serde_json::Value| {
+            let mut one = links.clone();
+            one[0]["snapshot"]["routeKeys"] = keys;
+            one[0]["snapshot"]["sharedKeys"] = shared;
+            one
+        };
+        assert!(validate_backup(&with(serde_json::json!([]), serde_json::json!([]))).is_err());
+        assert!(validate_backup(&with(serde_json::json!([]), serde_json::json!(["a"]))).is_ok());
+        assert!(validate_backup(&with(serde_json::json!([""]), serde_json::json!([]))).is_err());
+        let many: Vec<String> = (0..129).map(|i| format!("k{i}")).collect();
+        assert!(validate_backup(&with(serde_json::json!(["a"]), serde_json::json!(many))).is_err());
+    }
+
+    #[test]
+    fn an_explicit_automatic_igdb_pick_is_kept_as_the_users_choice() {
+        let db = db::Db::memory().unwrap();
+        let mut conn = db.lock();
+        put(
+            &mut conn,
+            &[
+                game("k", "Hades", vec![route("steam", "Steam", K_ROUTE)]),
+                game(
+                    "s",
+                    "Hades (Epic)",
+                    vec![route("epic", "Epic Games", S1_ROUTE)],
+                ),
+            ],
+        );
+        details(&mut conn, "k", 1);
+        details(&mut conn, "s", 2);
+        conn.execute(
+            "UPDATE game_metadata SET source='auto' WHERE gameId='s'",
+            [],
+        )
+        .unwrap();
+        let source_of = |conn: &Connection, id: &str| -> Option<String> {
+            conn.query_row(
+                "SELECT source FROM game_metadata WHERE gameId=?",
+                [id],
+                |r| r.get(0),
+            )
+            .optional()
+            .unwrap()
+        };
+        link(&mut conn, &ids(&["k", "s"]), Some(&take_from("k", "s"))).unwrap();
+        assert_eq!(igdb_of(&conn, "k"), Some(2), "the picked match is used");
+        assert_eq!(source_of(&conn, "k").as_deref(), Some("user"));
+        assert_eq!(
+            igdb_of(&conn, "s"),
+            Some(1),
+            "the kept game's own is parked"
+        );
+        // Unlinking gives each its own again.
+        unlink_to(&mut conn, "k", S1_ROUTE);
+        assert_eq!(igdb_of(&conn, "k"), Some(1));
+        assert_eq!(igdb_of(&conn, "s"), Some(2));
+    }
+
+    #[test]
+    fn an_automatic_match_that_wasnt_picked_is_still_looked_up_again() {
+        let db = db::Db::memory().unwrap();
+        let mut conn = db.lock();
+        put(
+            &mut conn,
+            &[
+                game("k", "Hades", vec![route("steam", "Steam", K_ROUTE)]),
+                game(
+                    "s",
+                    "Hades (Epic)",
+                    vec![route("epic", "Epic Games", S1_ROUTE)],
+                ),
+            ],
+        );
+        details(&mut conn, "s", 2);
+        conn.execute(
+            "UPDATE game_metadata SET source='auto' WHERE gameId='s'",
+            [],
+        )
+        .unwrap();
+        // The default rule takes only a match the user chose: the automatic one isn't used.
+        link(&mut conn, &ids(&["k", "s"]), None).unwrap();
+        assert_eq!(igdb_of(&conn, "k"), None);
+    }
+
+    #[test]
+    fn link_rows_read_leniently_but_backups_are_checked_strictly() {
+        let db = db::Db::memory().unwrap();
+        let conn = db.lock();
+        let raw = r#"{"title":"Hades (Epic)","routeKeys":["a"],"fromTheFuture":true}"#;
+        conn.execute(
+            "INSERT INTO game_links(memberId,gameId,linkedAt,snapshot) VALUES('s','k',1,?)",
+            [raw],
+        )
+        .unwrap();
+        let record = &records_of(&conn, "k").unwrap()[0];
+        assert_eq!(record.snapshot.title, "Hades (Epic)");
+        assert_eq!(record.snapshot.route_keys, ["a"]);
+        // A row that can't be read at all reads as empty.
+        conn.execute("UPDATE game_links SET snapshot='[1]'", [])
+            .unwrap();
+        assert_eq!(
+            records_of(&conn, "k").unwrap()[0].snapshot,
+            LinkSnapshot::default()
+        );
+        // A backup with an extra field, in the record or the snapshot, is refused.
+        let good = serde_json::json!([{
+            "memberId": "s", "gameId": "k", "linkedAt": 1,
+            "snapshot": { "title": "x", "routeKeys": ["a"] }
+        }]);
+        assert!(validate_backup(&good).is_ok());
+        let mut extra = good.clone();
+        extra[0]["surprise"] = serde_json::json!(1);
+        assert!(validate_backup(&extra).is_err());
+        let mut extra = good.clone();
+        extra[0]["snapshot"]["surprise"] = serde_json::json!(1);
+        assert!(validate_backup(&extra).is_err());
+    }
+
+    #[test]
+    fn the_known_backup_fields_match_the_structs() {
+        let snapshot = LinkSnapshot {
+            title: "t".into(),
+            cover: Some("c".into()),
+            default_cover: Some("d".into()),
+            genre: Some("g".into()),
+            favorite: true,
+            hidden: true,
+            playtime_seconds: 1,
+            last_played: Some(1),
+            route_keys: vec!["a".into()],
+            shared_keys: vec!["b".into()],
+            session_starts: vec![1],
+            screenshot_ids: vec!["s".into()],
+            memory_ids: vec![1],
+            took: vec!["notes".into()],
+        };
+        let sorted = |value: serde_json::Value| -> Vec<String> {
+            let mut keys: Vec<String> = value.as_object().unwrap().keys().cloned().collect();
+            keys.sort();
+            keys
+        };
+        let known = |list: &[&str]| -> Vec<String> {
+            let mut v: Vec<String> = list.iter().map(|s| s.to_string()).collect();
+            v.sort();
+            v
+        };
+        let value = serde_json::to_value(&snapshot).unwrap();
+        assert_eq!(sorted(value), known(&SNAPSHOT_FIELDS));
+        let record = LinkRecord {
+            member_id: "m".into(),
+            game_id: "g".into(),
+            linked_at: 1,
+            snapshot,
+        };
+        let value = serde_json::to_value(&record).unwrap();
+        assert_eq!(sorted(value), known(&RECORD_FIELDS));
     }
 }

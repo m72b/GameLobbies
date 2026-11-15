@@ -2,7 +2,9 @@
 //! unchanged so existing `library.sqlite` files open as-is.
 
 use crate::types::*;
-use anyhow::{anyhow, bail, Context, Result};
+#[cfg(test)]
+use anyhow::bail;
+use anyhow::{anyhow, Context, Result};
 use rusqlite::types::ValueRef;
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde_json::{Map, Value};
@@ -974,7 +976,9 @@ pub fn remove_game(db: &Connection, id: &str) -> Result<Vec<Game>> {
 /// Links `source_id` into `target_id` with the default choices (`links::link`): routes and
 /// sessions move over, playtime is summed, the target's title stays, and the details only the
 /// source has (cover, page art, an IGDB match the user chose, notes) are used; the rest of the
-/// source's details stay parked for unlinking.
+/// source's details stay parked for unlinking. Only the tests use it now (the interface links
+/// through the review, `links::link`).
+#[cfg(test)]
 pub fn merge_games(db: &mut Connection, target_id: &str, source_id: &str) -> Result<Vec<Game>> {
     if target_id == source_id {
         bail!("Choose two different games to merge.");

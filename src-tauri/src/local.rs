@@ -1273,9 +1273,6 @@ pub fn remove_launcher_root(
 pub enum Resolution {
     /// `duplicate`: the games are different; never ask again for this set.
     KeepSeparate,
-    /// `duplicate`: merge the games into `targetGameId` (default: the first listed).
-    #[serde(rename_all = "camelCase")]
-    Link { target_game_id: Option<String> },
     /// Any kind: never scan `path` again (one of the item's paths or its folder).
     Ignore { path: String },
     /// `ambiguous-exe`: use `executable` (one of the item's candidates) for the folder.
@@ -1288,12 +1285,6 @@ pub enum Resolution {
     ChooseEmulator { emulator_id: String },
     /// Any kind: close without changes.
     Dismiss,
-}
-
-#[derive(Debug, Default)]
-pub struct Resolved {
-    /// (target, source) pairs merged, for the play tracker.
-    pub merged: Vec<(String, String)>,
 }
 
 fn detail_paths(item: &review::ReviewItem) -> Vec<String> {
@@ -1324,6 +1315,7 @@ fn detail_paths(item: &review::ReviewItem) -> Vec<String> {
     paths
 }
 
+#[cfg(test)]
 fn duplicate_ids(item: &review::ReviewItem) -> Vec<String> {
     item.details
         .get("games")
@@ -1486,7 +1478,7 @@ fn check(
 
 /// Applies a resolution: the item is read, files are checked without the database lock,
 /// then the change is applied under it. Errors leave the item open.
-pub fn resolve(db: &Db, id: &str, resolution: &Resolution) -> Result<Resolved> {
+pub fn resolve(db: &Db, id: &str, resolution: &Resolution) -> Result<()> {
     let (item, confirmations) = {
         let conn = db.lock();
         let item =
@@ -1524,35 +1516,14 @@ fn apply(
     item: &review::ReviewItem,
     resolution: &Resolution,
     checked: Checked,
-) -> Result<Resolved> {
+) -> Result<()> {
     let id = item.id.as_str();
-    let mut out = Resolved::default();
     let label = match resolution {
         Resolution::KeepSeparate => {
             if item.kind != DUPLICATE {
                 bail!("Only duplicates can be kept separate.");
             }
             "kept-separate"
-        }
-        Resolution::Link { target_game_id } => {
-            if item.kind != DUPLICATE {
-                bail!("Only duplicates can be linked.");
-            }
-            let ids = duplicate_ids(item);
-            let target = target_game_id
-                .clone()
-                .or_else(|| ids.first().cloned())
-                .ok_or_else(|| anyhow!("This duplicate lists no games."))?;
-            if !ids.contains(&target) {
-                bail!("Choose one of the listed games to keep.");
-            }
-            for source in ids.iter().filter(|i| **i != target) {
-                if db::get_game(conn, source)?.is_some() {
-                    db::merge_games(conn, &target, source)?;
-                    out.merged.push((target.clone(), source.clone()));
-                }
-            }
-            "linked"
         }
         Resolution::Ignore { path } => {
             only_scan_kinds(item, "ignored")?;
@@ -1736,7 +1707,7 @@ fn apply(
         }
     };
     review::resolve(conn, id, label)?;
-    Ok(out)
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -2166,20 +2137,22 @@ mod tests {
         let items = review::list(&f.db.lock(), false).unwrap();
         assert_eq!(items.len(), 1);
         let ids = duplicate_ids(&items[0]);
-        let out = resolve(
-            &f.db,
-            &items[0].id,
-            &Resolution::Link {
-                target_game_id: Some(ids[1].clone()),
-            },
-        )
-        .unwrap();
-        assert_eq!(out.merged, [(ids[1].clone(), ids[0].clone())]);
+        link_default(&f, &ids[1], &ids[0]);
         assert_eq!(f.games().len(), 4);
         let linked = db::get_game(&f.db.lock(), &ids[1]).unwrap().unwrap();
         assert_eq!(linked.routes.len(), 2);
         assert_eq!(f.scan().review, 0, "a linked game is not a duplicate");
         assert_eq!(f.games().len(), 4, "rescans keep the link");
+    }
+
+    /// Links `other` into `keep` with the default rules (review linking is `links::link`).
+    fn link_default(f: &Fixture, keep: &str, other: &str) {
+        crate::links::link(
+            &mut f.db.lock(),
+            &[keep.to_string(), other.to_string()],
+            None,
+        )
+        .unwrap();
     }
 
     #[test]
@@ -3286,14 +3259,15 @@ mod tests {
             .into_iter()
             .find(|i| i.kind == DUPLICATE && duplicate_ids(i).contains(&ori.id))
             .expect("the same title as a game played from a file is offered as a duplicate");
-        resolve(
-            &f.db,
-            &ori_duplicate.id,
-            &Resolution::Link {
-                target_game_id: Some(ori.id.clone()),
-            },
-        )
-        .unwrap();
+        link_default(
+            &f,
+            &ori.id,
+            &duplicate_ids(&ori_duplicate)
+                .into_iter()
+                .find(|i| *i != ori.id)
+                .unwrap(),
+        );
+        refresh_duplicates(&f.db.lock()).unwrap();
         let ori_now = db::get_game(&f.db.lock(), &ori.id).unwrap().unwrap();
         assert_eq!(ori_now.routes.len(), 2);
         assert_eq!(ori_now.routes[0], ori.routes[0]);
@@ -3317,14 +3291,7 @@ mod tests {
         let ids: HashSet<String> = duplicate_ids(&duplicate).into_iter().collect();
         assert_eq!(ids, ["steam:504230".to_string(), found.id.clone()].into());
         // Linking them keeps the store game's data and gives it the found route.
-        resolve(
-            &f.db,
-            &duplicate.id,
-            &Resolution::Link {
-                target_game_id: Some("steam:504230".into()),
-            },
-        )
-        .unwrap();
+        link_default(&f, "steam:504230", &found.id);
         let celeste = db::get_game(&f.db.lock(), "steam:504230").unwrap().unwrap();
         assert_eq!(celeste.routes.len(), 2);
         assert_eq!(celeste.routes[0], before.routes[0]);

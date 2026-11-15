@@ -136,7 +136,19 @@ pub struct Unlinked {
     games: Vec<Game>,
 }
 
+/// A game that is being played can't be split: its open session belongs to the combined game,
+/// and which route the running process belongs to can't be told reliably, so the session could
+/// not be handed to the right half. (Linking is the other direction: the session simply
+/// continues as the kept game's.)
+fn not_running(sessions: &tracker::Sessions, game_id: &str) -> CmdResult<()> {
+    if sessions.contains(game_id) {
+        return Err("This game is running. Close it before unlinking one of its routes.".into());
+    }
+    Ok(())
+}
+
 /// Splits `route` (and the routes that came in with it) off `gameId` into a game of its own.
+/// Refused while the game is running (see [`not_running`]).
 #[tauri::command]
 pub async fn library_unlink(
     app: AppHandle,
@@ -147,6 +159,9 @@ pub async fn library_unlink(
     let game_id = game_arg(&game_id)?;
     let route = route_arg(route)?;
     let (new_id, games) = {
+        // Session state before the database (see `tracker`): no poll runs in between.
+        let sessions = state.tracker.sessions();
+        not_running(&sessions, &game_id)?;
         let mut conn = state.db.lock();
         let new_id = links::unlink(&mut conn, &game_id, &route).map_err(err)?;
         (new_id, db::all_games(&conn).map_err(err)?)
@@ -267,4 +282,19 @@ pub async fn library_route_args_pending(
         .ok_or("Game not found.")?;
     let stored = route.find(&game).map_err(err)?;
     Ok(links::args_need_confirmation(&conn, stored))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unlinking_is_refused_while_the_game_is_running() {
+        let mut sessions = tracker::Sessions::default();
+        assert!(not_running(&sessions, "g").is_ok());
+        sessions.launch("g", 1_000);
+        let message = not_running(&sessions, "g").unwrap_err();
+        assert!(message.contains("running"));
+        assert!(not_running(&sessions, "other").is_ok());
+    }
 }

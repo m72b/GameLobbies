@@ -210,7 +210,7 @@ const SHELL_CHARACTERS: [char; 7] = ['&', '|', '<', '>', '^', '%', '`'];
 /// Node based program (Heroic, Playnite add-ons, many launchers) run another program, load code
 /// or accept remote control. A name that starts with one of these is refused, as is any
 /// `*cmd-prefix` option. No emulator in the catalog needs them.
-const DEBUGGING_OPTIONS: [&str; 9] = [
+const DEBUGGING_OPTIONS: [&str; 16] = [
     "inspect",
     "remote-debugging",
     "gpu-launcher",
@@ -220,6 +220,13 @@ const DEBUGGING_OPTIONS: [&str; 9] = [
     "renderer-cmd-prefix",
     "js-flags",
     "browser-subprocess-path",
+    "proxy-server",
+    "proxy-pac-url",
+    "host-rules",
+    "host-resolver-rules",
+    "ignore-certificate-errors",
+    "disable-gpu-sandbox",
+    "require",
 ];
 
 /// The refused option `piece` names (see [`DEBUGGING_OPTIONS`]), compared case-insensitively;
@@ -261,7 +268,7 @@ fn debugging_option(piece: &str) -> Option<String> {
 /// - text that starts with a placeholder (`{romdir}\x.cfg`) is about the game file and may not
 ///   contain `..`.
 ///
-/// Each token is checked in parts split at `=` (`--core=cores\x.dll`). A part
+/// Each token is checked in parts split at `=`, `;` and `,` (`--core=cores\x.dll`). A part
 /// like `/fullscreen` (`/` then a letter, then only letters, digits, `_` and `-`) is an
 /// option, not a path; `/evil.dll` is a path. A placeholder may not be glued to an option or
 /// `@` (`-L{rom}`, `@{rom}`); see the residual risk noted in `check_template_piece`. Control
@@ -314,7 +321,8 @@ pub(crate) fn check_arguments(
         .ok_or_else(|| anyhow!("The {noun} executable must be a full path to an .exe file."))?;
     check_no_debugging_options(template, noun)?;
     for token in tokenize_arguments(template, noun)? {
-        for piece in token.split('=') {
+        // Also at `;` and `,`: programs split option values there (`--x=a;\Windows\b.dll`).
+        for piece in token.split(['=', ';', ',']) {
             check_template_piece(piece, &folder, placeholders, noun).map_err(|reason| {
                 anyhow!("The {noun} argument \"{token}\" is not allowed: {reason} Paths in the arguments must be inside the {noun}'s folder, like {example}.")
             })?;
@@ -930,7 +938,7 @@ pub(crate) mod tests {
 
     /// Options that make Chromium/Electron/Node programs run other code; refused in every
     /// template (emulators and custom launchers alike).
-    pub(crate) const DEBUGGING_TEMPLATES: [&str; 24] = [
+    pub(crate) const DEBUGGING_TEMPLATES: [&str; 31] = [
         "--gpu-launcher=calc.exe {rom}",
         "--gpu-launcher calc.exe",
         "\"--utility-cmd-prefix=cmd /c calc\" {rom}",
@@ -955,6 +963,13 @@ pub(crate) mod tests {
         "--NO-SANDBOX",
         "--js-flags",
         "-remote-debugging-port=1",
+        "--proxy-server=evil.example",
+        "--proxy-pac-url=http://evil.example/p.pac",
+        "--host-rules=MAP * evil.example",
+        "--host-resolver-rules=MAP * evil.example",
+        "--ignore-certificate-errors",
+        "--disable-gpu-sandbox",
+        "--require=x.js",
     ];
 
     #[test]
@@ -1085,6 +1100,10 @@ pub(crate) mod tests {
             "-L \u{2215}Users\u{2215}evil.dll {rom}",
             "-L \u{FF0E}\u{FF0E}\u{FF3C}evil.dll {rom}",
             "\u{FF02}-L C:\\x.dll\u{FF02} {rom}",
+            // Paths hidden behind the separators some programs split option values at.
+            r"a;\Windows\x.dll {rom}",
+            r"--x=a,\Windows\x.dll {rom}",
+            r"--x=ok;C:\Elsewhere\x.dll {rom}",
             // Broken templates.
             "\"{rom}",
         ] {

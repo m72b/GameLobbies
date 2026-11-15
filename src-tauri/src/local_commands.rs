@@ -10,7 +10,6 @@ use crate::review::{self, ReviewItem};
 use crate::roots::{self, LibraryRoot, RootGuard};
 use crate::scan::{self, LocalScope};
 use crate::state::AppState;
-use crate::tracker;
 use crate::types::*;
 use crate::{db, launch, validation};
 use serde::Serialize;
@@ -424,14 +423,8 @@ pub async fn review_resolve(
     let worker = app.clone();
     tauri::async_runtime::spawn_blocking(move || -> CmdResult<()> {
         let state = worker.state::<AppState>();
-        // Session state before the database, as in `library_merge`.
-        let mut sessions = state.tracker.sessions();
-        let resolved = local::resolve(&state.db, &id, &resolution).map_err(err)?;
+        local::resolve(&state.db, &id, &resolution).map_err(err)?;
         let conn = state.db.lock();
-        for (target, source) in resolved.merged {
-            let tick = sessions.merge(&target, &source);
-            tracker::apply(&conn, &mut sessions, tick.effects);
-        }
         local::refresh_duplicates(&conn).map_err(err)
     })
     .await

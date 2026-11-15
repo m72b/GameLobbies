@@ -189,9 +189,8 @@ export type ReviewItem = ReviewItemBase & (
 /**
  * How to resolve a review item:
  * - `keep-separate` (duplicate): they are different games; this exact set isn't reported again.
- * - `link` (duplicate): link the listed games into `targetGameId` (default: the first listed) with the
- *   default choices (playtime summed, sessions moved). The interface uses the review step instead
- *   (`library.linkPreview` / `library.link` with the item's id).
+ * Linking duplicates is not a resolution: the interface opens the link review
+ * (`library.linkPreview` / `library.link` with the item's id).
  * - `ignore` (any kind): `path` must be one of the item's paths (or its folder). Scans skip it from
  *   now on (undo with `review.unignore`); its game becomes not installed, or is removed when it
  *   has no user data.
@@ -205,7 +204,7 @@ export type ReviewItem = ReviewItemBase & (
  *   added and plays with that emulator.
  * - `dismiss` (any kind): close without changes.
  */
-export type ReviewResolution = { action: 'keep-separate' } | { action: 'link'; targetGameId?: string } | { action: 'ignore'; path: string } | { action: 'choose-exe'; executable: string } | { action: 'confirm-shortcut' } | { action: 'choose-emulator'; emulatorId: string } | { action: 'dismiss' }
+export type ReviewResolution = { action: 'keep-separate' } | { action: 'ignore'; path: string } | { action: 'choose-exe'; executable: string } | { action: 'confirm-shortcut' } | { action: 'choose-emulator'; emulatorId: string } | { action: 'dismiss' }
 /** `library.addLocalGame()` result: the new (or already existing) game's id and the library. */
 export interface AddedLocalGame { gameId: string; games: Game[] }
 /**

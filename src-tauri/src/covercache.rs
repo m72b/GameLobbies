@@ -556,7 +556,9 @@ pub fn remote_urls(conn: &Connection, allow: Allow) -> Result<Vec<String>> {
 fn referenced_files(conn: &Connection) -> Result<HashSet<String>> {
     let mut stmt = conn.prepare(
         "SELECT cover FROM games UNION SELECT defaultCover FROM games
-         UNION SELECT hero FROM game_page_custom UNION SELECT logo FROM game_page_custom",
+         UNION SELECT hero FROM game_page_custom UNION SELECT logo FROM game_page_custom
+         UNION SELECT json_extract(snapshot,'$.cover') FROM game_links
+         UNION SELECT json_extract(snapshot,'$.defaultCover') FROM game_links",
     )?;
     let values: Vec<Option<String>> = stmt
         .query_map([], |r| r.get(0))?
@@ -1116,6 +1118,47 @@ mod tests {
         // Once the metadata is gone, its images go too.
         crate::db::delete_metadata(&conn, "g").unwrap();
         assert_eq!(sweep(&conn, &dir.0).unwrap(), 1);
+    }
+
+    #[test]
+    fn sweep_keeps_covers_of_linked_entries() {
+        let dir = TempDir::new();
+        let db = Db::memory().unwrap();
+        let conn = db.lock();
+        let mut files = Vec::new();
+        for (url, body) in [
+            ("https://cdn2.steamgriddb.com/grid/a.png", b"one".as_slice()),
+            ("https://cdn2.steamgriddb.com/grid/b.png", b"two".as_slice()),
+            (
+                "https://cdn2.steamgriddb.com/grid/c.png",
+                b"three".as_slice(),
+            ),
+        ] {
+            let name = file_name(url, body, "png");
+            std::fs::write(dir.0.join(&name), body).unwrap();
+            commit(&conn, url, &name).unwrap();
+            files.push((url, name));
+        }
+        // A linked entry's own cover and default cover (kept for unlinking) are referenced
+        // only by its link record.
+        let snapshot = serde_json::json!({
+            "title": "Entry",
+            "cover": local_value(&files[0].1),
+            "defaultCover": local_value(&files[1].1),
+        });
+        conn.execute(
+            "INSERT INTO game_links(memberId,gameId,linkedAt,snapshot) VALUES('m','g',1,?)",
+            [snapshot.to_string()],
+        )
+        .unwrap();
+        assert_eq!(sweep(&conn, &dir.0).unwrap(), 1);
+        assert!(lookup(&conn, files[0].0).unwrap().is_some());
+        assert!(lookup(&conn, files[1].0).unwrap().is_some());
+        assert!(lookup(&conn, files[2].0).unwrap().is_none());
+        assert!(dir.0.join(&files[0].1).exists() && !dir.0.join(&files[2].1).exists());
+        // Once the record is gone, its covers go too.
+        conn.execute("DELETE FROM game_links", []).unwrap();
+        assert_eq!(sweep(&conn, &dir.0).unwrap(), 2);
     }
 
     #[test]
