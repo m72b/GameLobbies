@@ -143,7 +143,7 @@ pub async fn updates_auto_check(
     match check(&app, &updates).await {
         Ok(info) => Ok(info.available.then_some(info)),
         Err(failure) => {
-            eprintln!("Automatic update check failed: {}", failure.message());
+            log::warn!("Automatic update check failed: {}", failure.message());
             Ok(None)
         }
     }
@@ -188,7 +188,7 @@ pub async fn updates_install(app: AppHandle, updates: State<'_, Updates>) -> Cmd
         let state = backup_app.state::<AppState>();
         let backup = backup_database(&state.db.lock(), &state.data_dir, &version)?;
         if let Err(e) = prune_backups(&state.data_dir, BACKUPS_KEPT) {
-            eprintln!("Could not remove old update backups: {e}");
+            log::warn!("Could not remove old update backups: {e}");
         }
         anyhow::Ok(backup)
     })
@@ -230,7 +230,7 @@ async fn check(app: &AppHandle, updates: &Updates) -> Result<UpdateInfo, Failure
         let state = app.state::<AppState>();
         let recorded = record_check(&state.db.lock(), now_ms());
         if let Err(e) = recorded {
-            eprintln!("Could not store the update check time: {e:#}");
+            log::warn!("Could not store the update check time: {e:#}");
         }
     }
     let mut found = result.map_err(|e| describe(&e))?;

@@ -853,7 +853,7 @@ pub async fn apply(state: &AppState, game_id: &str, url: &str) -> Result<Vec<Gam
         },
     )?;
     if let Err(e) = crate::covercache::sweep(&conn, &state.covers_dir()) {
-        eprintln!("Could not clean up the cover cache: {e:#}");
+        log::warn!("Could not clean up the cover cache: {e:#}");
     }
     Ok(games)
 }
@@ -951,14 +951,14 @@ pub fn spawn_auto_fetch(app: &AppHandle) {
             return;
         }
         match fetch_missing(&app).await {
-            Ok(s) if s.updated > 0 || !s.errors.is_empty() => eprintln!(
+            Ok(s) if s.updated > 0 || !s.errors.is_empty() => log::info!(
                 "SteamGridDB: {} covers added, {} not found, {} errors.",
                 s.updated,
                 s.not_found,
                 s.errors.len()
             ),
             Ok(_) => {}
-            Err(e) => eprintln!("SteamGridDB cover fetch failed: {e:#}"),
+            Err(e) => log::warn!("SteamGridDB cover fetch failed: {e:#}"),
         }
     });
 }

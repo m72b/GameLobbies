@@ -170,7 +170,7 @@ fn migrate(db: &Connection, file: Option<&Path>) -> Result<()> {
     if version > SCHEMA_VERSION {
         // Written by a newer Game Lobby: open it as usual, but don't run cleanups that may
         // not suit its format.
-        eprintln!(
+        log::warn!(
             "The library was last used by a newer Game Lobby (schema {version}, this version knows {SCHEMA_VERSION}); skipping upgrade steps."
         );
         return Ok(());

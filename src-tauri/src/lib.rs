@@ -1,11 +1,13 @@
 //! Game Lobby — a unified local game library and launcher (Tauri backend).
 
+mod applog;
 mod art;
 mod catalog;
 mod commands;
 mod covercache;
 mod db;
 mod dbrepair;
+mod diagnostics;
 mod emulators;
 mod health;
 mod health_commands;
@@ -18,6 +20,7 @@ mod localscan;
 mod notes;
 mod picks;
 mod platform;
+mod redact;
 mod review;
 mod roots;
 mod scan;
@@ -95,7 +98,7 @@ fn cover_protocol<R: Runtime>(
 fn data_dir_override() -> Option<std::path::PathBuf> {
     let dir = std::path::PathBuf::from(std::env::var_os("GAME_LOBBY_DATA_DIR")?);
     if dir.as_os_str().is_empty() || !dir.is_absolute() {
-        eprintln!("GAME_LOBBY_DATA_DIR must be an absolute folder path; ignoring it.");
+        log::warn!("GAME_LOBBY_DATA_DIR must be an absolute folder path; ignoring it.");
         return None;
     }
     Some(dir)
@@ -106,8 +109,27 @@ fn data_dir_override() -> Option<std::path::PathBuf> {
     None
 }
 
+/// Registers the single-instance plugin, which must come before every other plugin: a second
+/// copy is detected (and exits) while the app is still being built, before `setup` below opens
+/// the library or the log. The running copy brings its main window to the front.
+///
+/// The plugin keys the instance on the app identifier, not on the data folder. A debug build
+/// started with `GAME_LOBBY_DATA_DIR` is a throwaway copy with its own library, so it skips the
+/// check and may run next to an installed copy.
+fn with_single_instance(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> {
+    if data_dir_override().is_some() {
+        return builder;
+    }
+    builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        log::info!("A second copy of Game Lobby was started; showing the running one.");
+        if let Err(e) = windows::focus_main(app) {
+            log::warn!("Could not show the main window: {e}");
+        }
+    }))
+}
+
 pub fn run() {
-    tauri::Builder::default()
+    with_single_instance(tauri::Builder::default())
         .plugin(tauri_plugin_dialog::init())
         // Signed updates; used only by the `updates_*` commands (no webview permissions).
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -115,28 +137,41 @@ pub fn run() {
         .register_uri_scheme_protocol("lobby-cover", cover_protocol)
         .register_uri_scheme_protocol("lobby-shot", screenshots::protocol)
         .setup(|app| {
-            let data_dir = match data_dir_override() {
-                Some(dir) => {
-                    // A test library: never copy the user's Electron library into it.
-                    eprintln!("Using the development data folder {}", dir.display());
-                    dir
-                }
-                None => {
-                    let data_dir = app.path().app_data_dir()?;
-                    match db::migrate_from_electron(&data_dir) {
-                        Ok(true) => {
-                            eprintln!("Copied the library from the Electron build of Game Lobby.")
-                        }
-                        Ok(false) => {}
-                        Err(e) => eprintln!("Could not copy the Electron library: {e:#}"),
-                    }
-                    data_dir
-                }
+            // Only the first copy gets here (see `with_single_instance`), so only it touches
+            // the log and the library.
+            let (data_dir, development) = match data_dir_override() {
+                Some(dir) => (dir, true),
+                None => (app.path().app_data_dir()?, false),
             };
+            if let Err(e) = applog::init(&data_dir) {
+                // No log file; the app still runs.
+                eprintln!("Could not start the log file: {e}");
+            }
+            diagnostics::log_startup(app, &data_dir);
+            if development {
+                // A test library: never copy the user's Electron library into it.
+                log::info!("Using the development data folder {}", data_dir.display());
+            } else {
+                match db::migrate_from_electron(&data_dir) {
+                    Ok(true) => {
+                        log::info!("Copied the library from the Electron build of Game Lobby.")
+                    }
+                    Ok(false) => {}
+                    Err(e) => log::error!("Could not copy the Electron library: {e:#}"),
+                }
+            }
             let (database, repair) = db::Db::open_checked(
                 &data_dir.join("library.sqlite"),
                 Some(&data_dir.join("screenshots")),
             )?;
+            match &repair {
+                None => log::info!("Library database quick_check: ok."),
+                Some(notice) => log::error!(
+                    "Library database quick_check failed; repaired and replaced: {}; error: {}.",
+                    notice.replaced,
+                    notice.error.as_deref().unwrap_or("none")
+                ),
+            }
             let hours = db::get_settings(&database.lock())?.scan_interval_hours;
             app.manage(AppState {
                 db: database,
@@ -197,6 +232,8 @@ pub fn run() {
             commands::settings_open,
             commands::theme_load,
             commands::theme_reset,
+            diagnostics::diagnostics_report,
+            diagnostics::diagnostics_open_logs,
             local_commands::emulators_list,
             local_commands::emulators_save,
             local_commands::emulators_scan,
@@ -331,5 +368,24 @@ mod tests {
         );
         assert_eq!(file("http://lobby-cover.localhost/.."), None);
         assert_eq!(file("http://lobby-cover.localhost/"), None);
+    }
+
+    /// The single-instance plugin must be the first plugin, and the plugin's check runs while
+    /// the app is built, before `setup` (which starts the log and opens the library).
+    #[test]
+    fn single_instance_is_registered_first_and_before_the_library_is_opened() {
+        let source = include_str!("lib.rs");
+        let run = &source[source.find("pub fn run()").unwrap()..];
+        let at = |needle: &str| run.find(needle).unwrap_or_else(|| panic!("{needle}"));
+        assert!(at("with_single_instance(tauri::Builder::default())") < at(".plugin("));
+        assert!(at(".plugin(") < at(".setup("));
+        assert!(at(".setup(") < at("applog::init("));
+        assert!(at("applog::init(") < at("Db::open_checked("));
+        // Nothing before the setup hook opens the library.
+        assert!(!run[..at(".setup(")].contains("open_checked"));
+        let helper = &source
+            [source.find("fn with_single_instance").unwrap()..source.find("pub fn run()").unwrap()];
+        assert!(helper.contains("tauri_plugin_single_instance::init"));
+        assert!(helper.contains("windows::focus_main"));
     }
 }

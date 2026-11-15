@@ -43,7 +43,7 @@ impl Collected {
                 self.installed.push((installed, games));
             }
             Err(e) => {
-                eprintln!("Could not scan {name}: {e:#}");
+                log::warn!("Could not scan {name}: {e:#}");
                 let message: String = format!("{e:#}").chars().take(300).collect();
                 entry.error = Some(message);
                 self.errors.push(format!("{name}: {e:#}"));
@@ -318,7 +318,7 @@ pub fn configure_schedule(app: &AppHandle, hours: i64) {
             loop {
                 tokio::time::sleep(Duration::from_secs(hours as u64 * 3600)).await;
                 if let Err(e) = scan_libraries(&app).await {
-                    eprintln!("Scheduled library scan failed: {e}");
+                    log::error!("Scheduled library scan failed: {e}");
                 }
             }
         }));

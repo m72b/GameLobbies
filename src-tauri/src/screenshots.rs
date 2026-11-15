@@ -498,7 +498,7 @@ pub fn sweep_files(conn: &Connection, root: &Path) -> Result<usize> {
 /// Removes unreferenced screenshot files. Never fails the caller.
 pub fn clean_up(state: &AppState) {
     if let Err(e) = sweep_files(&state.db.lock(), &state.screenshots_dir()) {
-        eprintln!("Could not clean up screenshots: {e:#}");
+        log::warn!("Could not clean up screenshots: {e:#}");
     }
 }
 

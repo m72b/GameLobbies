@@ -547,6 +547,8 @@ export interface LobbyAPI {
   notes: NotesAPI
   updates: UpdatesAPI
   app: { quit(): Promise<void> }
+  /** Support tools. `report` is a redacted plain-text diagnostics report (no keys or tokens, user folder replaced); `openLogs` opens the fixed logs folder (the renderer passes no path). */
+  diagnostics: { report(): Promise<string>; openLogs(): Promise<void> }
   /** Cached install sizes. `rescan` measures in the background (progress events) and rejects if one is running. `uninstall` only hands off to the game's launcher (never deletes files): the backend builds the link from the stored route. */
   storage: { list(): Promise<StorageReport>; rescan(): Promise<StorageReport>; uninstall(gameId: string, routeIndex: number): Promise<void>; onProgress(callback: (progress: StorageProgress) => void): () => void }
   /** The "Recently added" shelf. `dismiss()` without an id clears it. Both return the remaining shelf. */

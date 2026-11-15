@@ -690,7 +690,7 @@ pub async fn run_pass(
                 }
             }
             Err(e) => {
-                eprintln!("Could not cache a cover: {e}");
+                log::warn!("Could not cache a cover: {e}");
                 outcome.failed.push(url);
             }
         }
@@ -702,7 +702,7 @@ pub async fn run_pass(
     }
     drop(downloads);
     if let Err(e) = sweep(&db.lock(), covers_dir) {
-        eprintln!("Could not clean up the cover cache: {e:#}");
+        log::warn!("Could not clean up the cover cache: {e:#}");
     }
     if pending > 0 {
         on_batch();
@@ -751,7 +751,7 @@ pub async fn download_now(state: &AppState, url: &str) -> Option<String> {
         Err(e) => Err(e),
     };
     result
-        .map_err(|e| eprintln!("Could not cache the chosen cover: {e}"))
+        .map_err(|e| log::warn!("Could not cache the chosen cover: {e}"))
         .ok()
 }
 
@@ -807,7 +807,7 @@ pub fn needs_caching(value: Option<&str>) -> bool {
 /// Removes unreferenced cache files after a cover change or removal. Never fails the caller.
 pub fn clean_up(state: &AppState) {
     if let Err(e) = sweep(&state.db.lock(), &state.covers_dir()) {
-        eprintln!("Could not clean up the cover cache: {e:#}");
+        log::warn!("Could not clean up the cover cache: {e:#}");
     }
     // Games removed or merged may also leave screenshots behind (their own folder).
     crate::screenshots::clean_up(state);
@@ -835,11 +835,11 @@ pub fn spawn_startup(app: &AppHandle) {
             let conn = state.db.lock();
             if let Err(e) = sweep_files(&conn, &covers_dir).and_then(|_| sweep(&conn, &covers_dir))
             {
-                eprintln!("Could not clean up the cover cache: {e:#}");
+                log::warn!("Could not clean up the cover cache: {e:#}");
             }
             let shots = state.screenshots_dir();
             if let Err(e) = crate::screenshots::sweep_files(&conn, &shots) {
-                eprintln!("Could not clean up screenshots: {e:#}");
+                log::warn!("Could not clean up screenshots: {e:#}");
             }
         }
         run_until_idle(&app).await;
@@ -890,7 +890,7 @@ async fn pass_once(app: &AppHandle, state: &AppState) {
     let client = match state.covers.client() {
         Ok(client) => client,
         Err(e) => {
-            eprintln!("Could not start the cover download client: {e}");
+            log::warn!("Could not start the cover download client: {e}");
             return;
         }
     };
@@ -923,14 +923,14 @@ async fn pass_once(app: &AppHandle, state: &AppState) {
             // Cached or no longer used: forget; still failing or given up: keep counting.
             attempts.retain(|url, n| *n >= MAX_ATTEMPTS || outcome.failed.contains(url));
             if outcome.cached > 0 || !outcome.failed.is_empty() {
-                eprintln!(
+                log::info!(
                     "Cover cache: {} cached, {} failed.",
                     outcome.cached,
                     outcome.failed.len()
                 );
             }
         }
-        Err(e) => eprintln!("Cover cache pass failed: {e:#}"),
+        Err(e) => log::warn!("Cover cache pass failed: {e:#}"),
     }
 }
 

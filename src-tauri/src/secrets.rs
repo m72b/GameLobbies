@@ -36,6 +36,22 @@ fn write(state: &AppState, name: &str, service: &str, key: &str) -> Result<()> {
     db::write_secret(&state.db.lock(), name, &sealed)
 }
 
+/// Which credentials are stored, as booleans only (for the diagnostics report).
+pub struct StoredFlags {
+    pub steamgriddb_key: bool,
+    pub igdb_client_id: bool,
+    pub igdb_client_secret: bool,
+}
+
+pub fn stored_flags(conn: &rusqlite::Connection) -> Result<StoredFlags> {
+    let has = |name: &str| -> Result<bool> { Ok(db::read_secret(conn, name)?.is_some()) };
+    Ok(StoredFlags {
+        steamgriddb_key: has(STEAMGRIDDB_API_KEY)?,
+        igdb_client_id: has(IGDB_CLIENT_ID)?,
+        igdb_client_secret: has(IGDB_CLIENT_SECRET)?,
+    })
+}
+
 // ---------------------------------------------------------------------------
 // SteamGridDB
 
