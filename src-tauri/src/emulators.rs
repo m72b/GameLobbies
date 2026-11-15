@@ -131,6 +131,9 @@ pub struct Found {
 #[derive(Debug, Default)]
 pub struct Discovery {
     pub found: Vec<Found>,
+    /// Every folder holding a known emulator executable, also one the user removed (ignored):
+    /// a mixed app folder scan never treats them as games.
+    pub folders: Vec<PathBuf>,
     pub unreadable: Vec<String>,
     /// The entry cap was reached; what was found so far is still valid.
     pub truncated: bool,
@@ -193,6 +196,9 @@ pub fn discover(
             if better {
                 here.insert(known.id, (rank, known, item.path.clone()));
             }
+        }
+        if emulator_folder {
+            out.folders.push(dir.clone());
         }
         out.found.extend(
             here.into_values()

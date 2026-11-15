@@ -15,9 +15,16 @@
 //!   Unicode, file paths only inside the launcher's folder) plus: the only placeholder is
 //!   `{target}`, and only as a whole argument. Launches never use a shell: every template token
 //!   is one argv entry and the target is exactly one entry ([`build_argv`]).
-//! - Target, per launcher ([`TargetKind`]): a file or a folder chosen in a native picker by Rust
-//!   (`launchers_add_game`), or a short identifier typed by the user ([`check_identifier`]).
-//!   Checked again at every launch ([`check_target`]).
+//! - Targets, per launcher: a set of allowed [`TargetKind`]s (at least one). Each game's target
+//!   is a file or a folder chosen in a native picker by Rust (`launchers_add_game`) or found by a
+//!   scan of one of the launcher's games folders (`local::scan_roots`), or a short identifier
+//!   typed by the user ([`check_identifier`]). Checked again at every launch against the
+//!   launcher's allowed kinds ([`check_target_any`]).
+//! - Program (optional): a launcher without one is a label-only "app folder" ([`is_label_only`]).
+//!   Its games are found in its games folders and run directly: they get the scan's ordinary
+//!   local and ROM routes, which carry `launcherId` only as a label. A `launcher:<id>` route of a
+//!   label-only launcher never runs ([`prepare_launch`]). The program can't be added or removed
+//!   while the launcher has games or games folders, so existing routes never change meaning.
 //! - Working folder: the executable's folder, or a folder chosen in a native picker
 //!   ([`crate::picks::PickKind::LauncherFolder`]).
 //! - Icon: one of [`BUILTIN_ICONS`] (stored by name) or an image the user chose, copied into the
@@ -119,6 +126,41 @@ impl TargetKind {
             Self::Identifier => "identifier",
         }
     }
+
+    /// Canonical order of a kind set.
+    const ORDER: [Self; 3] = [Self::File, Self::Folder, Self::Identifier];
+
+    fn noun(self) -> &'static str {
+        match self {
+            Self::File => "a file",
+            Self::Folder => "a folder",
+            Self::Identifier => "an identifier",
+        }
+    }
+}
+
+/// A kind set from its names: known names only, at least one, de-duplicated, in canonical order
+/// (file, folder, identifier).
+pub fn parse_kinds(raw: &[String]) -> Result<Vec<TargetKind>> {
+    let mut parsed = Vec::new();
+    for name in raw {
+        let kind = TargetKind::parse(name).ok_or_else(|| {
+            anyhow!("Choose what the launcher's games use: files, folders or identifiers.")
+        })?;
+        parsed.push(kind);
+    }
+    let kinds: Vec<TargetKind> = TargetKind::ORDER
+        .into_iter()
+        .filter(|k| parsed.contains(k))
+        .collect();
+    if kinds.is_empty() {
+        bail!("Choose at least one thing the launcher's games use: files, folders or identifiers.");
+    }
+    Ok(kinds)
+}
+
+pub fn kind_names(kinds: &[TargetKind]) -> Vec<String> {
+    kinds.iter().map(|k| k.as_str().to_string()).collect()
 }
 
 /// A stored launcher (table `custom_launchers`), as listed to the renderer and kept in backups.
@@ -133,10 +175,15 @@ pub struct CustomLauncher {
     pub icon_value: String,
     /// `#rrggbb`.
     pub color: String,
+    /// Empty for a label-only launcher ([`is_label_only`]).
     pub executable: String,
     pub args_template: String,
-    /// `file`, `folder` or `identifier` ([`TargetKind`]).
+    /// The first of `target_kinds` (kept for older backups and builds).
     pub target_kind: String,
+    /// The allowed [`TargetKind`]s (`file`, `folder`, `identifier`), canonical order, at least
+    /// one. Older backups have only `target_kind`: [`validate`] fills this from it.
+    #[serde(default)]
+    pub target_kinds: Vec<String>,
     /// `None` = the executable's folder.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub working_dir: Option<String>,
@@ -150,10 +197,38 @@ pub struct CustomLauncher {
 }
 
 impl CustomLauncher {
+    /// The primary (first) target kind.
+    #[cfg(test)]
     pub fn kind(&self) -> Result<TargetKind> {
-        TargetKind::parse(&self.target_kind)
-            .ok_or_else(|| anyhow!("The launcher's target kind is invalid."))
+        Ok(self.kinds()?[0])
     }
+
+    /// The allowed target kinds (`target_kinds`, or `target_kind` for launchers stored before
+    /// several kinds existed).
+    pub fn kinds(&self) -> Result<Vec<TargetKind>> {
+        let names = if self.target_kinds.is_empty() {
+            std::slice::from_ref(&self.target_kind)
+        } else {
+            self.target_kinds.as_slice()
+        };
+        parse_kinds(names).map_err(|_| anyhow!("The launcher's target kinds are invalid."))
+    }
+
+    pub fn allows(&self, kind: TargetKind) -> bool {
+        self.kinds().is_ok_and(|k| k.contains(&kind))
+    }
+}
+
+/// A launcher without a program: only a label for the games found in its games folders, which
+/// run directly.
+pub fn is_label_only(l: &CustomLauncher) -> bool {
+    l.executable.is_empty()
+}
+
+/// The launcher a route is labelled with or run by: `launcherId` (a label on a scan's local or
+/// ROM route) or the `launcher:<id>` source.
+pub fn route_launcher(route: &GameRoute) -> Option<&str> {
+    launcher_id_of(route).or(route.launcher_id.as_deref().filter(|id| !id.is_empty()))
 }
 
 /// The launcher id of a launcher route.
@@ -280,17 +355,41 @@ pub fn route_target_ok(target: &str) -> bool {
     target_shape_ok(TargetKind::File, target) || target_shape_ok(TargetKind::Identifier, target)
 }
 
+/// The target right before a launch: the right shape for one of the launcher's kinds, and an
+/// existing file or folder for path kinds. Identifiers and drive paths never look alike
+/// ([`check_identifier`] refuses `\`, `/` and a leading `C:`), so only path kinds can both fit.
+pub fn check_target_any(kinds: &[TargetKind], target: &str) -> Result<()> {
+    let fitting: Vec<TargetKind> = kinds
+        .iter()
+        .copied()
+        .filter(|k| target_shape_ok(*k, target))
+        .collect();
+    if fitting.is_empty() {
+        let nouns: Vec<&str> = kinds.iter().map(|k| k.noun()).collect();
+        bail!(
+            "This game's target doesn't fit the launcher (it expects {}). Add the game again.",
+            nouns.join(" or ")
+        );
+    }
+    let mut first = None;
+    for kind in fitting {
+        match check_target(kind, target) {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                first.get_or_insert(e);
+            }
+        }
+    }
+    Err(first.unwrap_or_else(|| anyhow!("This game's target doesn't fit the launcher.")))
+}
+
 /// The target right before a launch: the right shape for the launcher's kind, and an existing
 /// file or folder for path kinds.
 pub fn check_target(kind: TargetKind, target: &str) -> Result<()> {
     if !target_shape_ok(kind, target) {
         bail!(
             "This game's target doesn't fit the launcher (it expects {}). Add the game again.",
-            match kind {
-                TargetKind::File => "a file",
-                TargetKind::Folder => "a folder",
-                TargetKind::Identifier => "an identifier",
-            }
+            kind.noun()
         );
     }
     let path = Path::new(target);
@@ -355,13 +454,29 @@ pub fn validate(mut l: CustomLauncher) -> Result<CustomLauncher> {
     check_icon(&l.icon_kind, &l.icon_value)?;
     l.color = check_color(&l.color)?;
     l.executable = l.executable.trim().to_string();
-    if l.executable.chars().any(char::is_control) || !executable_path_ok(&l.executable) {
-        bail!(
-            r"The launcher executable must be a full path to an .exe file on a local drive, like C:\Games\Heroic\Heroic.exe."
-        );
+    let kinds = l.kinds()?;
+    // Both fields given (newer backups): they must agree.
+    if !l.target_kinds.is_empty()
+        && TargetKind::parse(&l.target_kind).is_none_or(|k| !kinds.contains(&k))
+    {
+        bail!("The launcher's target kinds are invalid.");
     }
-    check_launcher_template(&l.args_template, &l.executable)?;
-    l.kind()?;
+    l.target_kinds = kind_names(&kinds);
+    l.target_kind = kinds[0].as_str().into();
+    if is_label_only(&l) {
+        // Nothing runs through a label-only launcher: no arguments and no working folder.
+        if !l.args_template.trim().is_empty() || l.working_dir.is_some() {
+            bail!("A launcher without a program can't have arguments or a working folder.");
+        }
+        l.args_template = String::new();
+    } else {
+        if l.executable.chars().any(char::is_control) || !executable_path_ok(&l.executable) {
+            bail!(
+                r"The launcher executable must be a full path to an .exe file on a local drive, like C:\Games\Heroic\Heroic.exe."
+            );
+        }
+        check_launcher_template(&l.args_template, &l.executable)?;
+    }
     if let Some(dir) = &l.working_dir {
         if dir.chars().any(char::is_control) || !drive_path_ok(dir) {
             bail!("The launcher's working folder must be a full path on a local drive.");
@@ -391,12 +506,20 @@ pub struct LauncherInput {
     pub color: String,
     #[serde(default)]
     pub args_template: String,
+    /// One kind (older renderers); `target_kinds` wins when given.
+    #[serde(default)]
     pub target_kind: String,
+    /// The allowed kinds (`file`, `folder`, `identifier`), at least one.
+    #[serde(default)]
+    pub target_kinds: Vec<String>,
     /// `executable` (the executable's folder) or `folder` (a picked folder).
     pub working_dir: String,
     /// Use the executable just chosen with `launchers_browse_executable`.
     #[serde(default)]
     pub use_executable_pick: bool,
+    /// A label-only launcher: no program (its games run directly). Overrides the pick.
+    #[serde(default)]
+    pub no_program: bool,
     /// Use the folder just chosen with `launchers_browse_folder`.
     #[serde(default)]
     pub use_folder_pick: bool,
@@ -409,8 +532,11 @@ pub struct SaveContext<'a> {
     pub executable_pick: Option<String>,
     /// The latest folder pick (`PickKind::LauncherFolder`), if recent.
     pub folder_pick: Option<String>,
-    /// Whether the stored launcher has games (its target kind is then fixed).
+    /// Whether the stored launcher has games or games folders (its program can then neither be
+    /// added nor removed).
     pub has_games: bool,
+    /// The target kinds its existing games use (they can't be taken away).
+    pub used_kinds: Vec<TargetKind>,
     /// Whether an icon file of that name exists in the covers folder.
     pub icon_exists: &'a dyn Fn(&str) -> bool,
 }
@@ -425,13 +551,70 @@ pub struct Accepted {
 
 /// Trust boundary for `launchers_save`. The executable is the latest pick (when asked for and
 /// recent) or the stored one; a new launcher needs a pick. The working folder is the
-/// executable's folder, the latest folder pick, or the stored folder. A new icon image must be a
-/// file [`import_icon`] created. The target kind can't change once the launcher has games.
-/// Everything is then checked by [`validate`] (the template against the resulting executable).
+/// executable's folder, the latest folder pick, or the stored folder. With `noProgram` there is no
+/// executable, arguments or working folder (a label-only launcher). A new icon image must be a
+/// file [`import_icon`] created. Target kinds used by existing games can't be removed, and the
+/// program can't be added or removed while the launcher has games or games folders. Everything is
+/// then checked by [`validate`] (the template against the resulting executable).
 pub fn accept_renderer_launcher(input: LauncherInput, ctx: SaveContext<'_>) -> Result<Accepted> {
     let stored = ctx.stored;
     if input.id.is_some() && stored.is_none() {
         bail!("That launcher no longer exists.");
+    }
+    let kind_input = if input.target_kinds.is_empty() {
+        vec![input.target_kind.clone()]
+    } else {
+        input.target_kinds.clone()
+    };
+    let kinds = parse_kinds(&kind_input)?;
+    if let Some(s) = stored {
+        if ctx.has_games && is_label_only(s) != input.no_program {
+            bail!("This launcher already has games or games folders, so its program can't be added or removed. Create another launcher instead.");
+        }
+        if let Some(missing) = ctx.used_kinds.iter().find(|k| !kinds.contains(k)) {
+            bail!(
+                "Some of this launcher's games use {}, so that can't be turned off. Remove those games first or create another launcher.",
+                match missing {
+                    TargetKind::File => "files",
+                    TargetKind::Folder => "folders",
+                    TargetKind::Identifier => "identifiers",
+                }
+            );
+        }
+    }
+    if input.no_program {
+        if !input.args_template.trim().is_empty() || input.working_dir != "executable" {
+            bail!("A launcher without a program can't have arguments or a working folder.");
+        }
+        check_icon(&input.icon_kind, &input.icon_value)?;
+        let unchanged_icon = stored
+            .is_some_and(|s| s.icon_kind == input.icon_kind && s.icon_value == input.icon_value);
+        if input.icon_kind == "image" && !unchanged_icon && !(ctx.icon_exists)(&input.icon_value) {
+            bail!("The icon image was not found. Choose it again with \"Use an image…\".");
+        }
+        let launcher = validate(CustomLauncher {
+            id: match stored {
+                Some(s) => s.id.clone(),
+                None => uuid::Uuid::new_v4().simple().to_string(),
+            },
+            name: input.name,
+            icon_kind: input.icon_kind,
+            icon_value: input.icon_value,
+            color: input.color,
+            executable: String::new(),
+            args_template: String::new(),
+            target_kind: kinds[0].as_str().into(),
+            target_kinds: kind_names(&kinds),
+            working_dir: None,
+            sort_order: stored.map_or(0, |s| s.sort_order),
+            created_at: stored.map_or_else(now_ms, |s| s.created_at),
+            available: false,
+        })?;
+        return Ok(Accepted {
+            launcher,
+            used_executable_pick: false,
+            used_folder_pick: false,
+        });
     }
     let (executable, used_executable_pick) = if input.use_executable_pick {
         let pick = ctx.executable_pick.ok_or_else(|| {
@@ -439,7 +622,7 @@ pub fn accept_renderer_launcher(input: LauncherInput, ctx: SaveContext<'_>) -> R
         })?;
         (pick, true)
     } else {
-        match stored {
+        match stored.filter(|s| !is_label_only(s)) {
             Some(s) => (s.executable.clone(), false),
             None => {
                 bail!("Choose the launcher's executable with Browse… (it can't be typed in).")
@@ -460,14 +643,6 @@ pub fn accept_renderer_launcher(input: LauncherInput, ctx: SaveContext<'_>) -> R
         },
         _ => bail!("The working folder setting is invalid."),
     };
-    let kind = TargetKind::parse(&input.target_kind).ok_or_else(|| {
-        anyhow!("Choose what the launcher's games use: a file, a folder or an identifier.")
-    })?;
-    if let Some(s) = stored {
-        if ctx.has_games && s.target_kind != kind.as_str() {
-            bail!("This launcher already has games, so what they use (file, folder or identifier) can't change. Create another launcher instead.");
-        }
-    }
     check_icon(&input.icon_kind, &input.icon_value)?;
     let unchanged_icon =
         stored.is_some_and(|s| s.icon_kind == input.icon_kind && s.icon_value == input.icon_value);
@@ -485,7 +660,8 @@ pub fn accept_renderer_launcher(input: LauncherInput, ctx: SaveContext<'_>) -> R
         color: input.color,
         executable,
         args_template: input.args_template,
-        target_kind: kind.as_str().into(),
+        target_kind: kinds[0].as_str().into(),
+        target_kinds: kind_names(&kinds),
         working_dir,
         sort_order: stored.map_or(0, |s| s.sort_order),
         created_at: stored.map_or_else(now_ms, |s| s.created_at),
@@ -499,14 +675,14 @@ pub fn accept_renderer_launcher(input: LauncherInput, ctx: SaveContext<'_>) -> R
 }
 
 /// Whether a renderer save creates a launcher or changes what its launches run (program,
-/// arguments, target kind or working folder). Such a save is confirmed by the user in a native
+/// arguments, target kinds or working folder). Such a save is confirmed by the user in a native
 /// dialog showing [`confirmation_prompt`], so a compromised renderer can't change it alone.
 /// Name, icon and colour changes save without asking.
 pub fn needs_confirmation(stored: Option<&CustomLauncher>, next: &CustomLauncher) -> bool {
     stored.is_none_or(|s| {
         s.executable != next.executable
             || s.args_template != next.args_template
-            || s.target_kind != next.target_kind
+            || s.kinds().ok() != next.kinds().ok()
             || s.working_dir != next.working_dir
     })
 }
@@ -514,17 +690,28 @@ pub fn needs_confirmation(stored: Option<&CustomLauncher>, next: &CustomLauncher
 /// The native confirmation text: the launcher's name, its program, the exact argument list
 /// (one argument per line, `{target}` standing for each game) and the working folder.
 pub fn confirmation_prompt(l: &CustomLauncher) -> Result<String> {
+    if is_label_only(l) {
+        return Ok(format!(
+            "Save the launcher \"{}\"?\n\nIt has no program. Games found in its games folders run directly, like games found in your library folders, and show \"{}\" as where they are played from. Emulators found there are added to your emulator list with their standard settings.\n\nShortcuts with arguments still need your confirmation under Review before they are added.",
+            l.name, l.name
+        ));
+    }
     let argv = build_argv(&l.args_template, TARGET)?;
     let lines: Vec<String> = argv
         .iter()
         .enumerate()
         .map(|(i, arg)| format!("  {}. {arg}", i + 1))
         .collect();
-    let what = match l.kind()? {
-        TargetKind::File => "the game's file",
-        TargetKind::Folder => "the game's folder",
-        TargetKind::Identifier => "the game's identifier",
-    };
+    let nouns: Vec<&str> = l
+        .kinds()?
+        .into_iter()
+        .map(|k| match k {
+            TargetKind::File => "file",
+            TargetKind::Folder => "folder",
+            TargetKind::Identifier => "identifier",
+        })
+        .collect();
+    let what = format!("the game's {}", nouns.join(" or "));
     let folder = match &l.working_dir {
         Some(dir) => dir.clone(),
         None => Path::new(&l.executable)
@@ -533,7 +720,7 @@ pub fn confirmation_prompt(l: &CustomLauncher) -> Result<String> {
             .unwrap_or_default(),
     };
     Ok(format!(
-        "Save the launcher \"{}\"?\n\nProgram:\n  {}\n\nArguments (one per line; {TARGET} is {what}):\n{}\n\nWorking folder:\n  {folder}\n\nGame Lobby runs exactly this whenever you play one of this launcher's games. Save it only if you set it up yourself.",
+        "Save the launcher \"{}\"?\n\nProgram:\n  {}\n\nArguments (one per line; {TARGET} is {what}):\n{}\n\nWorking folder:\n  {folder}\n\nGame Lobby runs exactly this whenever you play one of this launcher's games. If you give the launcher games folders, they are also searched for emulators, which are added to your emulator list with their standard settings. Save it only if you set it up yourself.",
         l.name,
         l.executable,
         lines.join("\n")
@@ -572,6 +759,13 @@ pub fn prepare_launch(l: &CustomLauncher, route: &GameRoute) -> Result<LauncherL
     if launcher_id_of(route) != Some(l.id.as_str()) {
         bail!("This game belongs to another launcher.");
     }
+    if is_label_only(l) {
+        bail!(
+            "{} has no program, so it can't start this game. Add the game from {}'s games folder instead.",
+            l.name,
+            l.name
+        );
+    }
     if !executable_path_ok(&l.executable) {
         bail!(
             "{}'s executable must be a full path to an .exe file.",
@@ -584,7 +778,7 @@ pub fn prepare_launch(l: &CustomLauncher, route: &GameRoute) -> Result<LauncherL
     }
     check_launcher_template(&l.args_template, &l.executable)?;
     let target = route.launch_target.as_str();
-    check_target(l.kind()?, target)?;
+    check_target_any(&l.kinds()?, target)?;
     let argv = build_argv(&l.args_template, target)?;
     let cwd = match &l.working_dir {
         Some(dir) => {
@@ -604,10 +798,30 @@ pub fn prepare_launch(l: &CustomLauncher, route: &GameRoute) -> Result<LauncherL
 // ---------------------------------------------------------------------------
 // Games
 
-/// A new game for a launcher. `target` is a picked path (path kinds) or a typed identifier;
-/// `title` may be empty for path targets (the file or folder name is used then).
+/// A new game for a launcher with its primary target kind (see [`new_game_of_kind`]).
+#[cfg(test)]
 pub fn new_game(l: &CustomLauncher, title: &str, target: &str) -> Result<Game> {
-    let kind = l.kind()?;
+    new_game_of_kind(l, title, target, l.kind()?)
+}
+
+/// A new game for a launcher. `target` is a picked path (path kinds) or a typed identifier;
+/// `title` may be empty for path targets (the file or folder name is used then). `kind` must be
+/// one of the launcher's kinds, and the launcher must have a program.
+pub fn new_game_of_kind(
+    l: &CustomLauncher,
+    title: &str,
+    target: &str,
+    kind: TargetKind,
+) -> Result<Game> {
+    if !l.allows(kind) {
+        bail!("{}'s games don't use {}.", l.name, kind.noun());
+    }
+    if is_label_only(l) {
+        bail!(
+            "{} has no program: add games from its games folders.",
+            l.name
+        );
+    }
     let target = match kind {
         TargetKind::Identifier => check_identifier(target)?,
         _ => {
@@ -681,32 +895,86 @@ impl RemoveMode {
     }
 }
 
-/// The ids of games with a route of launcher `id`.
+/// The ids of games with a route run by or labelled with launcher `id`.
 pub fn games_of(conn: &Connection, id: &str) -> Result<Vec<String>> {
     Ok(db::all_games(conn)?
         .into_iter()
-        .filter(|g| g.routes.iter().any(|r| launcher_id_of(r) == Some(id)))
+        .filter(|g| g.routes.iter().any(|r| route_launcher(r) == Some(id)))
         .map(|g| g.id)
         .collect())
 }
 
-/// Deletes a launcher and handles its games per `mode`. `None` when it doesn't exist;
+/// The targets of launcher `id`'s own (`launcher:<id>`) routes, to tell which target kinds its
+/// games use ([`used_kinds`]).
+pub fn route_targets(conn: &Connection, id: &str) -> Result<Vec<String>> {
+    Ok(db::all_games(conn)?
+        .into_iter()
+        .flat_map(|g| g.routes)
+        .filter(|r| launcher_id_of(r) == Some(id))
+        .map(|r| r.launch_target)
+        .collect())
+}
+
+/// The target kinds a launcher's route targets use. Touches the filesystem (a path is a folder
+/// when it is one now, else a file): call it without the database lock.
+pub fn used_kinds(targets: &[String]) -> Vec<TargetKind> {
+    let mut kinds = Vec::new();
+    for target in targets {
+        let kind = if target_shape_ok(TargetKind::Identifier, target) {
+            TargetKind::Identifier
+        } else if Path::new(target).is_dir() {
+            TargetKind::Folder
+        } else {
+            TargetKind::File
+        };
+        if !kinds.contains(&kind) {
+            kinds.push(kind);
+        }
+    }
+    kinds
+}
+
+/// Deletes a launcher and handles its games per `mode`: its own routes and the routes labelled
+/// with it (found in its games folders). `KeepGames` keeps labelled routes as ordinary local or
+/// ROM routes (label and games-folder install state removed); launcher routes go either way.
+/// Its games folders and their open review items go too. `None` when it doesn't exist;
 /// otherwise the ids of removed games. Icon files are left on disk (like replaced page art).
 pub fn remove(conn: &Connection, id: &str, mode: RemoveMode) -> Result<Option<Vec<String>>> {
     if get(conn, id)?.is_none() {
         return Ok(None);
     }
     let tx = conn.unchecked_transaction()?;
+    let root_keys: Vec<String> = crate::roots::list(&tx)?
+        .into_iter()
+        .filter(|r| r.launcher_id.as_deref() == Some(id))
+        .map(|r| {
+            crate::review::forget_root(&tx, &r.id)?;
+            crate::roots::delete(&tx, &r.id)?;
+            Ok(db::root_state_key(&r.id))
+        })
+        .collect::<Result<_>>()?;
     let mut removed = Vec::new();
     for game in db::all_games(&tx)? {
-        if !game.routes.iter().any(|r| launcher_id_of(r) == Some(id)) {
+        if !game.routes.iter().any(|r| route_launcher(r) == Some(id)) {
             continue;
         }
         let rest: Vec<GameRoute> = game
             .routes
             .iter()
-            .filter(|r| launcher_id_of(r) != Some(id))
+            .filter(|r| {
+                launcher_id_of(r) != Some(id)
+                    && (mode == RemoveMode::KeepGames || route_launcher(r) != Some(id))
+            })
             .cloned()
+            .map(|mut r| {
+                if route_launcher(&r) == Some(id) {
+                    r.launcher_id = None;
+                    if let Some(states) = r.install_states.as_mut() {
+                        states.retain(|k, _| !root_keys.contains(k));
+                    }
+                }
+                r
+            })
             .collect();
         if mode == RemoveMode::RemoveGames && rest.is_empty() {
             db::delete_game_rows(&tx, &game.id)?;
@@ -736,9 +1004,16 @@ pub fn remove(conn: &Connection, id: &str, mode: RemoveMode) -> Result<Option<Ve
 // Storage
 
 const COLUMNS: &str =
-    "id,name,iconKind,iconValue,color,executable,argsTemplate,targetKind,workingDir,sortOrder,createdAt";
+    "id,name,iconKind,iconValue,color,executable,argsTemplate,targetKind,workingDir,sortOrder,createdAt,targetKinds";
 
 fn read_row(row: &Row) -> rusqlite::Result<CustomLauncher> {
+    let target_kind: String = row.get(7)?;
+    // Stored before several kinds existed: the one kind.
+    let target_kinds = row
+        .get::<_, Option<String>>(11)?
+        .and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok())
+        .filter(|k| !k.is_empty())
+        .unwrap_or_else(|| vec![target_kind.clone()]);
     Ok(CustomLauncher {
         id: row.get(0)?,
         name: row.get(1)?,
@@ -747,12 +1022,36 @@ fn read_row(row: &Row) -> rusqlite::Result<CustomLauncher> {
         color: row.get(4)?,
         executable: row.get(5)?,
         args_template: row.get(6)?,
-        target_kind: row.get(7)?,
+        target_kind,
+        target_kinds,
         working_dir: row.get::<_, Option<String>>(8)?.filter(|d| !d.is_empty()),
         sort_order: row.get(9)?,
         created_at: row.get(10)?,
         available: false,
     })
+}
+
+/// Adds `targetKinds` to `custom_launchers` and fills it from `targetKind` (idempotent; no
+/// `user_version` change: older builds keep reading `targetKind`, which stays the first kind).
+pub fn migrate(conn: &Connection) -> Result<()> {
+    let columns: std::collections::HashSet<String> = conn
+        .prepare("SELECT name FROM pragma_table_info('custom_launchers')")?
+        .query_map([], |row| row.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    if !columns.contains("targetKinds") {
+        conn.execute_batch("ALTER TABLE custom_launchers ADD COLUMN targetKinds TEXT;")?;
+    }
+    let pending: Vec<(String, String)> = conn
+        .prepare("SELECT id,targetKind FROM custom_launchers WHERE targetKinds IS NULL OR targetKinds=''")?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    for (id, kind) in pending {
+        conn.execute(
+            "UPDATE custom_launchers SET targetKinds=? WHERE id=?",
+            params![serde_json::to_string(&[kind])?, id],
+        )?;
+    }
+    Ok(())
 }
 
 /// Every launcher in display order. `available` stays false (no filesystem access here):
@@ -781,8 +1080,8 @@ pub fn get(conn: &Connection, id: &str) -> Result<Option<CustomLauncher>> {
 pub fn save(conn: &Connection, l: &CustomLauncher) -> Result<()> {
     conn.execute(
         &format!(
-            "INSERT INTO custom_launchers({COLUMNS}) VALUES(?,?,?,?,?,?,?,?,?,?,?)
-             ON CONFLICT(id) DO UPDATE SET name=excluded.name,iconKind=excluded.iconKind,iconValue=excluded.iconValue,color=excluded.color,executable=excluded.executable,argsTemplate=excluded.argsTemplate,targetKind=excluded.targetKind,workingDir=excluded.workingDir,sortOrder=excluded.sortOrder"
+            "INSERT INTO custom_launchers({COLUMNS}) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+             ON CONFLICT(id) DO UPDATE SET name=excluded.name,iconKind=excluded.iconKind,iconValue=excluded.iconValue,color=excluded.color,executable=excluded.executable,argsTemplate=excluded.argsTemplate,targetKind=excluded.targetKind,workingDir=excluded.workingDir,sortOrder=excluded.sortOrder,targetKinds=excluded.targetKinds"
         ),
         params![
             l.id,
@@ -796,6 +1095,10 @@ pub fn save(conn: &Connection, l: &CustomLauncher) -> Result<()> {
             l.working_dir,
             l.sort_order,
             if l.created_at > 0 { l.created_at } else { now_ms() },
+            serde_json::to_string(&match l.kinds() {
+                Ok(kinds) => kind_names(&kinds),
+                Err(_) => vec![l.target_kind.clone()],
+            })?,
         ],
     )?;
     Ok(())
@@ -824,7 +1127,8 @@ pub fn next_sort_order(conn: &Connection) -> Result<i64> {
 pub fn with_status(list: Vec<CustomLauncher>) -> Vec<CustomLauncher> {
     list.into_iter()
         .map(|mut l| {
-            l.available = crate::emulators::executable_ok(&l.executable);
+            // A label-only launcher has nothing to find.
+            l.available = is_label_only(&l) || crate::emulators::executable_ok(&l.executable);
             l
         })
         .collect()
@@ -846,6 +1150,7 @@ mod tests {
             executable: exe.into(),
             args_template: "--start {target}".into(),
             target_kind: kind.into(),
+            target_kinds: vec![],
             working_dir: None,
             sort_order: 0,
             created_at: 1,
@@ -862,8 +1167,10 @@ mod tests {
             color: "#4f8cff".into(),
             args_template: "--start {target}".into(),
             target_kind: kind.into(),
+            target_kinds: vec![],
             working_dir: "executable".into(),
             use_executable_pick: true,
+            no_program: false,
             use_folder_pick: false,
         }
     }
@@ -878,6 +1185,7 @@ mod tests {
             executable_pick: exe.map(Into::into),
             folder_pick: None,
             has_games: false,
+            used_kinds: vec![],
             icon_exists: icons,
         }
     }
@@ -975,15 +1283,31 @@ mod tests {
             );
         }
 
-        // The target kind is fixed once the launcher has games.
+        // A target kind its games use can't be taken away; others can be added and removed.
         let stored = validate(launcher(EXE, "identifier")).unwrap();
         let mut change = input("file");
         change.id = Some(stored.id.clone());
         change.use_executable_pick = false;
         let mut c = ctx(Some(&stored), None, &none);
         c.has_games = true;
+        c.used_kinds = vec![TargetKind::Identifier];
         assert!(accept_renderer_launcher(change.clone(), c).is_err());
+        let mut c = ctx(Some(&stored), None, &none);
+        c.has_games = true;
+        c.used_kinds = vec![TargetKind::Identifier];
+        let mut both = change.clone();
+        both.target_kinds = vec!["identifier".into(), "file".into(), "file".into()];
+        let saved = accept_renderer_launcher(both, c).unwrap().launcher;
+        assert_eq!(
+            saved.target_kinds,
+            ["file", "identifier"],
+            "canonical order, no repeats"
+        );
+        assert_eq!(saved.target_kind, "file");
         assert!(accept_renderer_launcher(change, ctx(Some(&stored), None, &none)).is_ok());
+        let mut none_kind = input("file");
+        none_kind.target_kind = String::new();
+        assert!(accept_renderer_launcher(none_kind, ctx(None, Some(EXE), &none)).is_err());
         let mut bad_kind = input("url");
         bad_kind.use_executable_pick = true;
         assert!(accept_renderer_launcher(bad_kind, ctx(None, Some(EXE), &none)).is_err());
@@ -1139,9 +1463,13 @@ mod tests {
         let changes: [fn(&mut CustomLauncher); 4] = [
             |l: &mut CustomLauncher| l.executable = r"D:\Other\x.exe".into(),
             |l: &mut CustomLauncher| l.args_template = "--run {target}".into(),
-            |l: &mut CustomLauncher| l.target_kind = "file".into(),
+            |l: &mut CustomLauncher| l.target_kinds = vec!["file".into()],
             |l: &mut CustomLauncher| l.working_dir = Some(r"D:\Mods".into()),
         ];
+        // Allowing another kind of target changes what the launcher can be given too.
+        let mut more = stored.clone();
+        more.target_kinds = vec!["file".into(), "identifier".into()];
+        assert!(needs_confirmation(Some(&stored), &more));
         for change in changes {
             let mut next = stored.clone();
             change(&mut next);
@@ -1351,6 +1679,191 @@ mod tests {
     }
 
     #[test]
+    fn several_target_kinds_are_validated_per_kind() {
+        let dir = TempDir::new("launcher-kinds");
+        let file = dir.file("Games/a.rom");
+        let folder = dir.dir("Games/B");
+        let mut l = launcher(EXE, "file");
+        l.target_kinds = vec!["identifier".into(), "file".into()];
+        let l = validate(l).unwrap();
+        assert_eq!(l.target_kinds, ["file", "identifier"]);
+        assert_eq!(l.target_kind, "file");
+        let kinds = l.kinds().unwrap();
+        assert!(check_target_any(&kinds, &file.to_string_lossy()).is_ok());
+        assert!(check_target_any(&kinds, "Hollow Knight").is_ok());
+        // A folder is not a file, and folders aren't allowed.
+        assert!(check_target_any(&kinds, &folder.to_string_lossy()).is_err());
+        assert!(check_target_any(&kinds, "-x").is_err());
+        let both = [TargetKind::File, TargetKind::Folder];
+        assert!(check_target_any(&both, &folder.to_string_lossy()).is_ok());
+        assert!(check_target_any(&both, "Hollow Knight").is_err());
+        // Each game uses one allowed kind.
+        assert!(new_game_of_kind(&l, "", &file.to_string_lossy(), TargetKind::File).is_ok());
+        assert!(new_game_of_kind(&l, "HK", "hk", TargetKind::Identifier).is_ok());
+        assert!(new_game_of_kind(&l, "", &folder.to_string_lossy(), TargetKind::Folder).is_err());
+        assert!(new_game_of_kind(&l, "HK", r"C:\x", TargetKind::Identifier).is_err());
+        // Unknown, empty or contradictory sets are refused.
+        for kinds in [
+            vec![],
+            vec!["url".to_string()],
+            vec!["file".into(), "url".into()],
+        ] {
+            let mut bad = launcher(EXE, "file");
+            bad.target_kinds = kinds.clone();
+            assert!(validate(bad).is_err() || kinds.is_empty(), "{kinds:?}");
+        }
+        let mut bad = launcher(EXE, "folder");
+        bad.target_kinds = vec!["file".into()];
+        assert!(validate(bad).is_err(), "targetKind outside targetKinds");
+        assert!(parse_kinds(&[]).is_err());
+        // The prompt names every kind.
+        let text = confirmation_prompt(&l).unwrap();
+        assert!(
+            text.contains("{target} is the game's file or identifier"),
+            "{text}"
+        );
+        assert!(text.contains("searched for emulators"), "{text}");
+    }
+
+    #[test]
+    fn target_kind_sets_migrate_and_old_backups_still_import() {
+        let db = Db::memory().unwrap();
+        let conn = db.lock();
+        // A launcher stored before several kinds existed: only `targetKind`.
+        conn.execute(
+            "INSERT INTO custom_launchers(id,name,iconKind,iconValue,color,executable,argsTemplate,targetKind,sortOrder,createdAt) VALUES('old','Old','builtin','rocket','#4f8cff',?,'{target}','folder',0,1)",
+            [EXE],
+        )
+        .unwrap();
+        let old = get(&conn, "old").unwrap().unwrap();
+        assert_eq!(old.target_kinds, ["folder"], "read as its one kind");
+        migrate(&conn).unwrap();
+        migrate(&conn).unwrap();
+        let stored: String = conn
+            .query_row(
+                "SELECT targetKinds FROM custom_launchers WHERE id='old'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, r#"["folder"]"#);
+        // Saving keeps both columns in step (older builds read `targetKind`).
+        let mut next = old.clone();
+        next.target_kinds = vec!["identifier".into(), "folder".into()];
+        save(&conn, &validate(next).unwrap()).unwrap();
+        let (kind, kinds): (String, String) = conn
+            .query_row(
+                "SELECT targetKind,targetKinds FROM custom_launchers WHERE id='old'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            (kind.as_str(), kinds.as_str()),
+            ("folder", r#"["folder","identifier"]"#)
+        );
+
+        // An old backup entry (only `targetKind`) imports with that kind; a new one round-trips.
+        let old_entry = serde_json::json!({
+            "id": "a", "name": "A", "iconKind": "builtin", "iconValue": "rocket", "color": "#4f8cff",
+            "executable": EXE, "argsTemplate": "{target}", "targetKind": "identifier"
+        });
+        let imported = crate::validation::backup_launcher(&old_entry).unwrap();
+        assert_eq!(imported.target_kinds, ["identifier"]);
+        let json = serde_json::to_value(get(&conn, "old").unwrap().unwrap()).unwrap();
+        assert_eq!(
+            json["targetKinds"],
+            serde_json::json!(["folder", "identifier"])
+        );
+        let back = crate::validation::backup_launcher(&json).unwrap();
+        assert_eq!(back.target_kinds, ["folder", "identifier"]);
+        // A label-only launcher backs up and imports too, with no program.
+        let mut label = old_entry.clone();
+        label["executable"] = "".into();
+        label["argsTemplate"] = "".into();
+        assert!(is_label_only(
+            &crate::validation::backup_launcher(&label).unwrap()
+        ));
+        label["argsTemplate"] = "--run {target}".into();
+        assert!(crate::validation::backup_launcher(&label).is_err());
+    }
+
+    #[test]
+    fn a_launcher_without_a_program_is_only_a_label() {
+        let none = |_: &str| false;
+        let mut input = input("file");
+        input.no_program = true;
+        input.args_template = String::new();
+        input.use_executable_pick = false;
+        // A pick is never used for a label-only launcher, even when one is waiting.
+        let accepted =
+            accept_renderer_launcher(input.clone(), ctx(None, Some(EXE), &none)).unwrap();
+        assert!(!accepted.used_executable_pick);
+        let l = accepted.launcher;
+        assert!(is_label_only(&l));
+        assert_eq!(
+            (
+                l.executable.as_str(),
+                l.args_template.as_str(),
+                l.working_dir.as_ref()
+            ),
+            ("", "", None)
+        );
+        assert!(needs_confirmation(None, &l));
+        let text = confirmation_prompt(&l).unwrap();
+        assert!(
+            text.contains("no program") && text.contains("run directly"),
+            "{text}"
+        );
+        // No arguments or working folder without a program.
+        let mut args = input.clone();
+        args.args_template = "--x {target}".into();
+        assert!(accept_renderer_launcher(args, ctx(None, None, &none)).is_err());
+        let mut dir = input.clone();
+        dir.working_dir = "folder".into();
+        assert!(accept_renderer_launcher(dir, ctx(None, None, &none)).is_err());
+        let mut raw = l.clone();
+        raw.args_template = "{target}".into();
+        assert!(validate(raw).is_err());
+        let mut raw = l.clone();
+        raw.working_dir = Some(r"D:\x".into());
+        assert!(validate(raw).is_err());
+        // A launcher route of a label-only launcher never runs, and it adds no games by hand.
+        let route = GameRoute {
+            source_id: source_id(&l.id),
+            store: "Custom".into(),
+            launch_target: "hk".into(),
+            ..Default::default()
+        };
+        assert!(prepare_launch(&l, &route)
+            .unwrap_err()
+            .to_string()
+            .contains("no program"));
+        assert!(new_game_of_kind(&l, "HK", "hk", TargetKind::File).is_err());
+        assert!(with_status(vec![l.clone()])[0].available, "nothing to find");
+
+        // The program can't be added or removed while the launcher has games or folders.
+        let stored = validate(launcher(EXE, "file")).unwrap();
+        let mut drop_program = input.clone();
+        drop_program.id = Some(stored.id.clone());
+        let mut c = ctx(Some(&stored), None, &none);
+        c.has_games = true;
+        assert!(accept_renderer_launcher(drop_program.clone(), c).is_err());
+        assert!(accept_renderer_launcher(drop_program, ctx(Some(&stored), None, &none)).is_ok());
+        let mut add_program = super::tests::input("file");
+        add_program.id = Some(l.id.clone());
+        let mut c = ctx(Some(&l), Some(EXE), &none);
+        c.has_games = true;
+        assert!(accept_renderer_launcher(add_program.clone(), c).is_err());
+        // Without a pick, a label-only launcher has no stored program to keep.
+        add_program.use_executable_pick = false;
+        assert!(accept_renderer_launcher(add_program.clone(), ctx(Some(&l), None, &none)).is_err());
+        add_program.use_executable_pick = true;
+        let added = accept_renderer_launcher(add_program, ctx(Some(&l), Some(EXE), &none)).unwrap();
+        assert_eq!(added.launcher.executable, EXE);
+    }
+
+    #[test]
     fn launch_dispatch_never_uses_a_shell() {
         // The launcher branch of `launch_game` starts the program directly and returns before
         // any link, shortcut or shell path is reached.
@@ -1361,6 +1874,12 @@ mod tests {
         let branch = &source[start..];
         let branch = &branch[..branch.find("if is_rom_route(route)").expect("next branch")];
         assert!(branch.contains("launchers::prepare_launch"));
+        // A shortcut given to the launcher is checked again before every launch, and before
+        // `prepare_launch` builds the argv.
+        let check = branch
+            .find("check_launcher_shortcut(&target, &confirmations)")
+            .expect("shortcut check");
+        assert!(check < branch.find("launchers::prepare_launch").unwrap());
         assert!(branch.contains("spawn_detached_in(&launch.program, &launch.argv"));
         assert!(branch.contains("return track_started_process"));
         for forbidden in [

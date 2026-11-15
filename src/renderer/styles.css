@@ -363,4 +363,5 @@
 .emulator-editor .launcher-hex{display:inline-block;width:96px;margin-top:0;font-family:ui-monospace,Consolas,monospace}
 .launcher-preview{margin:-2px 0 12px;padding:9px 10px;border-radius:7px;background:var(--surface);font-size:11px;display:flex;flex-direction:column;gap:5px}
 .launcher-preview .detail-label{margin:0}
-.launcher-preview code{font-family:ui-monospace,Consolas,monospace;color:var(--text);word-break:break-all}
+.launcher-preview code{font-family:ui-monospace,Consolas,monospace;color:var(--text);word-break:break-all}.launcher-folders{margin:4px 0 10px 34px;padding:10px 12px;border:1px solid #ffffff0c;border-radius:9px;background:#ffffff04}
+.launcher-folders .card-heading{margin-bottom:4px}.launcher-folders .card-heading b{font-size:12px}

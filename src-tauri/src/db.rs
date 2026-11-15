@@ -158,6 +158,16 @@ fn migrate(db: &Connection, file: Option<&Path>) -> Result<()> {
              COMMIT;"
         ))?;
     }
+    // Launcher games folders and launcher target-kind sets (nullable columns, idempotent; no
+    // `user_version` change: older builds ignore them).
+    let root_columns: HashSet<String> = db
+        .prepare("SELECT name FROM pragma_table_info('library_roots')")?
+        .query_map([], |row| row.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    if !root_columns.contains("launcherId") {
+        db.execute_batch("ALTER TABLE library_roots ADD COLUMN launcherId TEXT;")?;
+    }
+    crate::launchers::migrate(db)?;
     // Session history columns and tables. Sessions still open belong to a previous run that
     // ended without closing them (crash, power loss): they keep their last saved length, are
     // closed at that point and marked interrupted.
@@ -558,6 +568,10 @@ pub fn merge_route(existing: &GameRoute, incoming: &GameRoute) -> GameRoute {
         .clone()
         .or_else(|| incoming.emulator_id.clone());
     combined.system = incoming.system.clone().or_else(|| existing.system.clone());
+    combined.launcher_id = incoming
+        .launcher_id
+        .clone()
+        .or_else(|| existing.launcher_id.clone());
     combined
 }
 

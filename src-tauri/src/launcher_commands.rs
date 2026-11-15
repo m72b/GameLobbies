@@ -7,7 +7,7 @@ use crate::local_commands::confirm_natively;
 use crate::picks::PickKind;
 use crate::state::AppState;
 use crate::types::Game;
-use crate::{db, emulators};
+use crate::{db, emulators, local, roots};
 use serde::Serialize;
 use serde_json::Value;
 use std::path::PathBuf;
@@ -37,6 +37,18 @@ fn notify_launchers(app: &AppHandle) {
 fn notify_library(app: &AppHandle, state: &AppState) {
     state.tracker.library_changed();
     let _ = app.emit("library:changed", ());
+}
+
+/// Whether a launcher has games or games folders, and its own routes' targets (sorted), for the
+/// save checks that depend on them.
+fn launcher_usage(conn: &rusqlite::Connection, id: &str) -> anyhow::Result<(bool, Vec<String>)> {
+    let games = !launchers::games_of(conn, id)?.is_empty()
+        || roots::list(conn)?
+            .iter()
+            .any(|r| r.launcher_id.as_deref() == Some(id));
+    let mut targets = launchers::route_targets(conn, id)?;
+    targets.sort();
+    Ok((games, targets))
 }
 
 #[tauri::command]
@@ -69,15 +81,19 @@ pub async fn launchers_save(
     let requested_icon = input.icon_value.clone();
     let icon_found = launchers::icon_exists(&state.covers_dir(), &requested_icon);
     let icon_exists = |name: &str| icon_found && name == requested_icon;
+    // Which target kinds the launcher's games use needs the filesystem (is a path a folder?):
+    // read the targets, release the lock, then classify them.
+    let usage = match &id {
+        Some(id) => launcher_usage(&state.db.lock(), id).map_err(err)?,
+        None => (false, Vec::new()),
+    };
+    let (has_games, targets) = usage.clone();
+    let used_kinds = launchers::used_kinds(&targets);
     let (stored, accepted) = {
         let conn = state.db.lock();
         let stored = match &id {
             Some(id) => launchers::get(&conn, id).map_err(err)?,
             None => None,
-        };
-        let has_games = match &stored {
-            Some(s) => !launchers::games_of(&conn, &s.id).map_err(err)?.is_empty(),
-            None => false,
         };
         let accepted = launchers::accept_renderer_launcher(
             input,
@@ -86,6 +102,7 @@ pub async fn launchers_save(
                 executable_pick: state.picks.latest(PickKind::LauncherExecutable),
                 folder_pick: state.picks.latest(PickKind::LauncherFolder),
                 has_games,
+                used_kinds,
                 icon_exists: &icon_exists,
             },
         )
@@ -108,6 +125,15 @@ pub async fn launchers_save(
         };
         if now != stored {
             return Err("The launcher changed in the meantime. Open it again and save.".into());
+        }
+        // Its games or folders may have changed too (a scan, Add game): the checks above relied
+        // on them.
+        if let Some(id) = &id {
+            if launcher_usage(&conn, id).map_err(err)? != usage {
+                return Err(
+                    "The launcher's games changed in the meantime. Open it again and save.".into(),
+                );
+            }
         }
         if stored.is_none() {
             if launchers::list(&conn).map_err(err)?.len() >= launchers::MAX_LAUNCHERS {
@@ -136,8 +162,10 @@ pub async fn launchers_save(
     list(&state)
 }
 
-/// Deletes a launcher. `mode` `keep`: its games stay (Custom) without the launcher's route;
-/// `remove`: games that only had that route are removed too.
+/// Deletes a launcher and its games folders. `mode` `keep`: its games stay without the
+/// launcher's routes (games found in its folders keep running directly, without the label);
+/// `remove`: its routes and the routes found in its folders go, and games left without routes
+/// are removed too.
 #[tauri::command]
 pub async fn launchers_remove(
     app: AppHandle,
@@ -148,7 +176,9 @@ pub async fn launchers_remove(
     let id = id_arg(&id)?;
     let mode = RemoveMode::parse(&mode).ok_or("Choose what happens to the launcher's games.")?;
     {
-        // Session state before the database, as in `roots_remove`.
+        // No folder scan may run meanwhile (its games folders go too); session state before the
+        // database, as in `roots_remove`.
+        let _scan = state.local_scan_lock.lock().await;
         let mut sessions = state.tracker.sessions();
         let removed = launchers::remove(&state.db.lock(), &id, mode)
             .map_err(err)?
@@ -160,7 +190,79 @@ pub async fn launchers_remove(
     crate::covercache::clean_up(&state);
     notify_launchers(&app);
     notify_library(&app, &state);
+    let _ = app.emit("review:changed", ());
     list(&state)
+}
+
+/// Native folder picker for one of a launcher's games folders; the chosen path (for display) or
+/// `null`. `launchers_add_folder` accepts it for a while (see `picks`): the renderer can't name a
+/// folder by itself, because a scan turns the programs in it into launchable games.
+#[tauri::command]
+pub async fn launchers_browse_games_folder(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    launcher_id: String,
+) -> CmdResult<Option<String>> {
+    let launcher_id = id_arg(&launcher_id)?;
+    let launcher = launchers::get(&state.db.lock(), &launcher_id)
+        .map_err(err)?
+        .ok_or("That launcher no longer exists.")?;
+    // The dialog names the launcher; the pick is only accepted for it (`launchers_add_folder`).
+    let title = format!("Games folder for {}", launcher.name);
+    let chosen = pick_folder_titled(&window, &title)
+        .await
+        .map(|p| p.to_string_lossy().into_owned());
+    if let Some(path) = &chosen {
+        state
+            .picks
+            .remember_for(PickKind::LauncherGamesFolder, path, &launcher_id);
+    }
+    Ok(chosen)
+}
+
+/// Adds the folder just chosen with `launchers_browse_games_folder` as a games folder of
+/// launcher `launcherId` (a `games` library root with the same checks as `roots_add`); returns
+/// every library root. The renderer starts the scan with `roots_rescan`.
+#[tauri::command]
+pub async fn launchers_add_folder(
+    state: State<'_, AppState>,
+    launcher_id: String,
+    path: String,
+) -> CmdResult<Vec<roots::LibraryRoot>> {
+    let launcher_id = id_arg(&launcher_id)?;
+    let picked = state
+        .picks
+        .find_for(PickKind::LauncherGamesFolder, &path, &launcher_id)
+        .ok_or("Choose the folder with this launcher's Add folder… (it can't be typed in).")?;
+    {
+        let launcher = launchers::get(&state.db.lock(), &launcher_id)
+            .map_err(err)?
+            .ok_or("That launcher no longer exists.")?;
+        if !launchers::is_label_only(&launcher)
+            && !launcher.allows(TargetKind::File)
+            && !launcher.allows(TargetKind::Folder)
+        {
+            return Err(format!(
+                "{}'s games use identifiers, so a folder can't be scanned for them. Let it use files or folders too.",
+                launcher.name
+            ));
+        }
+    }
+    let guard = roots::RootGuard::from_environment(&state.data_dir);
+    // Every filesystem check first, without the database lock.
+    let (display, key) = roots::prepare_launcher_folder(&picked, &guard).map_err(err)?;
+    roots::insert_for(
+        &state.db.lock(),
+        "games",
+        &display,
+        &key,
+        Some(&launcher_id),
+    )
+    .map_err(err)?;
+    state.picks.forget(PickKind::LauncherGamesFolder, &picked);
+    state.tracker.library_changed();
+    let listed = roots::list(&state.db.lock()).map_err(err)?;
+    Ok(roots::with_online(listed))
 }
 
 /// Native file picker for a launcher's `.exe`; the chosen path (for display) or `null`.
@@ -188,6 +290,19 @@ async fn pick_folder(window: &WebviewWindow) -> Option<PathBuf> {
         .dialog()
         .file()
         .set_parent(window)
+        .pick_folder(move |path| {
+            let _ = tx.send(path);
+        });
+    rx.await.ok().flatten().and_then(|p| p.into_path().ok())
+}
+
+async fn pick_folder_titled(window: &WebviewWindow, title: &str) -> Option<PathBuf> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    window
+        .dialog()
+        .file()
+        .set_parent(window)
+        .set_title(title)
         .pick_folder(move |path| {
             let _ = tx.send(path);
         });
@@ -251,9 +366,12 @@ pub struct AddedLauncherGame {
     games: Vec<Game>,
 }
 
-/// Adds a game to a launcher. File and folder launchers: a native picker opens here (cancel =
-/// `null`); identifier launchers: `identifier` is checked (`launchers::check_identifier`).
-/// An empty title uses the file or folder name. A game with the same target is reused.
+/// Adds a game to a launcher. `kind` (`file` | `folder` | `identifier`) says what this game uses;
+/// it may be left out when the launcher allows only one. File and folder targets: a native picker
+/// opens here (cancel = `null`); identifiers: `identifier` is checked
+/// (`launchers::check_identifier`). An empty title uses the file or folder name. A game with the
+/// same target is reused. A launcher without a program adds a game file (.exe, .lnk, .url or a
+/// ROM) chosen here, exactly like "Add local game", labelled with the launcher.
 #[tauri::command]
 pub async fn launchers_add_game(
     app: AppHandle,
@@ -262,6 +380,7 @@ pub async fn launchers_add_game(
     launcher_id: String,
     title: String,
     identifier: Option<String>,
+    kind: Option<String>,
 ) -> CmdResult<Option<AddedLauncherGame>> {
     let launcher_id = id_arg(&launcher_id)?;
     if title.chars().count() > 300 {
@@ -270,7 +389,22 @@ pub async fn launchers_add_game(
     let launcher = launchers::get(&state.db.lock(), &launcher_id)
         .map_err(err)?
         .ok_or("That launcher no longer exists.")?;
-    let kind = launcher.kind().map_err(err)?;
+    if launchers::is_label_only(&launcher) {
+        if identifier.is_some() {
+            return Err("This launcher's games are files you choose.".into());
+        }
+        return add_label_only_game(&app, &window, &state, &launcher, &title).await;
+    }
+    let allowed = launcher.kinds().map_err(err)?;
+    let kind = match kind.as_deref() {
+        Some(raw) => TargetKind::parse(raw)
+            .filter(|k| allowed.contains(k))
+            .ok_or_else(|| format!("{}'s games don't use that.", launcher.name))?,
+        None if allowed.len() == 1 => allowed[0],
+        None => {
+            return Err("Choose what this game uses: a file, a folder or an identifier.".into())
+        }
+    };
     let target = match kind {
         TargetKind::Identifier => identifier.ok_or("Enter the game's identifier.")?,
         TargetKind::File | TargetKind::Folder => {
@@ -295,10 +429,37 @@ pub async fn launchers_add_game(
                     "Choose a file or folder on a local drive (not a network folder).".into(),
                 );
             }
+            if kind == TargetKind::File {
+                // A shortcut with arguments waits for confirmation, as everywhere else.
+                let confirmed = db::shortcut_confirmations(&state.db.lock()).map_err(err)?;
+                let picked = path.clone();
+                let pending = crate::platform::on_thread(move || {
+                    local::launcher_shortcut_pending(&picked, &confirmed)
+                })
+                .await
+                .map_err(err)?
+                .map_err(err)?;
+                if let Some(mut pending) = pending {
+                    if !title.trim().is_empty() {
+                        pending.title = title.trim().to_string();
+                    }
+                    local::request_shortcut_confirmation_for(
+                        &state.db.lock(),
+                        &pending,
+                        Some(&launcher.id),
+                    )
+                    .map_err(err)?;
+                    let _ = app.emit("review:changed", ());
+                    return Err(format!(
+                        "This shortcut runs {} with the arguments \"{}\". Check it under Review and confirm it to add the game to {}.",
+                        pending.target, pending.arguments, launcher.name
+                    ));
+                }
+            }
             text
         }
     };
-    let game = launchers::new_game(&launcher, &title, &target).map_err(err)?;
+    let game = launchers::new_game_of_kind(&launcher, &title, &target, kind).map_err(err)?;
     let identity = db::route_identity(&game.routes[0]);
     let (game_id, games) = {
         let mut conn = state.db.lock();
@@ -314,5 +475,67 @@ pub async fn launchers_add_game(
     notify_library(&app, &state);
     // Covers come from SteamGridDB by title, like other custom games (when a key is set).
     crate::steamgriddb::spawn_auto_fetch(&app);
+    Ok(Some(AddedLauncherGame { game_id, games }))
+}
+
+/// `launchers_add_game` for a launcher without a program: a game file chosen in a native picker,
+/// added like `library_add_local_game` (same checks; shortcuts with arguments wait for
+/// confirmation under Review), with the launcher's label on its route.
+async fn add_label_only_game(
+    app: &AppHandle,
+    window: &WebviewWindow,
+    state: &AppState,
+    launcher: &CustomLauncher,
+    title: &str,
+) -> CmdResult<Option<AddedLauncherGame>> {
+    let extensions = local::pickable_extensions();
+    let refs: Vec<&str> = extensions.iter().map(String::as_str).collect();
+    let Some(path) = crate::commands::pick_file(window, "Games and ROMs", &refs).await else {
+        return Ok(None);
+    };
+    let confirmed = db::shortcut_confirmations(&state.db.lock()).map_err(err)?;
+    let picked = path.clone();
+    let file = crate::platform::on_thread(move || local::game_for_file(&picked, &confirmed))
+        .await
+        .map_err(err)?
+        .map_err(err)?;
+    let mut game = match file {
+        local::LocalFile::Game(game) => game,
+        local::LocalFile::NeedsConfirmation(pending) => {
+            local::request_shortcut_confirmation_for(
+                &state.db.lock(),
+                &pending,
+                Some(&launcher.id),
+            )
+            .map_err(err)?;
+            let _ = app.emit("review:changed", ());
+            return Err(format!(
+                "This shortcut runs {} with the arguments \"{}\". Check it under Review and confirm it to add the game.",
+                pending.target, pending.arguments
+            ));
+        }
+    };
+    let title = title.trim();
+    if title.chars().any(char::is_control) {
+        return Err("The title can't contain control characters.".into());
+    }
+    if !title.is_empty() {
+        game.title = title.to_string();
+    }
+    game.routes[0].launcher_id = Some(launcher.id.clone());
+    let identity = db::route_identity(&game.routes[0]);
+    let (game_id, games) = {
+        let mut conn = state.db.lock();
+        db::upsert_imported_games(&mut conn, std::slice::from_ref(&game)).map_err(err)?;
+        let games = db::all_games(&conn).map_err(err)?;
+        let id = games
+            .iter()
+            .find(|g| g.routes.iter().any(|r| db::route_identity(r) == identity))
+            .map(|g| g.id.clone())
+            .unwrap_or(game.id);
+        (id, games)
+    };
+    notify_library(app, state);
+    crate::steamgriddb::spawn_auto_fetch(app);
     Ok(Some(AddedLauncherGame { game_id, games }))
 }

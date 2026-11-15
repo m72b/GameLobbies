@@ -78,7 +78,9 @@ const api: LobbyAPI = {
     browseExecutable: () => call('launchers_browse_executable'),
     browseFolder: () => call('launchers_browse_folder'),
     chooseIcon: () => call('launchers_choose_icon'),
-    addGame: (launcherId, title, identifier) => call('launchers_add_game', { launcherId, title, identifier }),
+    addGame: (launcherId, title, identifier, kind) => call('launchers_add_game', { launcherId, title, identifier, kind: kind ?? null }),
+    browseGamesFolder: launcherId => call('launchers_browse_games_folder', { launcherId }),
+    addFolder: (launcherId, path) => call('launchers_add_folder', { launcherId, path }),
     onChanged: callback => subscribe('launchers:changed', () => callback())
   },
   roots: {
@@ -86,7 +88,7 @@ const api: LobbyAPI = {
     add: (kind, path) => call('roots_add', { kind, path }),
     browse: kind => call('roots_browse', { kind }),
     setEnabled: (id, enabled) => call('roots_set_enabled', { id, enabled }),
-    remove: id => call('roots_remove', { id }),
+    remove: (id, mode) => call('roots_remove', { id, mode: mode ?? null }),
     rescan: (id, options) => call('roots_rescan', { id: id ?? null, full: options?.full ?? false }),
     onProgress: callback => subscribe<LocalScanProgress>('library-scan:progress', callback),
     onFinished: callback => subscribe<LocalScanSummary>('library-scan:finished', callback)

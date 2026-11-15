@@ -1,7 +1,7 @@
 // Run with `npm run test:web` (Node strips the TypeScript types of launchers.ts).
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { LAUNCHER_ICONS, displayStore, filterLauncherId, formatArgv, gameLauncher, gameMatchesFilter, identifierProblem, isHexColor, launcherFilter, launcherIdOf, previewArgv, tokenizeTemplate } from './launchers.ts'
+import { LAUNCHER_ICONS, canScanFolders, displayStore, filterLauncherId, formatArgv, gameLauncher, gameMatchesFilter, identifierProblem, isHexColor, isLabelOnly, launcherFilter, launcherIdOf, launcherKinds, launcherOfRoute, launcherRoots, libraryRoots, previewArgv, routeLauncherId, scanSummaryLines, toggleKind, tokenizeTemplate } from './launchers.ts'
 
 const heroic = { id: 'abc', name: 'Heroic', iconKind: 'builtin', iconValue: 'rocket', color: '#4f8cff' }
 const route = (sourceId, extra = {}) => ({ sourceId, store: 'Custom', launchTarget: 'x', ...extra })
@@ -61,6 +61,64 @@ test('the preview keeps the target as one argument', () => {
   assert.equal(previewArgv('"{target}', 'x'), null)
   assert.deepEqual(tokenizeTemplate(`a 'b c' "" d`), ['a', 'b c', '', 'd'])
   assert.equal(formatArgv(['--start', 'My Game', '']), '--start "My Game" ""')
+})
+
+test('labelled routes belong to their launcher, but only launcher routes run through it', () => {
+  const labelled = route('local', { launcherId: 'abc' })
+  assert.equal(routeLauncherId(labelled), 'abc')
+  assert.equal(launcherIdOf(labelled), undefined, 'a label never makes a launcher route')
+  assert.equal(routeLauncherId(route('launcher:abc', { launcherId: 'other' })), 'abc', 'the source wins')
+  assert.equal(routeLauncherId(route('rom', { launcherId: '' })), undefined)
+  assert.equal(launcherOfRoute(labelled, [heroic]), heroic)
+  assert.equal(launcherOfRoute(labelled, []), undefined)
+  const game = { store: 'Emulator', routes: [route('rom', { launcherId: 'abc' })] }
+  assert.equal(gameMatchesFilter(game, launcherFilter('abc')), true)
+  assert.equal(gameMatchesFilter(game, launcherFilter('other')), false)
+})
+
+test('target kinds: older launchers, canonical order and at least one', () => {
+  assert.deepEqual(launcherKinds({ targetKind: 'folder' }), ['folder'])
+  assert.deepEqual(launcherKinds({ targetKind: 'file', targetKinds: ['identifier', 'file'] }), ['file', 'identifier'])
+  assert.deepEqual(toggleKind(['identifier'], 'file'), ['file', 'identifier'])
+  assert.deepEqual(toggleKind(['file', 'identifier'], 'file'), ['identifier'])
+  assert.deepEqual(toggleKind(['file'], 'file'), ['file'], 'the last kind stays')
+  assert.deepEqual(toggleKind(['file', 'folder'], 'folder', ['folder']), ['file', 'folder'], 'a locked kind stays')
+  const program = { executable: 'D:\\P\\p.exe', targetKind: 'identifier', targetKinds: ['identifier'] }
+  assert.equal(isLabelOnly(program), false)
+  assert.equal(canScanFolders(program), false, 'identifiers only: nothing to scan for')
+  assert.equal(canScanFolders({ ...program, targetKinds: ['identifier', 'folder'] }), true)
+  assert.equal(canScanFolders({ executable: '', targetKind: 'identifier', targetKinds: ['identifier'] }), true, 'no program')
+})
+
+test('launcher games folders are listed with their launcher, not as library folders', () => {
+  const roots = [{ id: 'r1', kind: 'games', launcherId: 'abc' }, { id: 'r2', kind: 'games' }, { id: 'r3', kind: 'emulators' }]
+  assert.deepEqual(launcherRoots(roots, 'abc').map(r => r.id), ['r1'])
+  assert.deepEqual(launcherRoots(roots, 'x'), [])
+  assert.deepEqual(libraryRoots(roots).map(r => r.id), ['r2', 'r3'])
+})
+
+test('the scan summary lists every count', () => {
+  const summary = {
+    roots: [{ id: 'r', ok: true }, { id: 'bad', ok: false }],
+    emulators: { added: 3, updated: 1, unavailable: 0 },
+    games: { added: 9, updated: 0, removedOrUninstalled: 0, skipped: 2, failed: 1, removalsHeld: 0, routesAdded: 2, romsMatched: 3, needsReview: 4 },
+    review: 4, unsupportedSamples: [], durationMs: 10
+  }
+  assert.deepEqual(Object.fromEntries(scanSummaryLines(summary)), {
+    'Games added': '9',
+    'Routes added to existing games': '2',
+    'Emulators discovered': '3 (1 updated)',
+    'ROMs matched to an emulator': '3',
+    'Needs review': '4 items',
+    Skipped: '2 items',
+    Errors: '2 errors'
+  })
+  const empty = { ...summary, roots: [], emulators: { added: 0, updated: 0, unavailable: 0 }, games: { added: 0, updated: 0, removedOrUninstalled: 0, skipped: 1, failed: 0, removalsHeld: 0 }, review: 0 }
+  const lines = Object.fromEntries(scanSummaryLines(empty))
+  assert.equal(lines['Routes added to existing games'], '0', 'older summaries lack the new counts')
+  assert.equal(lines['Needs review'], 'Nothing')
+  assert.equal(lines.Skipped, '1 item')
+  assert.equal(lines.Errors, 'None')
 })
 
 test('built-in icons are a fixed list of 24 unique names', () => {

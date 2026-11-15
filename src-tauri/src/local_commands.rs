@@ -132,27 +132,38 @@ pub async fn roots_set_enabled(
     list_roots(&state)
 }
 
-/// Removes a root. Its games become not installed (removed only without user data).
+/// Removes a root. Its games become not installed (removed only without user data). A
+/// launcher's games folder needs `mode`, as when deleting a launcher: `keep` keeps the games and
+/// routes it found, `remove` removes those routes (and games left without any).
 #[tauri::command]
 pub async fn roots_remove(
     app: AppHandle,
     state: State<'_, AppState>,
     id: String,
+    mode: Option<String>,
 ) -> CmdResult<Vec<LibraryRoot>> {
     let id = id_arg(&id, "Library folder")?;
     {
         let _scan = state.local_scan_lock.lock().await;
         let mut sessions = state.tracker.sessions();
         let mut conn = state.db.lock();
-        if roots::get(&conn, &id).map_err(err)?.is_none() {
+        let Some(root) = roots::get(&conn, &id).map_err(err)? else {
             return Err("That library folder no longer exists.".into());
-        }
+        };
         let before: Vec<String> = db::all_games(&conn)
             .map_err(err)?
             .into_iter()
             .map(|g| g.id)
             .collect();
-        local::remove_root(&mut conn, &id).map_err(err)?;
+        if root.launcher_id.is_some() {
+            let mode = mode
+                .as_deref()
+                .and_then(crate::launchers::RemoveMode::parse)
+                .ok_or("Choose whether to keep or remove the games this folder added.")?;
+            local::remove_launcher_root(&mut conn, &id, mode).map_err(err)?;
+        } else {
+            local::remove_root(&mut conn, &id).map_err(err)?;
+        }
         for gone in before {
             if db::get_game(&conn, &gone).map_err(err)?.is_none() {
                 sessions.forget(&gone);

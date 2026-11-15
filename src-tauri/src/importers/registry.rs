@@ -159,14 +159,25 @@ fn executable_path(entry: &RegistryEntry, install_path: &str) -> Option<PathBuf>
 /// `folder` or a subfolder (or reading an entry's type) is returned, so a partial listing is
 /// never mistaken for the whole folder.
 pub fn ranked_executables(folder: &Path, name: &str) -> std::io::Result<Vec<(PathBuf, usize)>> {
-    fn entries(dir: &Path) -> std::io::Result<Vec<(PathBuf, std::fs::FileType)>> {
+    ranked_executables_counted(folder, name, &mut 0)
+}
+
+/// [`ranked_executables`], adding the number of entries it listed to `listed` (so a bounded
+/// scan can charge them to its entry budget).
+pub fn ranked_executables_counted(
+    folder: &Path,
+    name: &str,
+    listed: &mut usize,
+) -> std::io::Result<Vec<(PathBuf, usize)>> {
+    let mut entries = |dir: &Path| -> std::io::Result<Vec<(PathBuf, std::fs::FileType)>> {
         let mut out = Vec::new();
         for item in std::fs::read_dir(dir)? {
             let item = item?;
             out.push((item.path(), item.file_type()?));
         }
+        *listed += out.len();
         Ok(out)
-    }
+    };
     let mut candidates = Vec::new();
     let top = entries(folder)?;
     let mut dirs = Vec::new();

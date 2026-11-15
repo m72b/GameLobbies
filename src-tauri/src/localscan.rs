@@ -34,6 +34,19 @@
 //!   When the pick isn't clear the folder is reported as ambiguous instead of guessed. A
 //!   folder name without any letter (`00356`) isn't a title: the executable's version
 //!   resource (ProductName, else FileDescription) or its file name is used instead.
+//! - Mixed app folders ([`ScanInputs::mixed`], a custom launcher's games folder): folders
+//!   outside any system folder are classified one by one instead of skipped. A folder named
+//!   after a system is scanned as above; a folder holding a known emulator executable (or one
+//!   the emulator discovery found, [`ScanInputs::emulator_dirs`]) is an emulator, never a game;
+//!   a folder whose executables sit in it or in plainly named subfolders (`bin`, `x64`, ...) is
+//!   one PC game, picked like a PC folder's game; any other folder is a container and is
+//!   classified the same way, level by level. Shortcuts lying in a mixed folder are games as in
+//!   a PC folder. Loose `.exe` files are not (an app folder holds its own program and tools):
+//!   they are skipped with a reason. Loose files with a ROM extension of exactly one system are
+//!   that system's ROMs; an extension several systems share (`.iso`, `.chd`) is an
+//!   [`UncertainRom`] for the caller to match against the emulators it knows. Generic
+//!   extensions (archives, `.bin`, `.md`, playlists) are never guessed at outside a system
+//!   folder.
 //! - Shortcuts ([`classify_shortcut`]), directly in the PC folder or the only launcher in a
 //!   game folder: a `.url` counts only when its link passes `launch::validate_launch_uri`,
 //!   and the link itself is stored (never the file). A `.lnk` is read with `IShellLinkW`:
@@ -291,7 +304,19 @@ pub struct PcGame {
     pub source: PathBuf,
     /// What is launched: an `.exe` path, a validated store link, or a confirmed `.lnk`.
     pub target: String,
+    /// The file that was found: the `.exe`, or the shortcut file (what a custom launcher with a
+    /// program is given as the game's file).
+    pub file: PathBuf,
     pub title: String,
+}
+
+/// A loose file in a mixed folder whose extension several systems use (see the module docs).
+#[derive(Debug, Clone, PartialEq)]
+pub struct UncertainRom {
+    pub path: PathBuf,
+    pub title: String,
+    /// The systems using its extension (catalog ids, catalog order).
+    pub systems: Vec<&'static str>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -331,6 +356,10 @@ pub struct GameScan {
     pub samples: Vec<String>,
     pub truncated: bool,
     pub visited: usize,
+    /// Mixed folders only: loose files whose system isn't certain.
+    pub uncertain: Vec<UncertainRom>,
+    /// Mixed folders only: emulator folders seen (and left to the emulator discovery).
+    pub emulator_folders: usize,
 }
 
 /// What a game scan must honour: normalized paths from the ignore list, the user's
@@ -347,6 +376,14 @@ pub struct ScanInputs {
     /// entered, never reported. A first-level folder that contains one of them (like
     /// `Launcher` holding the emulator root) is skipped silently too.
     pub excluded: HashSet<String>,
+    /// Classify the root as a mixed app folder (see the module docs) instead of by system
+    /// folder names only.
+    pub mixed: bool,
+    /// Mixed folders: long-form keys of folders holding an emulator the emulator discovery
+    /// found (never games).
+    pub emulator_dirs: HashSet<String>,
+    /// Long-form keys of files that are never games (a custom launcher's own program).
+    pub skip_files: HashSet<String>,
 }
 
 /// The comparison key of a path that came from outside a walk (a stored path, an env var, a
@@ -457,6 +494,9 @@ impl GameWalker<'_> {
             .collect();
         if system.is_some_and(|s| s.id == PC) {
             return self.pc_folder(&items, top);
+        }
+        if system.is_none() && self.inputs.mixed {
+            return self.mixed_folder(&items, depth, top);
         }
         let before = self.out.roms.len();
         match system {
@@ -599,6 +639,7 @@ impl GameWalker<'_> {
             folder: folder.map(Path::to_path_buf),
             source,
             target,
+            file: shortcut.to_path_buf(),
             title,
         });
         true
@@ -617,62 +658,272 @@ impl GameWalker<'_> {
                 }
                 continue;
             }
-            let title = catalog::clean_title(&item.name);
-            if let Some(choice) = self
-                .inputs
-                .exe_choices
-                .get(&listed_key(&item.path))
-                .map(PathBuf::from)
-                .filter(|p| p.is_file())
-            {
-                if is_shortcut(&choice.to_string_lossy()) {
-                    found += usize::from(self.shortcut(Some(&item.path), &choice, title));
-                } else {
-                    self.out.pcs.push(PcGame {
-                        folder: Some(item.path.clone()),
-                        source: item.path.clone(),
-                        target: choice.to_string_lossy().into_owned(),
-                        title: pc_title(&item.name, Some(&choice)),
-                    });
-                    found += 1;
-                }
-                continue;
-            }
-            match pick_executable(&item.path, &item.name) {
-                Pick::One(target) => {
-                    self.out.pcs.push(PcGame {
-                        folder: Some(item.path.clone()),
-                        source: item.path.clone(),
-                        title: pc_title(&item.name, Some(&target)),
-                        target: target.to_string_lossy().into_owned(),
-                    });
-                    found += 1;
-                }
-                Pick::Shortcut(shortcut) => {
-                    found += usize::from(self.shortcut(Some(&item.path), &shortcut, title));
-                }
-                Pick::Ambiguous(candidates) => {
-                    self.out.ambiguous.push(AmbiguousPc {
-                        folder: item.path.clone(),
-                        title,
-                        candidates,
-                    });
-                    found += 1;
-                }
-                Pick::None => {
-                    self.out.unsupported.push(Unsupported {
-                        path: item.path.to_string_lossy().into_owned(),
-                        reason: "No game executable or shortcut found in this PC game folder."
-                            .into(),
-                    });
-                    self.skip(&item.path, "no executable");
-                }
-                Pick::Unreadable => self.unreadable(&item.path),
-            }
+            found += self.pc_dir(item, None);
         }
         if !top.is_empty() {
             self.top.entry(top.into()).or_default().0 += found;
         }
+    }
+
+    /// The executable or shortcut the user chose for a PC game folder, if it still exists.
+    fn exe_choice(&self, item: &Item) -> Option<PathBuf> {
+        self.inputs
+            .exe_choices
+            .get(&listed_key(&item.path))
+            .map(PathBuf::from)
+            .filter(|p| p.is_file())
+    }
+
+    /// One PC game folder: the user's choice, else `pick` (or the ranking when `None`). Returns
+    /// how many games (or pending decisions) came of it.
+    fn pc_dir(&mut self, item: &Item, pick: Option<Pick>) -> usize {
+        let title = catalog::clean_title(&item.name);
+        if let Some(choice) = self.exe_choice(item) {
+            if is_shortcut(&choice.to_string_lossy()) {
+                return usize::from(self.shortcut(Some(&item.path), &choice, title));
+            }
+            self.out.pcs.push(PcGame {
+                folder: Some(item.path.clone()),
+                source: item.path.clone(),
+                target: choice.to_string_lossy().into_owned(),
+                title: pc_title(&item.name, Some(&choice)),
+                file: choice,
+            });
+            return 1;
+        }
+        match pick.unwrap_or_else(|| pick_executable(&item.path, &item.name)) {
+            Pick::One(target) => {
+                self.out.pcs.push(PcGame {
+                    folder: Some(item.path.clone()),
+                    source: item.path.clone(),
+                    title: pc_title(&item.name, Some(&target)),
+                    target: target.to_string_lossy().into_owned(),
+                    file: target,
+                });
+                1
+            }
+            Pick::Shortcut(shortcut) => {
+                usize::from(self.shortcut(Some(&item.path), &shortcut, title))
+            }
+            Pick::Ambiguous(candidates) => {
+                self.out.ambiguous.push(AmbiguousPc {
+                    folder: item.path.clone(),
+                    title,
+                    candidates,
+                });
+                1
+            }
+            Pick::None => {
+                self.out.unsupported.push(Unsupported {
+                    path: item.path.to_string_lossy().into_owned(),
+                    reason: "No game executable or shortcut found in this PC game folder.".into(),
+                });
+                self.skip(&item.path, "no executable");
+                0
+            }
+            Pick::Unreadable => {
+                self.unreadable(&item.path);
+                0
+            }
+        }
+    }
+
+    /// A folder of a mixed app folder outside any system folder (see the module docs).
+    fn mixed_folder(&mut self, items: &[Item], depth: usize, top: &str) {
+        let (mut found, mut skipped) = (0, 0);
+        let mut loose: Vec<&Item> = Vec::new();
+        for item in items.iter().filter(|i| !i.is_dir) {
+            let ext = catalog::extension_of(&item.name).unwrap_or_default();
+            if self.inputs.skip_files.contains(&listed_key(&item.path)) {
+                continue;
+            }
+            if is_shortcut(&item.name) {
+                let title = catalog::clean_title(stem_of(&item.name));
+                found += usize::from(self.shortcut(None, &item.path, title));
+            } else if ext == ".exe" {
+                // Emulators are registered by the emulator discovery; other loose programs are
+                // the app's own files or tools, never guessed to be games.
+                if catalog::match_executable(&item.name).is_none() {
+                    self.skip(&item.path, "put each PC game in its own folder");
+                    skipped += 1;
+                }
+            } else if ignored_extension(&item.name) {
+            } else if LOOSE_GENERIC_EXTENSIONS.contains(&ext.as_str())
+                || catalog::systems_for_extension(&ext).is_empty()
+            {
+                self.skip(&item.path, "not a game, shortcut or ROM format");
+                skipped += 1;
+            } else {
+                loose.push(item);
+            }
+        }
+        if !top.is_empty() {
+            self.top.entry(top.into()).or_default().1 += skipped;
+        }
+        found += self.loose_roms(&loose);
+        if !top.is_empty() {
+            self.top.entry(top.into()).or_default().0 += found;
+        }
+        for item in items.iter().filter(|i| i.is_dir) {
+            if self.out.truncated {
+                return;
+            }
+            let child_top = if depth == 0 { item.name.as_str() } else { top };
+            if depth == 0 {
+                self.top.entry(child_top.into()).or_default();
+            }
+            let key = listed_key(&item.path);
+            if let Some(sys) = catalog::system_for_folder(&item.name) {
+                if sys.id != PC {
+                    if let Some(game) = folder_game(sys, &item.path, &item.name) {
+                        self.out.roms.push(game);
+                        self.top.entry(child_top.into()).or_default().0 += 1;
+                        continue;
+                    }
+                }
+                if depth < self.inputs.limits.max_depth {
+                    self.visit(&item.path, depth + 1, Some(sys), child_top);
+                }
+                continue;
+            }
+            // The classification below lists folders too: charged to the entry budget, so a
+            // wide tree can't run past the cap.
+            let mut listed = 0;
+            let emulator =
+                self.inputs.emulator_dirs.contains(&key) || holds_emulator(&item.path, &mut listed);
+            if !self.count_entries(listed) {
+                return;
+            }
+            if emulator {
+                self.out.emulator_folders += 1;
+                self.top.entry(child_top.into()).or_default().0 += 1;
+                continue;
+            }
+            let holds_nested_emulator = self
+                .inputs
+                .emulator_dirs
+                .iter()
+                .any(|dir| crate::tracker::is_within(&key, dir));
+            let game = if self.exe_choice(item).is_some() {
+                Some(None)
+            } else if holds_nested_emulator {
+                None
+            } else {
+                let mut listed = 0;
+                let pick = mixed_pick(&item.path, &item.name, &mut listed);
+                if !self.count_entries(listed) {
+                    return;
+                }
+                pick.map(Some)
+            };
+            match game {
+                Some(pick) => {
+                    let n = self.pc_dir(item, pick);
+                    self.top.entry(child_top.into()).or_default().0 += n;
+                }
+                None if depth < self.inputs.limits.max_depth => {
+                    self.visit(&item.path, depth + 1, None, child_top)
+                }
+                None => {}
+            }
+        }
+    }
+
+    /// Loose ROM-format files of a mixed folder: by system when their extension has exactly
+    /// one, else [`UncertainRom`]s. Returns how many were found.
+    fn loose_roms(&mut self, items: &[&Item]) -> usize {
+        let mut by_system: BTreeMap<&'static str, Vec<Item>> = BTreeMap::new();
+        let mut several_systems = Vec::new();
+        for item in items {
+            let ext = catalog::extension_of(&item.name).unwrap_or_default();
+            match catalog::systems_for_extension(&ext).as_slice() {
+                [only] => by_system.entry(only.id).or_default().push((*item).clone()),
+                [] => {}
+                several => several_systems.push((*item, several.iter().map(|s| s.id).collect())),
+            }
+        }
+        let before = self.out.roms.len();
+        for (id, files) in by_system {
+            if let Some(system) = catalog::system(id) {
+                self.rom_files(system, &files);
+            }
+        }
+        let mut uncertain = 0;
+        // After the index files above: a track a `.cue` lists is part of that game.
+        for (item, systems) in several_systems {
+            if self.consumed.contains(&listed_key(&item.path)) {
+                continue;
+            }
+            self.out.uncertain.push(UncertainRom {
+                path: item.path.clone(),
+                title: catalog::clean_title(stem_of(&item.name)),
+                systems,
+            });
+            uncertain += 1;
+        }
+        self.out.roms.len() - before + uncertain
+    }
+}
+
+/// Extensions never guessed to be a ROM outside a system folder: archives and other formats
+/// many unrelated files use (`.bin`, `.md` for Markdown, `.m3u` playlists, ...).
+const LOOSE_GENERIC_EXTENSIONS: &[&str] = &[
+    ".zip", ".7z", ".gz", ".bin", ".img", ".md", ".elf", ".pkg", ".dol", ".m3u", ".sub", ".mdf",
+];
+
+/// Folder names that hold a game's executables without naming it (`Game\bin\x64\game.exe`).
+const GENERIC_EXE_FOLDERS: &[&str] = &[
+    "bin", "bin32", "bin64", "x64", "x86", "x86_64", "win32", "win64", "windows", "binaries",
+    "release", "game", "app", "program",
+];
+
+fn generic_exe_folder(path: &Path) -> bool {
+    path.file_name()
+        .is_some_and(|n| GENERIC_EXE_FOLDERS.contains(&n.to_string_lossy().to_lowercase().as_str()))
+}
+
+/// A known emulator executable directly in `dir`. Adds the entries listed to `listed`.
+fn holds_emulator(dir: &Path, listed: &mut usize) -> bool {
+    list_dir(dir).is_ok_and(|listing| {
+        *listed += listing.items.len();
+        listing
+            .items
+            .iter()
+            .any(|i| !i.is_dir && catalog::match_executable(&i.name).is_some())
+    })
+}
+
+/// A folder of a mixed app folder as one PC game: its pick when its executables sit in it or in
+/// plainly named subfolders (`bin`, `x64`, two levels down at most), `None` when it is a container
+/// of other games (or of nothing usable). Adds every entry it listed to `listed`.
+pub fn mixed_pick(folder: &Path, name: &str, listed: &mut usize) -> Option<Pick> {
+    let own =
+        |p: &PathBuf| p.parent() == Some(folder) || p.parent().is_some_and(generic_exe_folder);
+    match pick_executable_counted(folder, name, listed) {
+        Pick::One(p) => own(&p).then_some(Pick::One(p)),
+        Pick::Ambiguous(c) => {
+            let game = c.iter().any(|p| p.parent() == Some(folder)) || c.iter().all(own);
+            game.then_some(Pick::Ambiguous(c))
+        }
+        Pick::None => {
+            // `Game\bin\x64\game.exe`: the ranking looks one level deep; look inside the plainly
+            // named subfolders once more.
+            let listing = list_dir(folder).ok()?;
+            *listed += listing.items.len();
+            for sub in listing
+                .items
+                .iter()
+                .filter(|i| i.is_dir && generic_exe_folder(&i.path))
+            {
+                if let found @ (Pick::One(_) | Pick::Ambiguous(_)) =
+                    pick_executable_counted(&sub.path, name, listed)
+                {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        other => Some(other),
     }
 }
 
@@ -866,7 +1117,13 @@ pub enum Pick {
 /// A PC game folder's executable: a single candidate, or a best-named one that clearly
 /// beats the rest. Without any `.exe`, a single shortcut in the folder.
 pub fn pick_executable(folder: &Path, name: &str) -> Pick {
-    let Ok(ranked) = crate::importers::registry::ranked_executables(folder, name) else {
+    pick_executable_counted(folder, name, &mut 0)
+}
+
+/// [`pick_executable`], adding the number of entries it listed to `listed`.
+pub fn pick_executable_counted(folder: &Path, name: &str, listed: &mut usize) -> Pick {
+    let Ok(ranked) = crate::importers::registry::ranked_executables_counted(folder, name, listed)
+    else {
         return Pick::Unreadable;
     };
     let ranked: Vec<(PathBuf, usize)> = ranked
@@ -893,6 +1150,7 @@ pub fn pick_executable(folder: &Path, name: &str) -> Pick {
         Ok(listing) if listing.complete => listing,
         _ => return Pick::Unreadable,
     };
+    *listed += listing.items.len();
     let shortcuts: Vec<PathBuf> = listing
         .items
         .into_iter()
@@ -932,7 +1190,18 @@ pub fn scan_games(
     let system = catalog::system_for_folder(&root_name);
     walker.visit(root, 0, system, "");
     let mut out = walker.out;
-    if system.is_none() {
+    if system.is_none() && inputs.mixed {
+        for (folder, (games, skipped)) in walker.top {
+            if games == 0 && skipped > 0 {
+                out.unsupported.push(Unsupported {
+                    path: root.join(&folder).to_string_lossy().into_owned(),
+                    reason: format!(
+                        "Nothing in \"{folder}\" could be added: no game folder with an executable, shortcut, emulator or ROM was found. Put each PC game in its own folder, or ROMs in a folder named after their system."
+                    ),
+                });
+            }
+        }
+    } else if system.is_none() {
         for (folder, (games, skipped)) in walker.top {
             if games == 0 && skipped > 0 {
                 out.unsupported.push(Unsupported {
@@ -1606,6 +1875,43 @@ pub(crate) mod tests {
         let result = scan(&dir);
         assert_eq!(rom_names(&result), ["gba:inside.gba"]);
         std::fs::remove_dir(&link).unwrap();
+    }
+
+    #[test]
+    fn mixed_folder_classification_counts_toward_the_entry_cap() {
+        let dir = TempDir::new("mixed-cap");
+        // 40 game folders of 5 files each: the walk itself lists only 40 entries, but telling
+        // each folder apart lists 200 more.
+        for i in 0..40 {
+            for f in ["game.exe", "a.dll", "b.dll", "c.pak", "d.pak"] {
+                dir.file(&format!("Game {i:02}/{f}"));
+            }
+        }
+        let mut inputs = ScanInputs {
+            mixed: true,
+            limits: ScanLimits {
+                max_depth: 8,
+                max_entries: 100,
+            },
+            ..Default::default()
+        };
+        let capped = scan_games(dir.path(), &inputs, &mut |_, _| {}).unwrap();
+        assert!(capped.truncated, "the cap holds");
+        assert!(
+            capped.visited <= 100 + 10,
+            "stopped near the cap: {}",
+            capped.visited
+        );
+        assert!(capped.pcs.len() < 40, "{}", capped.pcs.len());
+        inputs.limits.max_entries = 10_000;
+        let full = scan_games(dir.path(), &inputs, &mut |_, _| {}).unwrap();
+        assert!(!full.truncated);
+        assert_eq!(full.pcs.len(), 40);
+        assert!(
+            full.visited >= 40 + 40 * 5,
+            "classification is counted: {}",
+            full.visited
+        );
     }
 
     #[test]

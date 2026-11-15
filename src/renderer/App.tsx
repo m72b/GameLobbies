@@ -4,7 +4,7 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import { Clock3, CloudDownload, EyeOff, Gamepad2, HardDrive, Heart, History, Library, ListFilter, MoreHorizontal, Pencil, Play, Plus, Search, Settings2, Star, X } from 'lucide-react'
 import { StoreIcon } from './store-icons'
 import { GlMark } from './gl-mark'
-import type { CustomLauncher, Game, RunningGame, Settings, Store as StoreName, SteamGridDbCover, UpdateInfo } from '../shared/types'
+import type { CustomLauncher, Game, LauncherTargetKind, RunningGame, Settings, Store as StoreName, SteamGridDbCover, UpdateInfo } from '../shared/types'
 import { defaultSettings } from '../shared/defaults'
 import { applyTheme } from './theme'
 import { coverStyle } from './cover'
@@ -16,7 +16,7 @@ import { GamePage, type GamePageActions } from './game-page'
 import { SessionHistory } from './session-history'
 import { elapsedSeconds, formatClock, useNow } from './format'
 import { LauncherIcon, useLaunchers } from './launcher-icon'
-import { displayStore, filterLauncherId, gameLauncher, gameMatchesFilter, identifierProblem, launcherFilter } from '../shared/launchers'
+import { displayStore, filterLauncherId, gameLauncher, gameMatchesFilter, identifierProblem, isLabelOnly, kindLabel, launcherFilter, launcherKinds } from '../shared/launchers'
 
 type View = 'All Games' | 'Favorites' | 'Recently Played' | 'Hidden'
 type SortBy = 'title' | 'lastPlayed' | 'playtime' | 'library'
@@ -64,6 +64,8 @@ export default function App() {
   // The add-game dialog's source: '' = a store link, otherwise a custom launcher's id.
   const [addSource, setAddSource] = useState('')
   const [addIdentifier, setAddIdentifier] = useState('')
+  // What the game added to a launcher uses, when the launcher allows several kinds.
+  const [addKind, setAddKind] = useState<LauncherTargetKind | ''>('')
   const [addBusy, setAddBusy] = useState(false)
   const launchers = useLaunchers()
   const [editingGame, setEditingGame] = useState<Game | null>(null)
@@ -223,17 +225,25 @@ export default function App() {
   const openAdd = (source = '') => {
     setAddSource(source)
     setAddIdentifier('')
+    setAddKind('')
     setAdding(true)
+  }
+  /** The kind a game added to `launcher` uses: the chosen one, else the launcher's first. */
+  const kindFor = (launcher: CustomLauncher): LauncherTargetKind => {
+    const kinds = launcherKinds(launcher)
+    return addKind && kinds.includes(addKind) ? addKind : kinds[0]
   }
   const addGame = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     const data = new FormData(event.currentTarget)
     const launcher = launchers.find(item => item.id === addSource)
     if (launcher) {
-      if (launcher.targetKind === 'identifier' && identifierProblem(addIdentifier)) return
+      const kind = kindFor(launcher)
+      const typed = kind === 'identifier' && !isLabelOnly(launcher)
+      if (typed && identifierProblem(addIdentifier)) return
       setAddBusy(true)
       try {
-        const result = await window.lobby.launchers.addGame(launcher.id, String(data.get('title') ?? ''), launcher.targetKind === 'identifier' ? addIdentifier : null)
+        const result = await window.lobby.launchers.addGame(launcher.id, String(data.get('title') ?? ''), typed ? addIdentifier : null, isLabelOnly(launcher) ? undefined : kind)
         if (!result) return
         setGames(result.games)
         setAdding(false)
@@ -518,24 +528,32 @@ export default function App() {
     {adding && <div className="modal-scrim"><form className="modal" onSubmit={addGame}>
       {(() => {
         const launcher = launchers.find(item => item.id === addSource)
-        const identifierError = launcher?.targetKind === 'identifier' && addIdentifier ? identifierProblem(addIdentifier) : ''
+        const labelOnly = !!launcher && isLabelOnly(launcher)
+        const kinds = launcher && !labelOnly ? launcherKinds(launcher) : []
+        const kind = launcher ? (labelOnly ? 'file' : kindFor(launcher)) : undefined
+        const identifierError = kind === 'identifier' && addIdentifier ? identifierProblem(addIdentifier) : ''
         return <>
           <div className="modal-head"><h2>{launcher ? 'Add game to ' + launcher.name : 'Add a game'}</h2><button type="button" aria-label="Close" onClick={() => setAdding(false)}><X size={17} /></button></div>
           {launchers.length > 0 && <label>Launch with<select value={addSource} onChange={event => { setAddSource(event.target.value); setAddIdentifier('') }}>
             <option value="">A store link</option>
             {launchers.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
           </select></label>}
-          <label>Title<input required={!launcher || launcher.targetKind === 'identifier'} name="title" placeholder={launcher && launcher.targetKind !== 'identifier' ? 'Optional: the ' + launcher.targetKind + ' name is used' : 'Game title'} autoFocus /></label>
+          {kinds.length > 1 && <div className="field-label">This game uses
+            <div className="chip-group" role="radiogroup" aria-label="What this game uses">
+              {kinds.map(item => <button key={item} type="button" role="radio" aria-checked={kind === item} className={'chip ' + (kind === item ? 'active' : '')} onClick={() => { setAddKind(item); setAddIdentifier('') }}>{kindLabel(item)}</button>)}
+            </div></div>}
+          <label>Title<input required={!launcher || kind === 'identifier'} name="title" placeholder={launcher && kind !== 'identifier' ? 'Optional: the ' + kind + ' name is used' : 'Game title'} autoFocus /></label>
           {!launcher && <>
             <label>Store link<input required name="target" placeholder="steam://run/123" /></label>
             <p className="muted-text">For a program, shortcut or ROM file on this PC, use Add local game.</p>
           </>}
-          {launcher?.targetKind === 'identifier' && <>
+          {launcher && kind === 'identifier' && <>
             <label>Identifier<input required value={addIdentifier} onChange={event => setAddIdentifier(event.target.value)} placeholder="The game’s id in this launcher" spellCheck={false} aria-invalid={!!identifierError} /></label>
             {identifierError ? <div className="form-error" role="alert">{identifierError}</div> : <p className="muted-text">Passed to {launcher.name} as one argument, exactly as typed. Up to 200 letters, digits, spaces and . _ : @ # ( ) ' + , ! - characters; it can’t start with “-” or “@”, or like a drive (“C:”).</p>}
           </>}
-          {launcher && launcher.targetKind !== 'identifier' && <p className="muted-text">Choose the game’s {launcher.targetKind} next. It is passed to {launcher.name} as one argument.</p>}
-          <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setAdding(false)}>Cancel</button><button className="primary-button" disabled={addBusy || !!identifierError}>{launcher && launcher.targetKind !== 'identifier' ? 'Choose ' + launcher.targetKind + '…' : 'Add game'}</button></div>
+          {launcher && labelOnly && <p className="muted-text">Choose the game’s file next: a program (.exe), a shortcut or a ROM. It runs directly, the same way as Add local game, and shows {launcher.name} as where it is played from. To add many games at once, give {launcher.name} a games folder in Settings → Custom launchers.</p>}
+          {launcher && !labelOnly && kind !== 'identifier' && <p className="muted-text">Choose the game’s {kind} next. It is passed to {launcher.name} as one argument.</p>}
+          <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setAdding(false)}>Cancel</button><button className="primary-button" disabled={addBusy || !!identifierError}>{launcher && kind !== 'identifier' ? 'Choose ' + kind + '…' : 'Add game'}</button></div>
         </>
       })()}
     </form></div>}
