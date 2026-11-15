@@ -3,6 +3,7 @@
 //!
 //! No code path is meant to format a secret into a log line; this is the second line of
 //! defence. It removes `key=value` / `key: value` pairs whose name looks like a credential,
+//! `key=` / `steamid=` URL query values (the Steam Web API key), SteamID64s,
 //! bearer tokens, long hex strings and long mixed letter/digit strings (API keys, access
 //! tokens, base64 blobs such as DPAPI data), and replaces the user's profile folder with
 //! `%USERPROFILE%`.
@@ -25,6 +26,19 @@ fn named_secret() -> &'static Regex {
         &CELL,
         r#"(?i)\b((?:[a-z0-9]+[_-])*(?:api[_-]?key|apikey|secret|token|password|passwd|authorization|credential|dpapi|signature|signing[_-]?key|private[_-]?key)[a-z0-9_-]*)(["']?\s*[=:]\s*["']?)(?:bearer\s+)?[^\s"',&;)}\]]+"#,
     )
+}
+
+/// A `key` or `steamid` URL query parameter (the Steam Web API only takes its key this way);
+/// the value is removed.
+fn query_key() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    regex(&CELL, r#"(?i)([?&;](?:key|steamid)=)[^\s&#"'<>]+"#)
+}
+
+/// A SteamID64 of an individual account (17 digits starting with 7656119).
+fn steam_id64() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    regex(&CELL, r"\b7656119\d{10}\b")
 }
 
 fn bearer() -> &'static Regex {
@@ -73,6 +87,8 @@ fn redact_paths(text: &str, profile: Option<&str>) -> String {
 pub fn redact_with(text: &str, profile: Option<&str>) -> String {
     let text =
         named_secret().replace_all(text, |c: &Captures| format!("{}{}{REDACTED}", &c[1], &c[2]));
+    let text = query_key().replace_all(&text, |c: &Captures| format!("{}{REDACTED}", &c[1]));
+    let text = steam_id64().replace_all(&text, REDACTED);
     let text = bearer().replace_all(&text, |c: &Captures| format!("{} {REDACTED}", &c[1]));
     let text = long_hex().replace_all(&text, REDACTED);
     // Mixed letters and digits only: long plain words and paths stay readable.
@@ -129,6 +145,40 @@ mod tests {
             clean("a=1 token=abc&b=2"),
             format!("a=1 token={REDACTED}&b=2")
         );
+    }
+
+    #[test]
+    fn steam_web_api_urls_lose_the_key_and_the_steam_id() {
+        let steam_id = "76561197960287930";
+        // A key that is not hex-shaped, so only the query rule can catch it.
+        let odd_key = "notakey_but_secret";
+        for line in [
+            format!("GET https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/?key={HEX_KEY}&steamid={steam_id}&include_appinfo=1&format=json"),
+            format!("error sending request for url (https://api.steampowered.com/x?steamid={steam_id}&key={odd_key})"),
+            format!("https://api.steampowered.com/x?KEY={odd_key}"),
+            format!("Steam account {steam_id} has 3 games"),
+            format!(r#"{{"steamid":"{steam_id}"}}"#),
+        ] {
+            let out = clean(&line);
+            for secret in [HEX_KEY, steam_id, odd_key] {
+                assert!(!out.contains(secret), "{out}");
+            }
+            assert!(out.contains(REDACTED), "{out}");
+        }
+        assert_eq!(
+            clean(&format!(
+                "https://a.example/?key={odd_key}&include_appinfo=1"
+            )),
+            format!("https://a.example/?key={REDACTED}&include_appinfo=1")
+        );
+        // Other numbers and words named "key" stay readable.
+        for text in [
+            "Steam app 570 and 12345678901234567",
+            "press any key=continue",
+            "monkey=1",
+        ] {
+            assert_eq!(clean(text), text);
+        }
     }
 
     #[test]

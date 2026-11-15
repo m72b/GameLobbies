@@ -30,6 +30,7 @@ mod screenshots;
 mod secrets;
 mod sessions;
 mod state;
+mod steam_owned;
 mod steamgriddb;
 mod storage;
 mod theme;
@@ -284,6 +285,9 @@ pub fn run() {
             notes::input_get,
             notes::input_save,
             notes::input_refresh,
+            steam_owned::steam_owned_status,
+            steam_owned::steam_owned_save,
+            steam_owned::steam_owned_remove,
             commands::steamgriddb_status,
             commands::steamgriddb_save_key,
             commands::steamgriddb_test_key,

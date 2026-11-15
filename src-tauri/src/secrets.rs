@@ -7,8 +7,15 @@ use crate::db;
 use crate::state::AppState;
 use anyhow::{anyhow, bail, Result};
 
-/// Secret names of removed features, deleted by the database migration.
+/// Secret names of removed features, deleted by the database migration on every start. Only
+/// exact names; a feature that comes back uses a new name (see [`STEAM_OWNED_API_KEY`]).
 pub const RETIRED_SECRETS: &[&str] = &["steam-api-key-dpapi"];
+/// The optional Steam Web API owned-games import (`steam_owned`). Deliberately not the retired
+/// `steam-api-key-dpapi`: older builds and the store-account cleanup delete that name.
+pub(crate) const STEAM_OWNED_API_KEY: &str = "steam-owned-games-api-key-dpapi";
+/// The SteamID64 for the owned-games import. Not a secret, but sealed and stored next to the
+/// key so it stays out of settings, backups and the diagnostics report, and "Remove" clears both.
+pub(crate) const STEAM_OWNED_STEAM_ID: &str = "steam-owned-games-steamid-dpapi";
 const STEAMGRIDDB_API_KEY: &str = "steamgriddb-api-key-dpapi";
 const IGDB_CLIENT_ID: &str = "igdb-client-id-dpapi";
 const IGDB_CLIENT_SECRET: &str = "igdb-client-secret-dpapi";
@@ -41,6 +48,8 @@ pub struct StoredFlags {
     pub steamgriddb_key: bool,
     pub igdb_client_id: bool,
     pub igdb_client_secret: bool,
+    pub steam_owned_key: bool,
+    pub steam_owned_steam_id: bool,
 }
 
 pub fn stored_flags(conn: &rusqlite::Connection) -> Result<StoredFlags> {
@@ -49,6 +58,8 @@ pub fn stored_flags(conn: &rusqlite::Connection) -> Result<StoredFlags> {
         steamgriddb_key: has(STEAMGRIDDB_API_KEY)?,
         igdb_client_id: has(IGDB_CLIENT_ID)?,
         igdb_client_secret: has(IGDB_CLIENT_SECRET)?,
+        steam_owned_key: has(STEAM_OWNED_API_KEY)?,
+        steam_owned_steam_id: has(STEAM_OWNED_STEAM_ID)?,
     })
 }
 
@@ -147,9 +158,136 @@ pub fn clear_igdb_credentials(state: &AppState) -> Result<()> {
     db::delete_secret(&conn, IGDB_CLIENT_SECRET)
 }
 
+// ---------------------------------------------------------------------------
+// Steam Web API (optional owned-games import)
+
+/// Trims a Steam Web API key; `None` when empty. Steam keys are 32 hexadecimal characters.
+/// The error never echoes the input.
+pub fn validate_steam_api_key(raw: &str) -> Result<Option<String>> {
+    if raw.len() > 1024 {
+        bail!("The Steam Web API key is too long.");
+    }
+    let key = raw.trim();
+    if key.is_empty() {
+        return Ok(None);
+    }
+    if key.len() != 32 || !key.chars().all(|c| c.is_ascii_hexdigit()) {
+        bail!("The Steam Web API key must be 32 letters A to F and digits.");
+    }
+    Ok(Some(key.to_string()))
+}
+
+/// Trims a SteamID64; `None` when empty. It is 17 digits and starts with 7656119 (the
+/// individual-account range). The error never echoes the input.
+pub fn validate_steam_id(raw: &str) -> Result<Option<String>> {
+    if raw.len() > 1024 {
+        bail!("The SteamID64 is too long.");
+    }
+    let id = raw.trim();
+    if id.is_empty() {
+        return Ok(None);
+    }
+    if id.len() != 17 || !id.bytes().all(|b| b.is_ascii_digit()) || !id.starts_with("7656119") {
+        bail!("The SteamID64 must be 17 digits starting with 7656119.");
+    }
+    Ok(Some(id.to_string()))
+}
+
+pub fn has_steam_owned_key(state: &AppState) -> Result<bool> {
+    has(state, STEAM_OWNED_API_KEY)
+}
+
+pub fn has_steam_owned_steam_id(state: &AppState) -> Result<bool> {
+    has(state, STEAM_OWNED_STEAM_ID)
+}
+
+/// The key and SteamID64, or `None` unless both are saved. Backend only; never sent to the
+/// renderer, logged or put in an error message.
+pub fn get_steam_owned_credentials(state: &AppState) -> Result<Option<(String, String)>> {
+    let Some(key) = read(state, STEAM_OWNED_API_KEY, "Steam Web API")? else {
+        return Ok(None);
+    };
+    let Some(id) = read(state, STEAM_OWNED_STEAM_ID, "Steam Web API")? else {
+        return Ok(None);
+    };
+    Ok(Some((key, id)))
+}
+
+/// Saves whichever values are non-empty; an empty field keeps the stored value (the form never
+/// shows saved values). Both inputs are validated before anything is written.
+pub fn set_steam_owned_credentials(state: &AppState, key: &str, steam_id: &str) -> Result<()> {
+    let key = validate_steam_api_key(key)?;
+    let id = validate_steam_id(steam_id)?;
+    if let Some(key) = key {
+        write(state, STEAM_OWNED_API_KEY, "Steam Web API", &key)?;
+    }
+    if let Some(id) = id {
+        let sealed = crate::platform::protect(id.as_bytes()).map_err(|_| {
+            anyhow!("Windows secure storage is unavailable; the SteamID64 was not saved.")
+        })?;
+        db::write_secret(&state.db.lock(), STEAM_OWNED_STEAM_ID, &sealed)?;
+    }
+    Ok(())
+}
+
+/// Removes both the key and the SteamID64.
+pub fn clear_steam_owned_credentials(state: &AppState) -> Result<()> {
+    let conn = state.db.lock();
+    db::delete_secret(&conn, STEAM_OWNED_API_KEY)?;
+    db::delete_secret(&conn, STEAM_OWNED_STEAM_ID)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_owned_games_secrets_are_not_retired_names() {
+        for name in [STEAM_OWNED_API_KEY, STEAM_OWNED_STEAM_ID] {
+            assert!(!RETIRED_SECRETS.contains(&name), "{name} would be deleted");
+        }
+    }
+
+    #[test]
+    fn steam_keys_must_be_32_hex_characters() {
+        let key = "0123456789abcdef0123456789ABCDEF";
+        assert_eq!(
+            validate_steam_api_key(&format!("  {key}\n")).unwrap(),
+            Some(key.into())
+        );
+        assert_eq!(validate_steam_api_key("  ").unwrap(), None);
+        for bad in [
+            "0123456789abcdef0123456789abcde",
+            "0123456789abcdef0123456789abcdef0",
+            "0123456789abcdef0123456789abcdeg",
+            "0123456789abcdef 123456789abcdef",
+            "0123456789abcdef0123456789abcd&x",
+        ] {
+            let e = validate_steam_api_key(bad).unwrap_err().to_string();
+            assert!(!e.contains(bad), "error must not echo the key");
+        }
+        assert!(validate_steam_api_key(&" ".repeat(2000)).is_err());
+    }
+
+    #[test]
+    fn steam_ids_are_17_digit_individual_accounts() {
+        assert_eq!(
+            validate_steam_id(" 76561197960287930 ").unwrap(),
+            Some("76561197960287930".into())
+        );
+        assert_eq!(validate_steam_id("").unwrap(), None);
+        for bad in [
+            "7656119796028793",
+            "765611979602879300",
+            "12345678901234567",
+            "7656119796028793x",
+            "76561197960287930&key=1",
+            "STEAM_0:0:11101",
+        ] {
+            let e = validate_steam_id(bad).unwrap_err().to_string();
+            assert!(!e.contains(bad), "error must not echo the id");
+        }
+    }
 
     #[test]
     fn steamgriddb_keys_are_trimmed_and_checked() {

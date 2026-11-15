@@ -782,6 +782,69 @@ pub fn reconcile_installed_source(
     Ok(())
 }
 
+/// Steam app ids with an installed `steam` route (the owned-games import never adds these).
+pub fn installed_steam_app_ids(db: &Connection) -> Result<HashSet<String>> {
+    Ok(all_rows(db)?
+        .iter()
+        .flat_map(|row| row.routes.iter())
+        .filter(|r| r.source_id == "steam" && r.installed == Some(true))
+        .filter_map(|r| non_empty(&r.app_id).map(str::to_owned))
+        .collect())
+}
+
+/// Undoes the optional Steam owned-games import (`steam_owned`) for exactly the app ids in
+/// `app_ids` (ones an earlier import listed that are no longer owned, or all of them when the
+/// import is removed). Only `steam` routes with one of those app ids that are marked owned and
+/// not installed are touched: a game the user put something into keeps its route with the
+/// owned mark dropped; otherwise the route goes, and a game left without routes is deleted.
+/// Installed games and every other route are left alone. Returns the number of games deleted.
+pub fn drop_steam_owned(db: &mut Connection, app_ids: &HashSet<String>) -> Result<usize> {
+    if app_ids.is_empty() {
+        return Ok(0);
+    }
+    let rows = all_rows(db)?;
+    let customized = customized_game_ids(db)?;
+    let tx = db.transaction()?;
+    let mut deleted = 0;
+    for row in rows {
+        let matches = |r: &GameRoute| {
+            r.source_id == "steam"
+                && r.owned == Some(true)
+                && r.installed != Some(true)
+                && non_empty(&r.app_id).is_some_and(|id| app_ids.contains(id))
+        };
+        if !row.routes.iter().any(matches) {
+            continue;
+        }
+        let keep = has_user_data(&row, &customized);
+        let mut updated = Vec::with_capacity(row.routes.len());
+        for route in &row.routes {
+            if !matches(route) {
+                updated.push(route.clone());
+            } else if keep {
+                updated.push(GameRoute {
+                    owned: None,
+                    ..route.clone()
+                });
+            }
+        }
+        if updated.is_empty() {
+            delete_game_rows(&tx, &row.id)?;
+            deleted += 1;
+        } else {
+            persist_game(
+                &tx,
+                &GamePatch {
+                    routes: Some(updated),
+                    ..GamePatch::new(row.id.clone())
+                },
+            )?;
+        }
+    }
+    tx.commit()?;
+    Ok(deleted)
+}
+
 pub fn add_tracked_playtime(
     db: &Connection,
     id: &str,
@@ -1959,6 +2022,97 @@ mod tests {
             install_states: Some(states),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn startup_cleanup_keeps_a_newly_stored_steam_owned_games_key() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn, None).unwrap();
+        let key = crate::secrets::STEAM_OWNED_API_KEY;
+        let id = crate::secrets::STEAM_OWNED_STEAM_ID;
+        write_secret(&conn, key, b"sealed key").unwrap();
+        write_secret(&conn, id, b"sealed id").unwrap();
+        crate::steam_owned::save_import_state(
+            &conn,
+            &crate::steam_owned::ImportState {
+                app_ids: vec!["10".into()],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        // Leftovers of the removed import, so the cleanup really runs (on an old schema too).
+        write_secret(&conn, "steam-api-key-dpapi", b"old").unwrap();
+        conn.execute(
+            "INSERT INTO library_connections(key,value) VALUES('main',?)",
+            [serde_json::json!({ "steamId": "76561190000000000" }).to_string()],
+        )
+        .unwrap();
+        for version in [0, SCHEMA_VERSION] {
+            conn.pragma_update(None, "user_version", version).unwrap();
+            migrate(&conn, None).unwrap();
+            assert_eq!(read_secret(&conn, "steam-api-key-dpapi").unwrap(), None);
+            assert_eq!(
+                read_secret(&conn, key).unwrap().as_deref(),
+                Some(&b"sealed key"[..])
+            );
+            assert_eq!(
+                read_secret(&conn, id).unwrap().as_deref(),
+                Some(&b"sealed id"[..])
+            );
+            assert_eq!(
+                crate::steam_owned::load_import_state(&conn)
+                    .unwrap()
+                    .app_ids,
+                ["10"]
+            );
+        }
+    }
+
+    #[test]
+    fn dropping_steam_owned_games_only_touches_the_listed_owned_routes() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        migrate(&conn, None).unwrap();
+        let owned = |app: &str| GameRoute {
+            owned: Some(true),
+            install_states: None,
+            ..route("steam", app, false)
+        };
+        for g in [
+            game("steam:1", "Owned only", vec![owned("1")]),
+            game("steam:2", "Favourite", vec![owned("2")]),
+            game("steam:3", "Installed", vec![route("steam", "3", true)]),
+            game("steam:4", "Not listed", vec![owned("4")]),
+            game(
+                "x",
+                "Two routes",
+                vec![owned("5"), route("epic", "five", true)],
+            ),
+        ] {
+            save_game(&conn, &GamePatch::from(&g)).unwrap();
+        }
+        conn.execute("UPDATE games SET favorite=1 WHERE id='steam:2'", [])
+            .unwrap();
+        let ids: HashSet<String> = ["1", "2", "3", "5"].map(String::from).into();
+        assert_eq!(drop_steam_owned(&mut conn, &ids).unwrap(), 1);
+        assert!(get_game(&conn, "steam:1").unwrap().is_none());
+        let fav = get_game(&conn, "steam:2").unwrap().unwrap();
+        assert_eq!(fav.routes[0].owned, None, "kept for the user's data");
+        assert!(fav.favorite);
+        assert_eq!(
+            get_game(&conn, "steam:3").unwrap().unwrap().routes[0],
+            route("steam", "3", true)
+        );
+        assert_eq!(
+            get_game(&conn, "steam:4").unwrap().unwrap().routes[0].owned,
+            Some(true)
+        );
+        let x = get_game(&conn, "x").unwrap().unwrap();
+        assert_eq!(x.routes.len(), 1);
+        assert_eq!(x.routes[0].source_id, "epic");
+        assert_eq!(
+            installed_steam_app_ids(&conn).unwrap(),
+            ["3".to_string()].into()
+        );
     }
 
     #[test]

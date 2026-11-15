@@ -8,8 +8,11 @@ use url::Url;
 pub const MAIN: &str = "main";
 pub const SETTINGS: &str = "settings";
 const PAGES: [&str; 3] = ["/", "/index.html", "/settings.html"];
-const EXTERNAL_HOSTS: [&str; 9] = [
+const EXTERNAL_HOSTS: [&str; 11] = [
     "playnite.link",
+    // Steam Web API key page, privacy settings and account page (owned-games setup).
+    "steamcommunity.com",
+    "store.steampowered.com",
     "steamgriddb.com",
     "www.steamgriddb.com",
     "dev.twitch.tv",
