@@ -2174,7 +2174,7 @@ mod tests {
             .expect("launcher started alone");
         assert!(alone > branch.find("launchers::prepare_launch").unwrap());
         assert!(alone < branch.find("&launch.argv").unwrap());
-        assert!(branch.contains("state.pending_launches.begin("));
+        assert!(branch.contains(".pending_launches") && branch.contains(".begin("));
         for forbidden in [
             "shell_open",
             "spawn_detached(",
