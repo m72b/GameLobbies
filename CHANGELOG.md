@@ -14,6 +14,7 @@ The first public release.
 - Custom launchers: your own launcher with its name, icon, colour, program and arguments, its own side-rail entry and library filter. Changes to its program or arguments are confirmed in a Windows dialog.
 - Custom launcher games folders: scan an app folder for PC games, shortcuts, emulators and ROMs in one go. Emulators are registered without duplicates, ROMs are matched to them (uncertain matches go to Review), games already in the library get an extra "Play from" route named after the launcher, and rescans never touch your titles, covers, favourites, notes or playtime.
 - Custom launchers can allow several target kinds (file, folder, identifier), and the program is optional: without one, games run directly with the launcher as their label.
+  - Note: older versions of Game Lobby treat a launcher's games folders as plain game folders (without the launcher's label or routes), so avoid going back to one after adding them. Launcher games folders, like other library folders, aren't included in backups: add them again after restoring one.
 - Storage view: install sizes per game, a total, and "Uninstall…" that hands off to the game's own launcher.
 - Recently added shelf for newly discovered games.
 - Library health: finds missing or moved files and duplicate games or launch routes, and helps repair them.
