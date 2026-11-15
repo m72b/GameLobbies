@@ -85,6 +85,46 @@ Each launcher appears in the side bar with its icon and colour and filters the l
 **Waiting for a launcher.** Some launchers need a while to start, sign in or accept being woken up. When you play a game through a custom launcher with a program and that program isn't running (checked by its exact path in the Windows process list), Game Lobby starts the launcher on its own, without the game, and shows **Waiting for …**. It shows when the launcher is running; press **Continue** once it is open and signed in, and the game starts through it. **Cancel** leaves the launcher open and starts nothing. The waiting launch lasts five minutes and can be continued once; after that, press **Play** again. When the launcher is already running, the game starts straight away. Stores and emulators start as before.
 
 
+### Launcher arguments
+
+The arguments are the command line after the launcher's program. Game Lobby splits them into pieces and starts the program with those pieces directly, one argument each. No shell is used.
+
+- The only placeholder is `{target}`. It must be an argument on its own, such as `--start {target}`. It can't be glued to other text (`--id={target}`, `-x{target}`, `@{target}`), and no other `{…}` text is allowed.
+- `{target}` becomes what the game uses, as one argument, whatever it contains:
+  - **File**: the game's full path, such as `D:\Games\Retro\Chrono.iso`.
+  - **Folder**: the game's full folder path, such as `D:\Games\Pac-Man`.
+  - **Identifier**: the identifier exactly as typed, such as `game-42`.
+- Without `{target}`, the target is added as the last argument.
+- Quotes only group text: `--name="My Game"` becomes `--name=My Game`. Backslashes are always literal, so `D:\Games` needs no escaping. An unclosed quote is refused. Pipes and `&&` don't work and aren't needed, because each argument is passed as it is.
+
+**Refused in arguments**, with the reason shown when you save:
+
+- Tabs, line breaks and other control characters.
+- `&`, `|`, `<`, `>`, `^`, `%` and the backtick, which only a shell would use.
+- Non-ASCII punctuation, such as curly quotes pasted from a web page. Letters and digits of any language are fine.
+- Options that let a program run other programs, load code or accept remote control. An option is refused when its name, without its leading `--`, `-` or `/` and in any letter case, starts with one of these: `inspect`, `remote-debugging`, `gpu-launcher`, `no-sandbox`, `load-extension`, `disable-web-security`, `renderer-cmd-prefix` (and any name containing `cmd-prefix`), `js-flags`, `browser-subprocess-path`, `proxy-server`, `proxy-pac-url`, `host-rules`, `host-resolver-rules`, `ignore-certificate-errors`, `disable-gpu-sandbox` and `require`. The parts after `=` are checked too.
+- Paths must stay inside the program's folder. An absolute path (`C:\…`) must be inside that folder. A relative path (`cores\x.dll`) must start with a letter, digit, `_` or `.`, and can't use `..`. Network paths, web addresses (`https://…`) and root-relative paths (`\x.dll`) are refused. Paths are also checked after `=`, `;` and `,`.
+
+**Limits**
+
+- Arguments: at most 2,048 characters and 128 pieces.
+- Program: a full path to an `.exe` on a local drive. `.bat`, `.cmd`, `.ps1`, network paths and relative paths are refused.
+- File or folder targets: full local paths that must still exist when the game starts. A `.lnk` or `.url` file is passed only if Game Lobby could start it itself: a plain shortcut to an `.exe`, a store link, or a shortcut you confirmed under **Review**.
+- Working folder: a full local path that must exist at launch. By default it is the program's folder.
+
+**Saving**
+
+- The **Arguments** box shows a **Preview** of the command line with a sample target. **Save** stays disabled while the preview is invalid.
+- Saving a new launcher, or changing its program, arguments, target kinds or working folder, opens a Windows confirmation, **Save this launcher?**. It lists the program, each argument on its own line (with `{target}` for the game), the working folder and the name. Name, icon and colour changes save without it.
+- With **No program**, there are no arguments and no working folder. Each game runs directly, as an ordinary game from the launcher's games folders, labelled with the launcher's name.
+- Launcher arguments apply to every game of that launcher. Launch options (see [Linked games, versions and launch options](#linked-games-versions-and-launch-options)) apply to one route, started from its own `.exe`.
+
+**Examples**
+
+- A launcher that opens a game file: program `ModHub.exe`, arguments `--open {target}`, target **File**. It runs `ModHub.exe --open D:\Games\Retro\Chrono.iso`.
+- A launcher that takes a game id: program `StoreHub.exe`, arguments `--launch {target}`, target **Identifier**, id `game-42`. It runs `StoreHub.exe --launch game-42`.
+- A fixed flag with a folder: program `ArcadeBox.exe`, arguments `--portable --folder {target}`, target **Folder**. It runs `ArcadeBox.exe --portable --folder D:\Arcade\Pac-Man`.
+
 ## Linked games, versions and launch options
 
 **Linking.** Two or more library entries can be one game with several ways to play it: the same game from two stores, or two editions or versions, even from the same store (for example Minecraft Java Edition and Minecraft Bedrock Edition, which both come from Xbox). On a game's page, open **⋯ → Link other games…**, select one or more entries and choose **Review link…**. The review lists every entry with its store, playtime and sessions and shows how the details that differ are resolved, with a choice for each: which entry is kept, the title (one of theirs or your own), the cover, the game page art (hero and logo), your score and notes, the IGDB details and favourite. It also lists the launch routes the linked game will have under **Play from**, with suggested names. Nothing is linked until you press **Link games**. Library health (**Settings → Review → Check library**) and folder scans only *suggest* likely duplicates (same title on the same system, same store id, same file); they never link anything on their own, and **Link…** on a suggestion opens the same review.
