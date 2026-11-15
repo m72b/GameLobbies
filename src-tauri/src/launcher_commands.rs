@@ -39,6 +39,18 @@ fn notify_library(app: &AppHandle, state: &AppState) {
     let _ = app.emit("library:changed", ());
 }
 
+/// Whether a launcher has games or games folders, and its own routes' targets (sorted), for the
+/// save checks that depend on them.
+fn launcher_usage(conn: &rusqlite::Connection, id: &str) -> anyhow::Result<(bool, Vec<String>)> {
+    let games = !launchers::games_of(conn, id)?.is_empty()
+        || roots::list(conn)?
+            .iter()
+            .any(|r| r.launcher_id.as_deref() == Some(id));
+    let mut targets = launchers::route_targets(conn, id)?;
+    targets.sort();
+    Ok((games, targets))
+}
+
 #[tauri::command]
 pub async fn launchers_list(state: State<'_, AppState>) -> CmdResult<Vec<CustomLauncher>> {
     list(&state)
@@ -71,18 +83,11 @@ pub async fn launchers_save(
     let icon_exists = |name: &str| icon_found && name == requested_icon;
     // Which target kinds the launcher's games use needs the filesystem (is a path a folder?):
     // read the targets, release the lock, then classify them.
-    let (has_games, targets) = match &id {
-        Some(id) => {
-            let conn = state.db.lock();
-            let games = !launchers::games_of(&conn, id).map_err(err)?.is_empty()
-                || roots::list(&conn)
-                    .map_err(err)?
-                    .iter()
-                    .any(|r| r.launcher_id.as_deref() == Some(id.as_str()));
-            (games, launchers::route_targets(&conn, id).map_err(err)?)
-        }
+    let usage = match &id {
+        Some(id) => launcher_usage(&state.db.lock(), id).map_err(err)?,
         None => (false, Vec::new()),
     };
+    let (has_games, targets) = usage.clone();
     let used_kinds = launchers::used_kinds(&targets);
     let (stored, accepted) = {
         let conn = state.db.lock();
@@ -120,6 +125,15 @@ pub async fn launchers_save(
         };
         if now != stored {
             return Err("The launcher changed in the meantime. Open it again and save.".into());
+        }
+        // Its games or folders may have changed too (a scan, Add game): the checks above relied
+        // on them.
+        if let Some(id) = &id {
+            if launcher_usage(&conn, id).map_err(err)? != usage {
+                return Err(
+                    "The launcher's games changed in the meantime. Open it again and save.".into(),
+                );
+            }
         }
         if stored.is_none() {
             if launchers::list(&conn).map_err(err)?.len() >= launchers::MAX_LAUNCHERS {
@@ -187,12 +201,21 @@ pub async fn launchers_remove(
 pub async fn launchers_browse_games_folder(
     window: WebviewWindow,
     state: State<'_, AppState>,
+    launcher_id: String,
 ) -> CmdResult<Option<String>> {
-    let chosen = pick_folder(&window)
+    let launcher_id = id_arg(&launcher_id)?;
+    let launcher = launchers::get(&state.db.lock(), &launcher_id)
+        .map_err(err)?
+        .ok_or("That launcher no longer exists.")?;
+    // The dialog names the launcher; the pick is only accepted for it (`launchers_add_folder`).
+    let title = format!("Games folder for {}", launcher.name);
+    let chosen = pick_folder_titled(&window, &title)
         .await
         .map(|p| p.to_string_lossy().into_owned());
     if let Some(path) = &chosen {
-        state.picks.remember(PickKind::LauncherGamesFolder, path);
+        state
+            .picks
+            .remember_for(PickKind::LauncherGamesFolder, path, &launcher_id);
     }
     Ok(chosen)
 }
@@ -209,8 +232,8 @@ pub async fn launchers_add_folder(
     let launcher_id = id_arg(&launcher_id)?;
     let picked = state
         .picks
-        .find(PickKind::LauncherGamesFolder, &path)
-        .ok_or("Choose the folder with Add folder… (it can't be typed in).")?;
+        .find_for(PickKind::LauncherGamesFolder, &path, &launcher_id)
+        .ok_or("Choose the folder with this launcher's Add folder… (it can't be typed in).")?;
     {
         let launcher = launchers::get(&state.db.lock(), &launcher_id)
             .map_err(err)?
@@ -227,7 +250,7 @@ pub async fn launchers_add_folder(
     }
     let guard = roots::RootGuard::from_environment(&state.data_dir);
     // Every filesystem check first, without the database lock.
-    let (display, key) = roots::prepare("games", &picked, &guard).map_err(err)?;
+    let (display, key) = roots::prepare_launcher_folder(&picked, &guard).map_err(err)?;
     roots::insert_for(
         &state.db.lock(),
         "games",
@@ -267,6 +290,19 @@ async fn pick_folder(window: &WebviewWindow) -> Option<PathBuf> {
         .dialog()
         .file()
         .set_parent(window)
+        .pick_folder(move |path| {
+            let _ = tx.send(path);
+        });
+    rx.await.ok().flatten().and_then(|p| p.into_path().ok())
+}
+
+async fn pick_folder_titled(window: &WebviewWindow, title: &str) -> Option<PathBuf> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    window
+        .dialog()
+        .file()
+        .set_parent(window)
+        .set_title(title)
         .pick_folder(move |path| {
             let _ = tx.send(path);
         });

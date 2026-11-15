@@ -79,7 +79,7 @@ const api: LobbyAPI = {
     browseFolder: () => call('launchers_browse_folder'),
     chooseIcon: () => call('launchers_choose_icon'),
     addGame: (launcherId, title, identifier, kind) => call('launchers_add_game', { launcherId, title, identifier, kind: kind ?? null }),
-    browseGamesFolder: () => call('launchers_browse_games_folder'),
+    browseGamesFolder: launcherId => call('launchers_browse_games_folder', { launcherId }),
     addFolder: (launcherId, path) => call('launchers_add_folder', { launcherId, path }),
     onChanged: callback => subscribe('launchers:changed', () => callback())
   },

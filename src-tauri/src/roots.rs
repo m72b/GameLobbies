@@ -383,6 +383,21 @@ pub fn prepare(kind: &str, raw: &str, guard: &RootGuard) -> Result<(String, Stri
     Ok((display, key))
 }
 
+/// [`prepare`] for a launcher's games folder: a `games` root that also may not be, contain or
+/// sit in Downloads, the Desktop or a Temp folder (like an emulator root), because its scan adds
+/// the programs, shortcuts and emulators it finds there. Checked on the path as chosen and where
+/// it really is.
+pub fn prepare_launcher_folder(raw: &str, guard: &RootGuard) -> Result<(String, String)> {
+    let (display, key) = prepare("games", raw, guard)?;
+    let typed = normalize_root_path(raw, guard)?.1;
+    for k in [typed.as_str(), key.as_str()] {
+        if guard.check_kind(k, "emulators").is_err() {
+            bail!("A launcher's games folder can't be in Downloads, on the Desktop or in a Temp folder (or contain one). Move the games to a folder of their own first.");
+        }
+    }
+    Ok((display, key))
+}
+
 /// Stores a prepared root after checking it against the stored ones.
 pub fn insert(conn: &Connection, kind: &str, display: &str, key: &str) -> Result<LibraryRoot> {
     insert_for(conn, kind, display, key, None)
@@ -641,6 +656,30 @@ mod tests {
         // The real environment lists Temp: the test folder itself is refused for emulators.
         let real = RootGuard::from_environment(Path::new(r"C:\NoSuchGameLobbyData"));
         assert!(prepare("emulators", &fine.to_string_lossy(), &real).is_err());
+    }
+
+    #[test]
+    fn launcher_folders_refuse_downloads_desktop_and_temp() {
+        let dir = TempDir::new("roots-launcher-guard");
+        let downloads = dir.dir("me/Downloads");
+        let inside = dir.dir("me/Downloads/Arcade");
+        let desktop = dir.dir("me/Desktop");
+        let fine = dir.dir("me/Games/Arcade");
+        let key = |p: &Path| normalize_path(&p.to_string_lossy()).unwrap();
+        let g = RootGuard {
+            emulator_trees: vec![key(&downloads), key(&desktop)],
+            ..Default::default()
+        };
+        for bad in [&downloads, &inside, &desktop, &dir.path().join("me")] {
+            let e = prepare_launcher_folder(&bad.to_string_lossy(), &g).unwrap_err();
+            assert!(e.to_string().contains("Downloads"), "{bad:?}: {e}");
+            // A plain games folder there is still fine.
+            assert!(prepare("games", &bad.to_string_lossy(), &g).is_ok());
+        }
+        assert!(prepare_launcher_folder(&fine.to_string_lossy(), &g).is_ok());
+        // The real environment lists Temp: the test folder itself is refused.
+        let real = RootGuard::from_environment(Path::new(r"C:\NoSuchGameLobbyData"));
+        assert!(prepare_launcher_folder(&fine.to_string_lossy(), &real).is_err());
     }
 
     #[cfg(windows)]

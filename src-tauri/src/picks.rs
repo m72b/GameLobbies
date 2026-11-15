@@ -49,6 +49,8 @@ struct Pick {
     key: String,
     path: String,
     at: Instant,
+    /// What the pick was made for (a launcher's games folder: that launcher's id).
+    owner: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -68,6 +70,16 @@ impl PickedPaths {
     }
 
     fn remember_at(&self, kind: PickKind, path: &str, at: Instant) {
+        self.remember_owned_at(kind, path, None, at);
+    }
+
+    /// [`remember`](Self::remember) for one owner (a launcher's games folder is picked for that
+    /// launcher): only [`find_for`](Self::find_for) with the same owner accepts it.
+    pub fn remember_for(&self, kind: PickKind, path: &str, owner: &str) {
+        self.remember_owned_at(kind, path, Some(owner.to_string()), Instant::now());
+    }
+
+    fn remember_owned_at(&self, kind: PickKind, path: &str, owner: Option<String>, at: Instant) {
         let mut picks = self.lock();
         picks.retain(|p| p.kind != kind);
         if let Some(key) = normalize_path(path) {
@@ -76,8 +88,21 @@ impl PickedPaths {
                 key,
                 path: path.to_string(),
                 at,
+                owner,
             });
         }
+    }
+
+    /// [`find`](Self::find) for a pick remembered for `owner` ([`remember_for`](Self::remember_for)).
+    pub fn find_for(&self, kind: PickKind, raw: &str, owner: &str) -> Option<String> {
+        let key = normalize_path(raw)?;
+        let now = Instant::now();
+        let mut picks = self.lock();
+        picks.retain(|p| now.saturating_duration_since(p.at) < PICK_LIFETIME);
+        picks
+            .iter()
+            .find(|p| p.kind == kind && p.key == key && p.owner.as_deref() == Some(owner))
+            .map(|p| p.path.clone())
     }
 
     /// The picked path (as the picker returned it) that `raw` names, when it is the latest
@@ -92,7 +117,7 @@ impl PickedPaths {
         picks.retain(|p| now.saturating_duration_since(p.at) < PICK_LIFETIME);
         picks
             .iter()
-            .find(|p| p.kind == kind && p.key == key)
+            .find(|p| p.kind == kind && p.key == key && p.owner.is_none())
             .map(|p| p.path.clone())
     }
 
@@ -107,7 +132,7 @@ impl PickedPaths {
         picks.retain(|p| now.saturating_duration_since(p.at) < PICK_LIFETIME);
         picks
             .iter()
-            .find(|p| p.kind == kind)
+            .find(|p| p.kind == kind && p.owner.is_none())
             .map(|p| p.path.clone())
     }
 
@@ -198,10 +223,24 @@ mod tests {
     #[test]
     fn launcher_games_folder_picks_are_their_own_kind() {
         let picks = PickedPaths::default();
+        picks.remember_for(PickKind::LauncherGamesFolder, r"D:\Arcade", "arcade");
+        // Only for the launcher it was picked for.
+        assert!(picks
+            .find_for(PickKind::LauncherGamesFolder, r"d:\arcade", "arcade")
+            .is_some());
+        assert!(picks
+            .find_for(PickKind::LauncherGamesFolder, r"D:\Arcade", "other")
+            .is_none());
+        assert!(picks
+            .find(PickKind::LauncherGamesFolder, r"D:\Arcade")
+            .is_none());
+        assert!(picks.latest(PickKind::LauncherGamesFolder).is_none());
+        // An unbound pick never matches a launcher.
         picks.remember(PickKind::LauncherGamesFolder, r"D:\Arcade");
         assert!(picks
-            .find(PickKind::LauncherGamesFolder, r"d:\arcade")
-            .is_some());
+            .find_for(PickKind::LauncherGamesFolder, r"D:\Arcade", "arcade")
+            .is_none());
+        picks.remember_for(PickKind::LauncherGamesFolder, r"D:\Arcade", "arcade");
         // Never a library folder, a working folder or an executable.
         for other in [
             PickKind::GamesFolder,

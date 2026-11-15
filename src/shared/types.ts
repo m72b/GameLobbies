@@ -284,11 +284,11 @@ export interface AddedLauncherGame { gameId: string; games: Game[] }
  * - addGame(launcherId, title, identifier, kind): `kind` is what this game uses (needed when the
  *   launcher allows several); files and folders open a native picker (pass `identifier: null`;
  *   null result = cancelled); identifiers are typed. Without a program a game file is picked.
- * - browseGamesFolder / addFolder(launcherId, path): pick a games folder natively, then add it
+ * - browseGamesFolder(launcherId) / addFolder(launcherId, path): pick a games folder natively for that launcher, then add it
  *   (only the path just picked is accepted); returns every library root. Scan it with
  *   `roots.rescan(id)`; remove it with `roots.remove(id, mode)`.
  */
-export interface LaunchersAPI { list(): Promise<CustomLauncher[]>; save(launcher: LauncherInput): Promise<CustomLauncher[]>; remove(id: string, mode: 'keep' | 'remove'): Promise<CustomLauncher[]>; browseExecutable(): Promise<string | null>; browseFolder(): Promise<string | null>; chooseIcon(): Promise<string | null>; addGame(launcherId: string, title: string, identifier: string | null, kind?: LauncherTargetKind): Promise<AddedLauncherGame | null>; browseGamesFolder(): Promise<string | null>; addFolder(launcherId: string, path: string): Promise<LibraryRoot[]>; onChanged(callback: () => void): () => void }
+export interface LaunchersAPI { list(): Promise<CustomLauncher[]>; save(launcher: LauncherInput): Promise<CustomLauncher[]>; remove(id: string, mode: 'keep' | 'remove'): Promise<CustomLauncher[]>; browseExecutable(): Promise<string | null>; browseFolder(): Promise<string | null>; chooseIcon(): Promise<string | null>; addGame(launcherId: string, title: string, identifier: string | null, kind?: LauncherTargetKind): Promise<AddedLauncherGame | null>; browseGamesFolder(launcherId: string): Promise<string | null>; addFolder(launcherId: string, path: string): Promise<LibraryRoot[]>; onChanged(callback: () => void): () => void }
 export interface EmulatorsAPI { list(): Promise<EmulatorProfile[]>; save(profile: EmulatorProfile): Promise<EmulatorProfile[]>; remove(id: string): Promise<EmulatorProfile[]>; scan(): Promise<LocalScanSummary>; catalog(): Promise<EmulatorCatalog>; ignored(): Promise<IgnoredPath[]>; unignore(path: string): Promise<IgnoredPath[]>; browseExecutable(): Promise<string | null> }
 /**
  * Scan review.

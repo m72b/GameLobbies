@@ -129,7 +129,7 @@ function GamesFolders({ launcher, roots, scan, onRoots, onError }: { launcher: C
   }
   const add = async () => {
     try {
-      const chosen = await window.lobby.launchers.browseGamesFolder()
+      const chosen = await window.lobby.launchers.browseGamesFolder(launcher.id)
       if (!chosen) return
       const next = await window.lobby.launchers.addFolder(launcher.id, chosen)
       onRoots(next)
