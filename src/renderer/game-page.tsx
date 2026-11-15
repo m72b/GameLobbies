@@ -7,7 +7,7 @@ import { defaultGamePageCustom } from '../shared/defaults'
 import { coverLayerStyle, coverStyle } from './cover'
 import { CoverLayer, useCover } from './poster'
 import { GenreBlock, IgdbAbout, IgdbPicker, IgdbRatings, useIgdb } from './igdb-details'
-import { isEmulatorRoute, routeLabel, routeTitle, withRouteName } from '../shared/routes'
+import { argsSupport, argsText, isEmulatorRoute, routeLabel, routeTitle, withRouteName } from '../shared/routes'
 import { launcherOfRoute, playLauncher } from '../shared/launchers'
 import { LauncherBlock } from './launcher-assign'
 import { ImageWall, useScreenshots } from './image-wall'
@@ -16,8 +16,8 @@ import { ControllerBadge, ControllerBlock, useGameInput } from './controller-inf
 import { SessionHistory } from './session-history'
 import { formatRange } from '../shared/sessions'
 import { elapsedSeconds, formatClock, formatDate, formatSession, formatTime, formatTotal, useNow } from './format'
-import { RouteToolPanel, type RouteTool } from './route-tools'
-import type { CustomLauncher, EmulatorCatalog, EmulatorProfile, Game, GamePageArt, GameRoute, LauncherTargetKind, PlaySession, PlayStats, RunningGame, Settings, UnlinkPreview } from '../shared/types'
+import { LaunchOptionsDialog, RouteToolPanel, type RouteTool } from './route-tools'
+import type { ArgsPreview, CustomLauncher, EmulatorCatalog, EmulatorProfile, Game, GamePageArt, GameRoute, LauncherTargetKind, PlaySession, PlayStats, RunningGame, Settings, UnlinkPreview } from '../shared/types'
 
 export interface GamePageActions {
   back(): void
@@ -31,8 +31,8 @@ export interface GamePageActions {
   openFolder(game: Game): void
   remove(game: Game): void
   setEmulator(game: Game, routeIndex: number, emulatorId: string | null): Promise<void>
-  /** Lists the game under a custom launcher (Rust confirms a new launch route natively). */
-  assignLauncher(game: Game, launcherId: string, routeIndex?: number, kind?: LauncherTargetKind): Promise<void>
+  /** Lists the game under a custom launcher, optionally with launch options text (Rust checks it and confirms the new launch route natively, in one dialog). */
+  assignLauncher(game: Game, launcherId: string, routeIndex?: number, kind?: LauncherTargetKind, options?: string): Promise<void>
   /** Removes only what `assignLauncher` added. */
   unassignLauncher(game: Game, launcherId: string): Promise<void>
   /** Names a route (display only); empty clears it. */
@@ -41,6 +41,8 @@ export interface GamePageActions {
   setRouteArgs(game: Game, routeIndex: number, args: string): Promise<void>
   /** The route's stored launch options need confirming before they run. */
   routeArgsPending(game: Game, routeIndex: number): Promise<boolean>
+  /** Checks launch options text for a route without saving (what would run, or the reason it is refused). */
+  routeArgsCheck(game: Game, routeIndex: number, args: string): Promise<ArgsPreview>
   unlinkPreview(game: Game, routeIndex: number): Promise<UnlinkPreview>
   /** Splits a route (and the routes that came in with it) off into its own game. */
   unlink(game: Game, routeIndex: number): Promise<void>
@@ -63,6 +65,10 @@ export function GamePage({ game, index, settings, launchers, running, libraryVer
   const [igdbPicking, setIgdbPicking] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
   const [tool, setTool] = useState<{ index: number; tool: RouteTool } | null>(null)
+  const [optionsOpen, setOptionsOpen] = useState(false)
+  const [argsPending, setArgsPending] = useState(false)
+  const [argsError, setArgsError] = useState('')
+  const [argsBusy, setArgsBusy] = useState(false)
   const toggleTool = (index: number, next: RouteTool) => setTool(current => current && current.index === index && current.tool === next ? null : { index, tool: next })
   const { view: igdb, setView: setIgdb } = useIgdb(game.id)
   const { shots, setShots } = useScreenshots(game.id)
@@ -76,6 +82,24 @@ export function GamePage({ game, index, settings, launchers, running, libraryVer
   const defaultRoute = useMemo(() => Math.max(0, game.routes.findIndex(route => route.installed)), [game.id, routesKey]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { setMenuOpen(false); setCustomizing(false); setIgdbPicking(false) }, [game.id])
   useEffect(() => { setRouteIdx(defaultRoute); setTool(null) }, [game.id, routesKey, defaultRoute])
+  // Whether the chosen route's stored launch options need confirming before Play uses them (Rust
+  // decides: they came from a backup or an older version, or the program or command line changed).
+  const chosen = game.routes[routeIdx]
+  useEffect(() => {
+    setArgsError('')
+    if (!chosen?.launchArgs) { setArgsPending(false); return }
+    let live = true
+    actions.routeArgsPending(game, routeIdx).then(next => { if (live) setArgsPending(next) }).catch(() => { if (live) setArgsPending(false) })
+    return () => { live = false }
+  }, [game.id, routeIdx, chosen?.sourceId, chosen?.launchTarget, chosen?.launchArgs, launchers, libraryVersion]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setOptionsOpen(false) }, [game.id, routeIdx])
+  const confirmArgs = async () => {
+    if (!chosen) return
+    setArgsBusy(true); setArgsError('')
+    try { await actions.setRouteArgs(game, routeIdx, argsText(chosen.launchArgs)); setArgsPending(false) }
+    catch (caught) { setArgsError(caught instanceof Error ? caught.message : 'Could not confirm the launch options') }
+    finally { setArgsBusy(false) }
+  }
 
   useEffect(() => {
     let live = true
@@ -174,16 +198,31 @@ export function GamePage({ game, index, settings, launchers, running, libraryVer
           : <button className="gp-play" onClick={() => actions.play(game, routeIdx)} title={route ? 'Play from ' + labelTitle(route) : undefined}><Play size={18} fill="currentColor" /> Play{playVia
             ? <span className="gp-play-via"><LauncherIcon launcher={playVia} size={12} /> {route ? label(route) : playVia.name}</span>
             : route && (game.routes.length > 1 || route.name) && <span className="gp-play-via">{label(route)}</span>}</button>}
-      {game.routes.length > 0 && <label className="gp-route">
-        <span className="gp-route-label">Play from</span>
-        <span className="gp-route-select">
-          {route && <RouteIcon route={route} launchers={launchers} size={14} />}
-          <select value={routeIdx} onChange={event => setRouteIdx(Number(event.target.value))} aria-label="Play from">
-            {game.routes.map((item, i) => <option key={item.sourceId + '-' + i} value={i} title={labelTitle(item)}>{label(item)}{item.installed ? '' : ' (not installed)'}</option>)}
-          </select>
-          <ChevronDown size={13} />
-        </span>
-      </label>}
+      {game.routes.length > 0 && <div className="gp-route">
+        <label className="gp-route-pick">
+          <span className="gp-route-label">Play from</span>
+          <span className="gp-route-select">
+            {route && <RouteIcon route={route} launchers={launchers} size={14} />}
+            <select value={routeIdx} onChange={event => setRouteIdx(Number(event.target.value))} aria-label="Play from">
+              {game.routes.map((item, i) => <option key={item.sourceId + '-' + i} value={i} title={labelTitle(item)}>{label(item)}{item.installed ? '' : ' (not installed)'}</option>)}
+            </select>
+            <ChevronDown size={13} />
+          </span>
+        </label>
+        {route && argsSupport(route, launchers).ok && <div className="gp-route-options">
+          {route.launchArgs
+            ? <span className="gp-options-text" title={argsText(route.launchArgs)}>Options: <code>{argsText(route.launchArgs)}</code></span>
+            : null}
+          {route.launchArgs && argsPending && <><span className="gp-options-pending">Needs confirmation</span><button type="button" className="gp-options-button strong" disabled={argsBusy} onClick={() => void confirmArgs()}>Confirm…</button></>}
+          <button type="button" className="gp-options-button" onClick={() => setOptionsOpen(true)}>{route.launchArgs ? 'Edit' : <><SlidersHorizontal size={11} /> Launch options</>}</button>
+        </div>}
+        {argsError && <div className="gp-options-error" role="alert">{argsError}</div>}
+      </div>}
+      {optionsOpen && route && (() => {
+        const support = argsSupport(route, launchers)
+        return support.ok && <LaunchOptionsDialog key={routeIdx + '|' + route.launchTarget} title={game.title} routeLabel={label(route)} route={route} support={support} pending={argsPending}
+          onSave={args => actions.setRouteArgs(game, routeIdx, args)} onCheck={args => actions.routeArgsCheck(game, routeIdx, args)} onClose={() => setOptionsOpen(false)} />
+      })()}
       <div className="gp-stats">
         <div className="gp-stat"><span>Last played</span><b>{formatDate(lastPlayed)}</b></div>
         <div className="gp-stat"><span>Play time</span><b>{formatTotal(totalSeconds)}</b></div>
@@ -254,8 +293,8 @@ export function GamePage({ game, index, settings, launchers, running, libraryVer
                 {game.routes.length > 1 && <button type="button" title="Unlink into its own game" aria-label={'Unlink ' + label(item)} onClick={() => toggleTool(i, 'unlink')}><Unlink size={12} /></button>}
               </span>
             </div>
-            {tool && tool.index === i && <RouteToolPanel key={tool.tool + i} tool={tool.tool} route={item} canUnlink={game.routes.length > 1}
-              onRename={name => actions.renameRoute(game, i, name)} onArgs={args => actions.setRouteArgs(game, i, args)} onArgsPending={() => actions.routeArgsPending(game, i)}
+            {tool && tool.index === i && <RouteToolPanel key={tool.tool + i} tool={tool.tool} route={item} launchers={launchers} canUnlink={game.routes.length > 1}
+              onRename={name => actions.renameRoute(game, i, name)} onArgs={args => actions.setRouteArgs(game, i, args)} onArgsPending={() => actions.routeArgsPending(game, i)} onArgsCheck={args => actions.routeArgsCheck(game, i, args)}
               onUnlinkPreview={() => actions.unlinkPreview(game, i)} onUnlink={() => actions.unlink(game, i)} onClose={() => setTool(null)} />}
           </div>)}
           {game.routes.map((item, i) => {
@@ -278,7 +317,7 @@ export function GamePage({ game, index, settings, launchers, running, libraryVer
           })}
           {emuError && <div className="form-error" role="alert">{emuError}</div>}
         </div>
-        <LauncherBlock game={game} launchers={launchers} libraryVersion={libraryVersion} onAssign={(launcherId, routeIndex, kind) => actions.assignLauncher(game, launcherId, routeIndex, kind)} onUnassign={launcherId => actions.unassignLauncher(game, launcherId)} />
+        <LauncherBlock game={game} launchers={launchers} libraryVersion={libraryVersion} onAssign={(launcherId, routeIndex, kind, options) => actions.assignLauncher(game, launcherId, routeIndex, kind, options)} onUnassign={launcherId => actions.unassignLauncher(game, launcherId)} />
         <GenreBlock game={game} view={igdb} />
         <YourScore gameId={game.id} />
         <IgdbRatings view={igdb} />

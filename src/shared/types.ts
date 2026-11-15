@@ -303,16 +303,22 @@ export interface AssignmentOption { launcherId: string; listed: boolean; assigne
  * within a few minutes) or `cancelLaunch(pendingId)`.
  */
 export type LaunchOutcome = { status: 'started' } | { status: 'waiting'; pendingId: string; launcherId: string; launcherName: string }
+/** What launch options would run (from Rust's checks; nothing saved): the program, the whole argument list and the working folder. Empty for empty text. */
+export interface ArgsPreview { program: string; argv: string[]; cwd: string }
 /** `pending`: the launch still waits; `launcherRunning`: its launcher's program is running now. */
 export interface PendingLaunchStatus { pending: boolean; launcherRunning: boolean }
 /**
  * - assignments(gameId): every launcher as seen from that game's page.
- * - assign(gameId, launcherId, routeIndex?, kind?): lists the game under the launcher. With a
- *   program, Play then runs it through the launcher with the chosen target (a native dialog asks
- *   first; rejects when cancelled); the game's own routes stay. Returns the library.
+ * - assign(gameId, launcherId, routeIndex?, kind?, options?): lists the game under the launcher.
+ *   With a program, Play then runs it through the launcher with the chosen target and the
+ *   optional launch options text (Rust checks it; one native dialog shows everything first;
+ *   rejects when cancelled or refused, with the reason); the game's own routes stay. Returns the
+ *   library.
+ * - assignCheck(gameId, launcherId, routeIndex?, kind?, options): checks launch options for an
+ *   assignment without saving: what would run, or rejects with the reason.
  * - unassign(gameId, launcherId): removes only what `assign` added. Returns the library.
  */
-export interface LauncherAssignAPI { assignments(gameId: string): Promise<AssignmentOption[]>; assign(gameId: string, launcherId: string, routeIndex?: number, kind?: LauncherTargetKind): Promise<Game[]>; unassign(gameId: string, launcherId: string): Promise<Game[]> }
+export interface LauncherAssignAPI { assignments(gameId: string): Promise<AssignmentOption[]>; assign(gameId: string, launcherId: string, routeIndex?: number, kind?: LauncherTargetKind, options?: string): Promise<Game[]>; assignCheck(gameId: string, launcherId: string, routeIndex: number | undefined, kind: LauncherTargetKind | undefined, options: string): Promise<ArgsPreview>; unassign(gameId: string, launcherId: string): Promise<Game[]> }
 export interface LaunchersAPI extends LauncherAssignAPI { list(): Promise<CustomLauncher[]>; save(launcher: LauncherInput): Promise<CustomLauncher[]>; remove(id: string, mode: 'keep' | 'remove'): Promise<CustomLauncher[]>; browseExecutable(): Promise<string | null>; browseFolder(): Promise<string | null>; chooseIcon(): Promise<string | null>; addGame(launcherId: string, title: string, identifier: string | null, kind?: LauncherTargetKind): Promise<AddedLauncherGame | null>; browseGamesFolder(launcherId: string): Promise<string | null>; addFolder(launcherId: string, path: string): Promise<LibraryRoot[]>; onChanged(callback: () => void): () => void }
 export interface EmulatorsAPI { list(): Promise<EmulatorProfile[]>; save(profile: EmulatorProfile): Promise<EmulatorProfile[]>; remove(id: string): Promise<EmulatorProfile[]>; scan(): Promise<LocalScanSummary>; catalog(): Promise<EmulatorCatalog>; ignored(): Promise<IgnoredPath[]>; unignore(path: string): Promise<IgnoredPath[]>; browseExecutable(): Promise<string | null> }
 /**
@@ -605,7 +611,7 @@ export interface StorageProgress { done: number; total: number; title: string }
 export interface RecentGame { gameId: string; addedAt: number }
 export interface LobbyAPI {
   window: { minimize(): Promise<void>; toggleMaximize(): Promise<void>; close(): Promise<void>; isMaximized(): Promise<boolean> }
-  library: { list(): Promise<Game[]>; scan(): Promise<LibraryStats>; launch(id: string, route?: number): Promise<LaunchOutcome>; continueLaunch(id: string, pendingId: string): Promise<LaunchOutcome>; cancelLaunch(pendingId: string): Promise<void>; pendingLaunch(pendingId: string): Promise<PendingLaunchStatus>; save(game: Partial<Game> & { id: string }): Promise<Game[]>; remove(id: string): Promise<Game[]>; linkPreview(gameIds: string[], title?: string): Promise<LinkPreview>; link(gameIds: string[], choices: LinkChoices, reviewId?: string): Promise<Game[]>; unlinkPreview(gameId: string, route: RouteRef): Promise<UnlinkPreview>; unlink(gameId: string, route: RouteRef): Promise<{ gameId: string; games: Game[] }>; renameRoute(gameId: string, route: RouteRef, name: string): Promise<Game[]>; setRouteArgs(gameId: string, route: RouteRef, args: string): Promise<Game[]>; /** The route's stored launch options won't run until they are confirmed again (they came from a backup or an older version, or its program changed). */ routeArgsPending(gameId: string, route: RouteRef): Promise<boolean>; resetPlaytime(): Promise<Game[]>; setCover(id: string, dataUrl: string | null): Promise<Game[]>; chooseCover(id: string): Promise<Game[]>; chooseInstallFolder(id: string): Promise<void>; add(title: string, target: string): Promise<Game[]>; stores(): Promise<StoreStatus[]>; onChanged(callback: () => void): () => void
+  library: { list(): Promise<Game[]>; scan(): Promise<LibraryStats>; launch(id: string, route?: number): Promise<LaunchOutcome>; continueLaunch(id: string, pendingId: string): Promise<LaunchOutcome>; cancelLaunch(pendingId: string): Promise<void>; pendingLaunch(pendingId: string): Promise<PendingLaunchStatus>; save(game: Partial<Game> & { id: string }): Promise<Game[]>; remove(id: string): Promise<Game[]>; linkPreview(gameIds: string[], title?: string): Promise<LinkPreview>; link(gameIds: string[], choices: LinkChoices, reviewId?: string): Promise<Game[]>; unlinkPreview(gameId: string, route: RouteRef): Promise<UnlinkPreview>; unlink(gameId: string, route: RouteRef): Promise<{ gameId: string; games: Game[] }>; renameRoute(gameId: string, route: RouteRef, name: string): Promise<Game[]>; setRouteArgs(gameId: string, route: RouteRef, args: string): Promise<Game[]>; /** The route's stored launch options won't run until they are confirmed again (they came from a backup or an older version, or its program changed). */ routeArgsPending(gameId: string, route: RouteRef): Promise<boolean>; /** Checks launch options text for a route without saving: what would run, or rejects with the reason. */ routeArgsCheck(gameId: string, route: RouteRef, args: string): Promise<ArgsPreview>; resetPlaytime(): Promise<Game[]>; setCover(id: string, dataUrl: string | null): Promise<Game[]>; chooseCover(id: string): Promise<Game[]>; chooseInstallFolder(id: string): Promise<void>; add(title: string, target: string): Promise<Game[]>; stores(): Promise<StoreStatus[]>; onChanged(callback: () => void): () => void
     /** Sets the emulator of a `rom` route (`routeIndex` into `game.routes`); `null` = automatic. The profile must exist; other route kinds are rejected. Returns the library. */
     setEmulator(gameId: string, routeIndex: number, emulatorId: string | null): Promise<Game[]>
     /**

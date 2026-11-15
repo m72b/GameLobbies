@@ -37,15 +37,25 @@ fn is_app_page(url: &Url) -> bool {
     local && PAGES.contains(&url.path())
 }
 
-fn open_if_allowed_external(url: &Url) {
-    let allowed = url.scheme() == "https"
+/// The user guide, the only page of github.com that the app's links may open (any section of
+/// it). Exact path, no query: the rest of github.com stays closed.
+pub const USER_GUIDE: &str = "https://github.com/m72b/GameLobby/blob/main/docs/USER-GUIDE.md";
+
+fn is_allowed_external(url: &Url) -> bool {
+    let plain = url.scheme() == "https"
         && url.username().is_empty()
         && url.password().is_none()
-        && url.port().is_none()
-        && url
-            .host_str()
-            .is_some_and(|h| EXTERNAL_HOSTS.contains(&h.to_lowercase().as_str()));
-    if allowed {
+        && url.port().is_none();
+    let host = url.host_str().map(str::to_lowercase);
+    let listed = host.as_deref().is_some_and(|h| EXTERNAL_HOSTS.contains(&h));
+    let guide = host.as_deref() == Some("github.com")
+        && url.query().is_none()
+        && Some(url.path()) == Url::parse(USER_GUIDE).ok().as_ref().map(Url::path);
+    plain && (listed || guide)
+}
+
+fn open_if_allowed_external(url: &Url) {
+    if is_allowed_external(url) {
         let target = url.to_string();
         tauri::async_runtime::spawn(async move {
             let _ = crate::platform::shell_open(target).await;
@@ -126,5 +136,31 @@ pub fn focus_main(app: &AppHandle) -> tauri::Result<()> {
             window.set_focus()
         }
         None => create(app, false),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_the_user_guide_opens_on_github() {
+        let ok = |u: &str| is_allowed_external(&Url::parse(u).unwrap());
+        assert!(ok(USER_GUIDE));
+        assert!(ok(&format!("{USER_GUIDE}#launch-options-on-a-launcher")));
+        assert!(ok("https://www.steamgriddb.com/profile/preferences/api"));
+        for bad in [
+            "https://github.com/m72b/GameLobby",
+            "https://github.com/evil/repo/blob/main/docs/USER-GUIDE.md",
+            "https://github.com/m72b/GameLobby/blob/main/docs/USER-GUIDE.md?x=1",
+            "https://github.com/m72b/GameLobby/blob/main/docs/USER-GUIDE.md/../../x",
+            "http://github.com/m72b/GameLobby/blob/main/docs/USER-GUIDE.md",
+            "https://user@github.com/m72b/GameLobby/blob/main/docs/USER-GUIDE.md",
+            "https://github.com:444/m72b/GameLobby/blob/main/docs/USER-GUIDE.md",
+            "https://github.com.evil.example/m72b/GameLobby/blob/main/docs/USER-GUIDE.md",
+            "https://raw.githubusercontent.com/m72b/GameLobby/main/docs/USER-GUIDE.md",
+        ] {
+            assert!(!ok(bad), "{bad}");
+        }
     }
 }

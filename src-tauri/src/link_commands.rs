@@ -288,6 +288,56 @@ pub async fn library_route_args(
     Ok(games)
 }
 
+/// What launch options would run, for the editor to show while the user types: the program,
+/// the whole argv and the working folder. Nothing is saved or confirmed here.
+#[derive(Serialize, Default, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ArgsPreview {
+    pub program: String,
+    pub argv: Vec<String>,
+    pub cwd: String,
+}
+
+impl ArgsPreview {
+    pub fn of(host: &links::ArgsHost, options: Option<&[String]>) -> Self {
+        ArgsPreview {
+            program: host.program.clone(),
+            argv: host.argv(options.unwrap_or_default()),
+            cwd: host.cwd.clone(),
+        }
+    }
+}
+
+/// Checks launch options text for one route without saving anything (the same checks as
+/// [`library_route_args`]): the reason it would be refused, or what it would run. Empty text
+/// checks nothing.
+#[tauri::command]
+pub async fn library_route_args_check(
+    state: State<'_, AppState>,
+    game_id: String,
+    route: Value,
+    args: String,
+) -> CmdResult<ArgsPreview> {
+    let game_id = game_arg(&game_id)?;
+    let route = route_arg(route)?;
+    if args.chars().count() > links::MAX_ARGS_CHARS {
+        return Err(format!(
+            "Launch options can be at most {} characters.",
+            links::MAX_ARGS_CHARS
+        ));
+    }
+    if args.trim().is_empty() {
+        return Ok(ArgsPreview::default());
+    }
+    let conn = state.db.lock();
+    let game = db::get_game(&conn, &game_id)
+        .map_err(err)?
+        .ok_or("Game not found.")?;
+    let stored = route.find(&game).map_err(err)?;
+    let (host, argv) = links::prepare_route_args(&conn, stored, &args).map_err(err)?;
+    Ok(ArgsPreview::of(&host, argv.as_deref()))
+}
+
 /// Whether the launch options stored on `route` need confirming on the game page before they
 /// run (they came from a backup or an older version, or the route's program, its launcher's
 /// command line or working folder changed).

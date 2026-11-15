@@ -88,3 +88,19 @@ test('stored launch options become editable text', () => {
   assert.equal(argsText('["say \\"hi\\""]'), "'say \"hi\"'")
   assert.equal(argsText('-old style'), '-old style')
 })
+
+test('launcher routes take launch options only when their launcher has a program', () => {
+  const route = { sourceId: 'launcher:hub', store: 'Custom', launchTarget: 'D:\\Games\\hk.exe' }
+  const hub = { id: 'hub', name: 'Hub', executable: 'D:\\Launchers\\Hub\\Hub.exe' }
+  assert.deepEqual(argsSupport(route, [hub]), { ok: true, launcher: 'Hub' })
+  const label = argsSupport(route, [{ ...hub, executable: '' }])
+  assert.equal(label.ok, false)
+  assert.match(label.reason, /no program/)
+  const gone = argsSupport(route, [{ ...hub, id: 'other' }])
+  assert.equal(gone.ok, false)
+  assert.match(gone.reason, /deleted/)
+  // Store, Xbox and emulator routes still say where to set options, whatever launchers exist.
+  assert.equal(argsSupport({ sourceId: 'steam', store: 'Steam', launchTarget: 'steam://rungameid/1' }, [hub]).ok, false)
+  assert.equal(argsSupport({ sourceId: 'rom', store: 'Emulator', launchTarget: 'D:\\a.nds' }, [hub]).ok, false)
+  assert.equal(argsSupport({ sourceId: 'local', store: 'Custom', launchTarget: 'C:\\G\\x.exe' }, [hub]).ok, true)
+})

@@ -2,25 +2,28 @@ import { useEffect, useMemo, useState } from 'react'
 import { Plus, X } from 'lucide-react'
 import { LauncherIcon } from './launcher-icon'
 import { assignTargetLabel, isLabelOnly } from '../shared/launchers'
+import { LaunchOptionsField } from './route-tools'
 import type { AssignmentOption, CustomLauncher, Game, LauncherTargetKind } from '../shared/types'
 
 /**
  * The game page's LAUNCHERS block: the custom launchers this game shows under, and a picker to add
  * it to another one. Only ids go to Rust (game, launcher, which of the game's routes and kinds);
  * the target is always taken from the game's own route, and a new launch route is confirmed in a
- * native dialog. Built-in stores can't take a game from elsewhere; ROMs choose their emulator in
- * the emulator picker above.
+ * native dialog, together with optional launch options for it (text only; Rust checks it as it is
+ * typed and again on save). Built-in stores can't take a game from elsewhere; ROMs choose their
+ * emulator in the emulator picker above.
  */
 export function LauncherBlock({ game, launchers, libraryVersion, onAssign, onUnassign }: {
   game: Game
   launchers: CustomLauncher[]
   libraryVersion: number
-  onAssign(launcherId: string, routeIndex?: number, kind?: LauncherTargetKind): Promise<void>
+  onAssign(launcherId: string, routeIndex?: number, kind?: LauncherTargetKind, options?: string): Promise<void>
   onUnassign(launcherId: string): Promise<void>
 }) {
   const [options, setOptions] = useState<AssignmentOption[]>([])
   const [choice, setChoice] = useState('')
   const [target, setTarget] = useState(0)
+  const [optionsText, setOptionsText] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const routesKey = game.routes.map(route => route.sourceId + '|' + route.launchTarget + '|' + (route.launcherId ?? '') + '|' + (route.assigned ? 1 : 0)).join('\n')
@@ -29,7 +32,7 @@ export function LauncherBlock({ game, launchers, libraryVersion, onAssign, onUna
     window.lobby.launchers.assignments(game.id).then(next => { if (live) setOptions(next) }).catch(() => { if (live) setOptions([]) })
     return () => { live = false }
   }, [game.id, routesKey, libraryVersion, launchers])
-  useEffect(() => { setChoice(''); setTarget(0); setError('') }, [game.id])
+  useEffect(() => { setChoice(''); setTarget(0); setOptionsText(''); setError('') }, [game.id])
 
   const byId = useMemo(() => new Map(launchers.map(launcher => [launcher.id, launcher])), [launchers])
   const listed = options.filter(option => option.listed && byId.has(option.launcherId))
@@ -45,8 +48,9 @@ export function LauncherBlock({ game, launchers, libraryVersion, onAssign, onUna
   const add = () => run(async () => {
     if (!chosen || !chosenLauncher) return
     const picked = targets[target]
-    await onAssign(chosen.launcherId, picked?.routeIndex, picked?.kind)
-    setChoice(''); setTarget(0)
+    const takesOptions = !isLabelOnly(chosenLauncher)
+    await onAssign(chosen.launcherId, picked?.routeIndex, picked?.kind, takesOptions ? optionsText : undefined)
+    setChoice(''); setTarget(0); setOptionsText('')
   })
 
   if (launchers.length === 0) return null
@@ -61,7 +65,7 @@ export function LauncherBlock({ game, launchers, libraryVersion, onAssign, onUna
       </div>
     })}
     {available.length > 0 && <div className="gp-launcher-add">
-      <select aria-label="Add to a launcher" value={choice} disabled={busy} onChange={event => { setChoice(event.target.value); setTarget(0); setError('') }}>
+      <select aria-label="Add to a launcher" value={choice} disabled={busy} onChange={event => { setChoice(event.target.value); setTarget(0); setOptionsText(''); setError('') }}>
         <option value="">Add to a launcher…</option>
         {available.map(option => <option key={option.launcherId} value={option.launcherId}>{byId.get(option.launcherId)!.name}{option.problem ? ' (can’t take this game)' : ''}</option>)}
       </select>
@@ -70,6 +74,9 @@ export function LauncherBlock({ game, launchers, libraryVersion, onAssign, onUna
       </select>}
       {chosen && !chosen.problem && targets.length === 1 && <div className="muted-text gp-path" title={targets[0].target}>{assignTargetLabel(targets[0], game.routes)}</div>}
       {chosen?.problem && <div className="inline-warning">{chosen.problem}</div>}
+      {chosen && !chosen.problem && chosenLauncher && !isLabelOnly(chosenLauncher) && <LaunchOptionsField value={optionsText} onChange={setOptionsText} disabled={busy} launcher={chosenLauncher.name}
+        checkKey={chosen.launcherId + '|' + target + '|' + (targets[target]?.target ?? '')}
+        check={text => window.lobby.launchers.assignCheck(game.id, chosen.launcherId, targets[target]?.routeIndex, targets[target]?.kind, text)} />}
       {chosen && !chosen.problem && <button type="button" className="secondary-button" disabled={busy} onClick={() => void add()}><Plus size={14} /> {chosenLauncher && isLabelOnly(chosenLauncher) ? 'List under ' + chosenLauncher.name : 'Play with ' + chosenLauncher?.name}</button>}
     </div>}
     {error && <div className="form-error" role="alert">{error}</div>}

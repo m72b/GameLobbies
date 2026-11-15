@@ -1,4 +1,4 @@
-import type { Game, GameRoute, RouteRef } from './types'
+import type { CustomLauncher, Game, GameRoute, RouteRef } from './types'
 
 /**
  * Whether a route runs through an emulator, so the game page offers an emulator picker: ROM
@@ -54,15 +54,24 @@ export function routeRef(route: Pick<GameRoute, 'sourceId' | 'launchTarget'>, in
   return { index, sourceId: route.sourceId, launchTarget: route.launchTarget }
 }
 
-export type ArgsSupport = { ok: true } | { ok: false; reason: string }
+export type ArgsSupport = { ok: true; launcher?: string } | { ok: false; reason: string }
+
+/** The user guide's section on launch options (opened in the browser; the only github.com page the app may open). */
+export const LAUNCH_OPTIONS_HELP = 'https://github.com/m72b/GameLobby/blob/main/docs/USER-GUIDE.md#launch-options'
 
 /**
- * Whether a route can take launch options, mirroring the backend's `links::args_exe` (which decides):
- * only a local PC route that starts its own `.exe`. Store links, Xbox apps, launchers and emulators
- * start the game themselves.
+ * Whether a route can take launch options, mirroring the backend's `links::args_host` (which decides
+ * and checks again): a local PC route that starts its own `.exe`, or a route of a custom launcher
+ * with a program (`launcher` is its name: the options come after its own arguments). Store links,
+ * Xbox apps, emulators and launchers without a program start the game themselves.
  */
-export function argsSupport(route: Pick<GameRoute, 'sourceId' | 'store' | 'launchTarget' | 'emulatorId'>): ArgsSupport {
-  if (route.sourceId.startsWith('launcher:')) return { ok: false, reason: 'This route runs through a custom launcher. Its arguments are set on the launcher (Settings → Launchers).' }
+export function argsSupport(route: Pick<GameRoute, 'sourceId' | 'store' | 'launchTarget' | 'emulatorId'>, launchers: readonly Pick<CustomLauncher, 'id' | 'name' | 'executable'>[] = []): ArgsSupport {
+  if (route.sourceId.startsWith('launcher:')) {
+    const launcher = launchers.find(item => 'launcher:' + item.id === route.sourceId)
+    if (!launcher) return { ok: false, reason: 'This game’s launcher was deleted. Add the game again to another launcher.' }
+    if (!launcher.executable) return { ok: false, reason: `${launcher.name} has no program, so this route can’t have launch options. Its games run directly: set options on the game’s own .exe route instead.` }
+    return { ok: true, launcher: launcher.name }
+  }
   if (route.sourceId === 'rom' || route.emulatorId) return { ok: false, reason: 'ROMs start with their emulator’s arguments. Change them under Settings → Emulators.' }
   if (route.sourceId !== 'local') return { ok: false, reason: `${route.store} starts this game itself, so Game Lobby can’t pass launch options to it. Set them in ${route.store} instead.` }
   const target = route.launchTarget.trim()

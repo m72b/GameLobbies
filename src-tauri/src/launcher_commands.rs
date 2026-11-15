@@ -790,6 +790,71 @@ pub async fn launchers_assign(
     Ok(games)
 }
 
+/// Checks launch options text for an assignment without saving anything (the checks of
+/// [`launchers_assign`], for the route it would add): the reason it would be refused, or what
+/// the new route would run. Empty text checks nothing.
+#[tauri::command]
+pub async fn launchers_assign_check(
+    state: State<'_, AppState>,
+    game_id: String,
+    launcher_id: String,
+    route_index: Option<i64>,
+    kind: Option<String>,
+    options: String,
+) -> CmdResult<crate::link_commands::ArgsPreview> {
+    let game_id = game_arg(&game_id)?;
+    let launcher_id = id_arg(&launcher_id)?;
+    let route_index = route_arg(route_index)?;
+    let kind = match kind.as_deref() {
+        None => None,
+        Some(raw) => Some(TargetKind::parse(raw).ok_or("That target kind is invalid.")?),
+    };
+    if options.chars().count() > crate::links::MAX_ARGS_CHARS {
+        return Err(format!(
+            "Launch options can be at most {} characters.",
+            crate::links::MAX_ARGS_CHARS
+        ));
+    }
+    if options.trim().is_empty() {
+        return Ok(Default::default());
+    }
+    let (game, launcher) = {
+        let conn = state.db.lock();
+        let game = db::get_game(&conn, &game_id)
+            .map_err(err)?
+            .ok_or("Game not found.")?;
+        let launcher = launchers::get(&conn, &launcher_id)
+            .map_err(err)?
+            .ok_or("That launcher no longer exists.")?;
+        (game, launcher)
+    };
+    if launchers::is_label_only(&launcher) {
+        return Err(format!(
+            "{} has no program, so it doesn't take launch options: the game keeps starting as before. Set options on the game's own .exe route instead.",
+            crate::validation::display_text(&launcher.name, 64)
+        ));
+    }
+    // The route `launchers_assign` would add (its target must exist, like there).
+    let candidates = launchers::assign_candidates(&launcher, &game);
+    let chosen = crate::platform::on_thread(move || {
+        candidates.into_iter().find(|c| {
+            route_index.is_none_or(|i| c.route_index == i)
+                && kind.is_none_or(|k| c.kind == k)
+                && launchers::candidate_exists(c)
+        })
+    })
+    .await
+    .map_err(err)?
+    .ok_or_else(|| launchers::no_candidate_reason(&launcher, &game))?;
+    let route = launchers::assigned_route(&launcher, &game, &chosen).map_err(err)?;
+    let host = crate::links::launcher_host(&launcher, &route).map_err(err)?;
+    let argv = crate::links::prepare_options(&host, &options).map_err(err)?;
+    Ok(crate::link_commands::ArgsPreview::of(
+        &host,
+        argv.as_deref(),
+    ))
+}
+
 /// Removes what [`launchers_assign`] added for launcher `launcherId` to game `gameId` (its launch
 /// route, or its label), and nothing else. Returns the library.
 #[tauri::command]

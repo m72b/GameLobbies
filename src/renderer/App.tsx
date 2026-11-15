@@ -443,11 +443,12 @@ export default function App() {
     openFolder: game => void window.lobby.library.chooseInstallFolder(game.id).catch(error => notice(error instanceof Error ? error.message : 'Could not open install folder')),
     remove: game => void menuAction('Remove', game),
     setEmulator: async (game, routeIndex, emulatorId) => { setGames(await window.lobby.library.setEmulator(game.id, routeIndex, emulatorId)) },
-    assignLauncher: async (game, launcherId, routeIndex, kind) => { setGames(await window.lobby.launchers.assign(game.id, launcherId, routeIndex, kind)) },
+    assignLauncher: async (game, launcherId, routeIndex, kind, options) => { setGames(await window.lobby.launchers.assign(game.id, launcherId, routeIndex, kind, options)) },
     unassignLauncher: async (game, launcherId) => { setGames(await window.lobby.launchers.unassign(game.id, launcherId)) },
     renameRoute: async (game, index, name) => { setGames(await window.lobby.library.renameRoute(game.id, routeRef(game.routes[index], index), name)) },
     setRouteArgs: async (game, index, args) => { setGames(await window.lobby.library.setRouteArgs(game.id, routeRef(game.routes[index], index), args)) },
     routeArgsPending: (game, index) => window.lobby.library.routeArgsPending(game.id, routeRef(game.routes[index], index)),
+    routeArgsCheck: (game, index, args) => window.lobby.library.routeArgsCheck(game.id, routeRef(game.routes[index], index), args),
     unlinkPreview: (game, index) => window.lobby.library.unlinkPreview(game.id, routeRef(game.routes[index], index)),
     unlink: async (game, index) => {
       const result = await window.lobby.library.unlink(game.id, routeRef(game.routes[index], index))
