@@ -29,7 +29,7 @@ on:
 env:
   # Where releases are published. Changing it also needs the endpoint in
   # src-tauri/tauri.conf.json and the config test in src-tauri/src/updater.rs (see README).
-  RELEASE_REPO: m72b/GameLobby-releases
+  RELEASE_REPO: m72b/GameLobby
   TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
 
 permissions: {}

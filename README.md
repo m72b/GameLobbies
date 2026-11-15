@@ -53,7 +53,7 @@ Game Lobby is **my first Rust project**. It started as an Electron app and was r
 
 ## Installation
 
-1. Download `Game Lobby_<version>_x64-setup.exe` from the [releases page](https://github.com/m72b/GameLobby-releases/releases).
+1. Download `Game Lobby_<version>_x64-setup.exe` from the [releases page](https://github.com/m72b/GameLobby/releases).
 2. Run it. It installs for your Windows user only and needs no administrator rights.
 
 Windows 10 and 11 already include the WebView2 runtime that Game Lobby uses.

@@ -1,4 +1,4 @@
-// Prepares a release for the repository in RELEASE_REPO (default m72b/GameLobby-releases) from a
+// Prepares a release for the repository in RELEASE_REPO (default m72b/GameLobby) from a
 // signed NSIS installer in BUNDLE_DIR (default src-tauri/target/release/bundle/nsis): the setup
 // .exe and the .sig written by `tauri signer sign` (or by a build with tauri.release.conf.json).
 // It:
@@ -13,7 +13,7 @@
 import { appendFileSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-const RELEASE_REPO = process.env.RELEASE_REPO || 'm72b/GameLobby-releases'
+const RELEASE_REPO = process.env.RELEASE_REPO || 'm72b/GameLobby'
 const BUNDLE_DIR = process.env.BUNDLE_DIR || join('src-tauri', 'target', 'release', 'bundle', 'nsis')
 
 function fail(message) {

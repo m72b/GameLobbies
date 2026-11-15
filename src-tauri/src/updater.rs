@@ -740,10 +740,10 @@ mod tests {
     #[test]
     fn download_prefix_comes_from_a_github_endpoint() {
         let endpoint =
-            "https://github.com/m72b/GameLobby-releases/releases/latest/download/latest.json";
+            "https://github.com/m72b/GameLobby/releases/latest/download/latest.json";
         assert_eq!(
             download_prefix(endpoint).as_deref(),
-            Some("/m72b/GameLobby-releases/releases/download/")
+            Some("/m72b/GameLobby/releases/download/")
         );
         assert_eq!(
             download_prefix(
@@ -753,11 +753,11 @@ mod tests {
             Some("/m72b/GameLobby/releases/download/")
         );
         for bad in [
-            "http://github.com/m72b/GameLobby-releases/releases/latest/download/latest.json",
-            "https://example.com/m72b/GameLobby-releases/latest.json",
-            "https://github.com.evil.example/m72b/GameLobby-releases/latest.json",
-            "https://user@github.com/m72b/GameLobby-releases/latest.json",
-            "https://github.com:444/m72b/GameLobby-releases/latest.json",
+            "http://github.com/m72b/GameLobby/releases/latest/download/latest.json",
+            "https://example.com/m72b/GameLobby/latest.json",
+            "https://github.com.evil.example/m72b/GameLobby/latest.json",
+            "https://user@github.com/m72b/GameLobby/latest.json",
+            "https://github.com:444/m72b/GameLobby/latest.json",
             "https://github.com/m72b",
             "not a url",
         ] {
@@ -767,31 +767,31 @@ mod tests {
 
     #[test]
     fn installers_are_downloaded_only_from_the_releases_repo() {
-        let prefix = "/m72b/GameLobby-releases/releases/download/";
+        let prefix = "/m72b/GameLobby/releases/download/";
         assert!(download_url_allowed(
-            "https://github.com/m72b/GameLobby-releases/releases/download/v0.4.0/GameLobby_0.4.0_x64-setup.exe",
+            "https://github.com/m72b/GameLobby/releases/download/v0.4.0/GameLobby_0.4.0_x64-setup.exe",
             prefix
         ));
         for bad in [
-            "http://github.com/m72b/GameLobby-releases/releases/download/v0.4.0/a.exe",
-            "https://evil.example/m72b/GameLobby-releases/releases/download/v0.4.0/a.exe",
-            "https://github.com.evil.example/m72b/GameLobby-releases/releases/download/v0.4.0/a.exe",
-            "https://objects.githubusercontent.com/m72b/GameLobby-releases/releases/download/v0.4.0/a.exe",
+            "http://github.com/m72b/GameLobby/releases/download/v0.4.0/a.exe",
+            "https://evil.example/m72b/GameLobby/releases/download/v0.4.0/a.exe",
+            "https://github.com.evil.example/m72b/GameLobby/releases/download/v0.4.0/a.exe",
+            "https://objects.githubusercontent.com/m72b/GameLobby/releases/download/v0.4.0/a.exe",
             "https://github.com/m72b/Other/releases/download/v0.4.0/a.exe",
             "https://github.com/someone/GameLobby-releases/releases/download/v0.4.0/a.exe",
-            "https://github.com/m72b/GameLobby-releases/archive/v0.4.0.zip",
-            "https://github.com/m72b/GameLobby-releases/releases/download/",
-            "https://github.com/m72b/GameLobby-releases/releases/download/%2e%2e/%2E%2E/x/a.exe",
-            "https://user:pw@github.com/m72b/GameLobby-releases/releases/download/v0.4.0/a.exe",
-            "https://github.com:8443/m72b/GameLobby-releases/releases/download/v0.4.0/a.exe",
-            "file:///C:/m72b/GameLobby-releases/releases/download/v0.4.0/a.exe",
+            "https://github.com/m72b/GameLobby/archive/v0.4.0.zip",
+            "https://github.com/m72b/GameLobby/releases/download/",
+            "https://github.com/m72b/GameLobby/releases/download/%2e%2e/%2E%2E/x/a.exe",
+            "https://user:pw@github.com/m72b/GameLobby/releases/download/v0.4.0/a.exe",
+            "https://github.com:8443/m72b/GameLobby/releases/download/v0.4.0/a.exe",
+            "file:///C:/m72b/GameLobby/releases/download/v0.4.0/a.exe",
             "",
         ] {
             assert!(!download_url_allowed(bad, prefix), "{bad}");
         }
         // Dot segments are resolved before the check: this one leaves the repository.
         assert!(!download_url_allowed(
-            "https://github.com/m72b/GameLobby-releases/releases/download/../../../Other/releases/download/v1/a.exe",
+            "https://github.com/m72b/GameLobby/releases/download/../../../Other/releases/download/v1/a.exe",
             prefix
         ));
     }
@@ -1007,12 +1007,12 @@ mod tests {
             let url = url::Url::parse(endpoint.as_str().unwrap()).unwrap();
             assert_eq!(url.scheme(), "https", "{url}");
             assert_eq!(url.host_str(), Some("github.com"), "{url}");
-            assert!(url.path().starts_with("/m72b/GameLobby-releases/"), "{url}");
+            assert!(url.path().starts_with("/m72b/GameLobby/"), "{url}");
             assert!(url.query().is_none() && url.username().is_empty(), "{url}");
             // Installers are accepted only from this repository's release downloads.
             assert_eq!(
                 download_prefix(url.as_str()).as_deref(),
-                Some("/m72b/GameLobby-releases/releases/download/")
+                Some("/m72b/GameLobby/releases/download/")
             );
         }
         // The release workflow publishes to the same repository the app reads from.
@@ -1025,7 +1025,7 @@ mod tests {
             .find_map(|line| line.trim().strip_prefix("RELEASE_REPO:"))
             .expect("RELEASE_REPO in release.yml")
             .trim();
-        assert_eq!(release_repo, "m72b/GameLobby-releases");
+        assert_eq!(release_repo, "m72b/GameLobby");
         // The public key decodes to a minisign public key.
         let pubkey = updater["pubkey"].as_str().expect("pubkey");
         use base64::Engine;

@@ -2,7 +2,7 @@
 
 This page is for maintainers. It explains how signed releases and in-app updates work.
 
-Game Lobby updates itself from the public repository [m72b/GameLobby-releases](https://github.com/m72b/GameLobby-releases). That repository holds only the signed installers and the update manifest (`latest.json`). The app reads `releases/latest/download/latest.json` from it, shows when a new version is available, and installs only after a click. It accepts an installer only when its minisign signature matches the public key in `src-tauri/tauri.conf.json` and is bound to the announced version.
+Game Lobby updates itself from the releases of this repository, [m72b/GameLobby](https://github.com/m72b/GameLobby/releases). Each release holds the signed installer, its signature and the update manifest (`latest.json`). The app reads `releases/latest/download/latest.json`, shows when a new version is available, and installs only after a click. It accepts an installer only when its minisign signature matches the public key in `src-tauri/tauri.conf.json` and is bound to the announced version.
 
 To cut a release:
 
@@ -15,7 +15,7 @@ To cut a release:
 3. `.github/workflows/release.yml` then runs three jobs:
    - **build**: checks that the tag matches `package.json` and builds the unsigned installer. It has no secrets, and `npm ci --ignore-scripts` keeps dependency install scripts from running.
    - **sign**: runs in the `release` environment, the only place the signing key is available. It installs the Tauri CLI version locked in `package-lock.json` into an empty folder, checks it against the lockfile, and signs the installer with the version bound to the signature. It writes `latest.json`, then checks the signature against the public key in `tauri.conf.json` with `.github/scripts/verify-minisign.mjs`, an independent check that uses Node's own crypto.
-   - **publish**: creates release `v0.4.0` in m72b/GameLobby-releases with the installer, its `.sig` and `latest.json`.
+   - **publish-here**: creates release `v0.4.0` in this repository with the installer, its `.sig` and `latest.json`, using the built-in `GITHUB_TOKEN` (write access in this job only). Pre-release versions such as `1.0.0-rc.1` are published as pre-releases and are never offered as updates.
 
    All actions are pinned to commit SHAs. The Rust version comes from `rust-toolchain.toml`. `src-tauri/tauri.release.conf.json` turns on `createUpdaterArtifacts` for a signed build in one step, for example a local test with a throwaway key; CI signs separately instead.
 
@@ -25,7 +25,7 @@ Secrets:
 | --- | --- | --- |
 | `TAURI_SIGNING_PRIVATE_KEY` | Environment `release` | The updater private key (from `tauri signer generate`) |
 | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Environment `release` | Its password |
-| `RELEASES_TOKEN` | Repository | A fine-grained personal access token with **Contents: read and write** on m72b/GameLobby-releases only. Not needed when releases are published to this repository itself. |
+| `RELEASES_TOKEN` | Repository | Not needed: releases are published to this repository. Only if `RELEASE_REPO` names another repository: a fine-grained personal access token with **Contents: read and write** on that repository only. |
 
 Set up the `release` environment once, in **Settings → Environments**:
 
@@ -38,7 +38,7 @@ Set up the `release` environment once, in **Settings → Environments**:
 
 The release repository is set in two places, plus a test that checks them:
 
-1. `RELEASE_REPO` at the top of `.github/workflows/release.yml`. If it names the repository the workflow runs in (for example m72b/GameLobby once it is public), the workflow publishes with the built-in `GITHUB_TOKEN` and `RELEASES_TOKEN` isn't needed.
+1. `RELEASE_REPO` at the top of `.github/workflows/release.yml` (now `m72b/GameLobby`, the repository the workflow runs in, so it publishes with the built-in `GITHUB_TOKEN`). For another repository, the `publish` job uses `RELEASES_TOKEN` instead.
 2. `plugins.updater.endpoints` in `src-tauri/tauri.conf.json`.
 3. The config test `updater_config_points_at_the_public_releases_repo` in `src-tauri/src/updater.rs`.
 
