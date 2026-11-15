@@ -99,6 +99,15 @@ pub struct OwnedApp {
     pub name: String,
 }
 
+/// A parsed response: every valid owned app id (named or not) and the apps that have a usable
+/// name. What is gone is decided against `ids`, so an app whose name is missing from a degraded
+/// response is never treated as removed.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct OwnedList {
+    pub ids: HashSet<String>,
+    pub apps: Vec<OwnedApp>,
+}
+
 /// Where the request goes. Production is fixed to [`HOST`] over https; tests use a local server.
 #[derive(Clone, Debug)]
 pub struct Endpoint {
@@ -168,20 +177,15 @@ struct OwnedItem {
 
 /// Plain one-line text: control and bidi characters dropped, whitespace collapsed, capped.
 fn clean_name(raw: &str) -> Option<String> {
-    let text: String = raw
-        .chars()
-        .map(|c| if c.is_whitespace() { ' ' } else { c })
-        .filter(|c| !c.is_control() && !matches!(c, '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{feff}'))
-        .collect();
-    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let text = crate::validation::plain_text(raw);
     let text: String = text.chars().take(MAX_NAME_CHARS).collect();
     let text = text.trim().to_string();
     (!text.is_empty()).then_some(text)
 }
 
-/// Parses a `GetOwnedGames` response. Apps without a name or with app id 0 are skipped,
-/// duplicates are dropped; a missing or empty list is [`FetchError::Private`].
-pub fn parse_owned(body: &[u8]) -> Result<Vec<OwnedApp>, FetchError> {
+/// Parses a `GetOwnedGames` response. Apps without a name still count as owned (`ids`); app id 0
+/// is skipped and duplicates are dropped; a missing or empty list is [`FetchError::Private`].
+pub fn parse_owned(body: &[u8]) -> Result<OwnedList, FetchError> {
     let parsed: Body = serde_json::from_slice(body)
         .map_err(|_| FetchError::Invalid("it is not the expected JSON."))?;
     let items = parsed
@@ -192,17 +196,23 @@ pub fn parse_owned(body: &[u8]) -> Result<Vec<OwnedApp>, FetchError> {
     if items.len() > MAX_GAMES {
         return Err(FetchError::Invalid("it lists too many games."));
     }
-    let mut seen = HashSet::new();
-    Ok(items
-        .into_iter()
-        .filter(|item| item.appid > 0 && seen.insert(item.appid))
-        .filter_map(|item| {
-            Some(OwnedApp {
+    let mut list = OwnedList::default();
+    for item in items {
+        if item.appid == 0 || !list.ids.insert(item.appid.to_string()) {
+            continue;
+        }
+        if let Some(name) = item.name.as_deref().and_then(clean_name) {
+            list.apps.push(OwnedApp {
                 app_id: item.appid.to_string(),
-                name: clean_name(item.name.as_deref()?)?,
-            })
-        })
-        .collect())
+                name,
+            });
+        }
+    }
+    // Entries without any usable app: a degraded response, not a library that became empty.
+    if list.apps.is_empty() {
+        return Err(FetchError::Invalid("none of its games has a usable name."));
+    }
+    Ok(list)
 }
 
 /// One `GetOwnedGames` request. `key` and `steam_id` must already be validated.
@@ -210,7 +220,7 @@ pub async fn fetch_owned(
     endpoint: &Endpoint,
     key: &str,
     steam_id: &str,
-) -> Result<Vec<OwnedApp>, FetchError> {
+) -> Result<OwnedList, FetchError> {
     if endpoint.https_only
         && (endpoint.url.scheme() != "https" || endpoint.url.host_str() != Some(HOST))
     {
@@ -267,9 +277,14 @@ pub struct ImportStatus {
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportState {
-    /// App ids of the last successful fetch: what this import put in the library.
+    /// App ids this import inserted or merged into a not-installed owned route, carried forward
+    /// while they are still owned: what it may take out again.
     #[serde(default)]
     pub app_ids: Vec<String>,
+    /// Ids a fetch reported gone but that were held back by the mass-removal guard; they are
+    /// only dropped when the next successful fetch reports them gone too.
+    #[serde(default)]
+    pub pending_gone: Vec<String>,
     /// When the last request was made (0 = never, or credentials changed since).
     #[serde(default)]
     pub attempted_at: i64,
@@ -337,6 +352,11 @@ pub fn owned_game(app: &OwnedApp) -> Game {
     )
 }
 
+/// Smallest earlier list the mass-removal guard applies to.
+const MASS_REMOVAL_MIN: usize = 20;
+const HELD_BACK_MESSAGE: &str =
+    "Steam returned far fewer games than before; nothing was removed. It will be checked again later.";
+
 fn plural(n: usize, one: &str) -> String {
     format!("{n} {one}{}", if n == 1 { "" } else { "s" })
 }
@@ -347,36 +367,64 @@ fn plural(n: usize, one: &str) -> String {
 /// library and the previous list stay as they are. Either way the status is stored.
 pub fn apply(
     conn: &mut Connection,
-    outcome: &Result<Vec<OwnedApp>, FetchError>,
+    outcome: &Result<OwnedList, FetchError>,
     now: i64,
 ) -> Result<ImportStatus> {
     let mut state = load_import_state(conn)?;
     state.attempted_at = now;
     let status = match outcome {
-        Ok(apps) => {
+        Ok(list) => {
             let installed = db::installed_steam_app_ids(conn)?;
-            let games: Vec<Game> = apps
+            let games: Vec<Game> = list
+                .apps
                 .iter()
                 .filter(|a| !installed.contains(&a.app_id))
                 .map(owned_game)
                 .collect();
             db::upsert_imported_games(conn, &games)?;
-            let listed: HashSet<&String> = apps.iter().map(|a| &a.app_id).collect();
-            let gone: HashSet<String> = state
-                .app_ids
+            let previous: HashSet<String> = state.app_ids.iter().cloned().collect();
+            let gone: HashSet<String> = previous
                 .iter()
-                .filter(|id| !listed.contains(id))
+                .filter(|id| !list.ids.contains(*id))
                 .cloned()
                 .collect();
-            db::drop_steam_owned(conn, &gone)?;
-            state.app_ids = apps.iter().map(|a| a.app_id.clone()).collect();
+            // A response far smaller than the last one is more likely degraded than true:
+            // drop only what two successful fetches in a row report gone.
+            let suspicious = previous.len() >= MASS_REMOVAL_MIN && gone.len() * 2 > previous.len();
+            let (to_drop, held): (HashSet<String>, HashSet<String>) = if suspicious {
+                let pending: HashSet<&String> = state.pending_gone.iter().collect();
+                gone.iter().cloned().partition(|id| pending.contains(id))
+            } else {
+                (gone, HashSet::new())
+            };
+            db::drop_steam_owned(conn, &to_drop)?;
+            let mut ids: HashSet<String> = previous
+                .into_iter()
+                .filter(|id| list.ids.contains(id) || held.contains(id))
+                .collect();
+            ids.extend(
+                games
+                    .iter()
+                    .filter_map(|g| g.routes.first()?.app_id.clone()),
+            );
+            let mut ids: Vec<String> = ids.into_iter().collect();
+            ids.sort();
+            state.app_ids = ids;
+            let mut pending: Vec<String> = held.into_iter().collect();
+            pending.sort();
+            state.pending_gone = pending;
+            let apps = &list.apps;
             ImportStatus {
                 ok: true,
-                message: format!(
-                    "{} on Steam · {} not installed",
-                    plural(apps.len(), "owned game"),
-                    games.len()
-                ),
+                message: if state.pending_gone.is_empty() {
+                    format!(
+                        "{} on Steam · {} not installed",
+                        plural(apps.len(), "owned game"),
+                        games.len()
+                    )
+                } else {
+                    HELD_BACK_MESSAGE.to_string()
+                },
                 checked_at: now,
                 needs_new_credentials: false,
             }
@@ -417,7 +465,7 @@ fn steam_enabled(conn: &Connection) -> Result<bool> {
 async fn fetch_if_due(
     state: &AppState,
     force: bool,
-) -> Result<Option<Result<Vec<OwnedApp>, FetchError>>> {
+) -> Result<Option<Result<OwnedList, FetchError>>> {
     {
         let conn = state.db.lock();
         if !steam_enabled(&conn)? || (!force && !is_due(&load_import_state(&conn)?, now_ms())) {
@@ -451,7 +499,7 @@ pub async fn run_for_scan(app: &AppHandle) -> Result<Option<String>> {
 /// [`apply`] on a blocking thread (it may write thousands of games).
 async fn apply_in_background(
     app: &AppHandle,
-    outcome: Result<Vec<OwnedApp>, FetchError>,
+    outcome: Result<OwnedList, FetchError>,
 ) -> Result<ImportStatus> {
     let app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -593,13 +641,17 @@ mod tests {
         assert!(!text.contains("key="), "query leaked: {text}");
     }
 
-    fn apps(list: &[(&str, &str)]) -> Vec<OwnedApp> {
-        list.iter()
-            .map(|(id, name)| OwnedApp {
-                app_id: id.to_string(),
-                name: name.to_string(),
-            })
-            .collect()
+    fn apps(list: &[(&str, &str)]) -> OwnedList {
+        OwnedList {
+            ids: list.iter().map(|(id, _)| id.to_string()).collect(),
+            apps: list
+                .iter()
+                .map(|(id, name)| OwnedApp {
+                    app_id: id.to_string(),
+                    name: name.to_string(),
+                })
+                .collect(),
+        }
     }
 
     #[test]
@@ -612,16 +664,21 @@ mod tests {
             {"appid":30,"name":"Bidi\u202e text\u0007"},
             {"appid":40,"name":"   "}
         ]}}"#;
+        // Nameless apps are still owned (`ids`), they just aren't imported.
+        let got = parse_owned(body).unwrap();
         assert_eq!(
-            parse_owned(body).unwrap(),
-            apps(&[("10", "Counter-Strike"), ("30", "Bidi text")])
+            got.apps,
+            apps(&[("10", "Counter-Strike"), ("30", "Bidi text")]).apps
         );
+        let mut ids: Vec<_> = got.ids.iter().cloned().collect();
+        ids.sort();
+        assert_eq!(ids, ["10", "20", "30", "40"]);
         let long = format!(
             r#"{{"response":{{"games":[{{"appid":1,"name":"{}"}}]}}}}"#,
             "x".repeat(500)
         );
         assert_eq!(
-            parse_owned(long.as_bytes()).unwrap()[0].name.len(),
+            parse_owned(long.as_bytes()).unwrap().apps[0].name.len(),
             MAX_NAME_CHARS
         );
     }
@@ -775,7 +832,7 @@ mod tests {
         // An owned game from before, renamed, favourited and given a cover by the user.
         db::upsert_imported_games(
             &mut conn,
-            &[owned_game(&apps(&[("10", "Counter-Strike")])[0])],
+            &[owned_game(&apps(&[("10", "Counter-Strike")]).apps[0])],
         )
         .unwrap();
         conn.execute(
@@ -863,7 +920,8 @@ mod tests {
         let database = db::Db::memory().unwrap();
         let mut conn = database.lock();
         // A game the import never listed (for example added by an older version) stays.
-        db::upsert_imported_games(&mut conn, &[owned_game(&apps(&[("99", "Legacy")])[0])]).unwrap();
+        db::upsert_imported_games(&mut conn, &[owned_game(&apps(&[("99", "Legacy")]).apps[0])])
+            .unwrap();
         apply(
             &mut conn,
             &Ok(apps(&[("10", "A"), ("20", "B"), ("30", "C")])),
@@ -883,5 +941,104 @@ mod tests {
         assert_eq!(kept.routes[0].owned, None);
         assert!(db::get_game(&conn, "steam:99").unwrap().is_some());
         assert_eq!(load_import_state(&conn).unwrap(), ImportState::default());
+    }
+
+    fn many(n: usize) -> OwnedList {
+        let list: Vec<(String, String)> = (1..=n)
+            .map(|i| (i.to_string(), format!("Game {i}")))
+            .collect();
+        let refs: Vec<(&str, &str)> = list.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+        apps(&refs)
+    }
+
+    #[test]
+    fn nameless_entries_change_nothing() {
+        // Only nameless entries: invalid, so nothing is applied.
+        let body = br#"{"response":{"games":[{"appid":10},{"appid":20,"name":""}]}}"#;
+        assert!(matches!(parse_owned(body), Err(FetchError::Invalid(_))));
+        let database = db::Db::memory().unwrap();
+        let mut conn = database.lock();
+        apply(&mut conn, &Ok(apps(&[("10", "A"), ("20", "B")])), 1000).unwrap();
+        let status = apply(&mut conn, &parse_owned(body), 2000).unwrap();
+        assert!(!status.ok);
+        assert_eq!(db::game_count(&conn).unwrap(), 2);
+        assert_eq!(load_import_state(&conn).unwrap().app_ids, ["10", "20"]);
+        // A named entry beside a nameless one: the nameless one is still owned, never dropped.
+        let mut partial = apps(&[("10", "A")]);
+        partial.ids.insert("20".into());
+        apply(&mut conn, &Ok(partial), 3000).unwrap();
+        assert!(db::get_game(&conn, "steam:20").unwrap().is_some());
+        assert_eq!(load_import_state(&conn).unwrap().app_ids, ["10", "20"]);
+    }
+
+    #[test]
+    fn a_far_smaller_list_is_held_back_until_a_second_fetch_agrees() {
+        let database = db::Db::memory().unwrap();
+        let mut conn = database.lock();
+        apply(&mut conn, &Ok(many(100)), 1000).unwrap();
+        assert_eq!(db::game_count(&conn).unwrap(), 100);
+        let status = apply(&mut conn, &Ok(apps(&[("1", "Game 1")])), 2000).unwrap();
+        assert!(status.ok);
+        assert_eq!(status.message, HELD_BACK_MESSAGE);
+        assert_eq!(db::game_count(&conn).unwrap(), 100);
+        let state = load_import_state(&conn).unwrap();
+        assert_eq!(state.app_ids.len(), 100);
+        assert_eq!(state.pending_gone.len(), 99);
+        // A recovered fetch clears the marker and drops nothing.
+        apply(&mut conn, &Ok(many(100)), 3000).unwrap();
+        assert!(load_import_state(&conn).unwrap().pending_gone.is_empty());
+        assert_eq!(db::game_count(&conn).unwrap(), 100);
+        // Two agreeing fetches apply it.
+        apply(&mut conn, &Ok(apps(&[("1", "Game 1")])), 4000).unwrap();
+        assert_eq!(db::game_count(&conn).unwrap(), 100);
+        let status = apply(&mut conn, &Ok(apps(&[("1", "Game 1")])), 5000).unwrap();
+        assert_eq!(status.message, "1 owned game on Steam · 1 not installed");
+        assert_eq!(db::game_count(&conn).unwrap(), 1);
+        let state = load_import_state(&conn).unwrap();
+        assert_eq!(state.app_ids, ["1"]);
+        assert!(state.pending_gone.is_empty());
+    }
+
+    #[test]
+    fn a_manual_igdb_match_is_user_data() {
+        let database = db::Db::memory().unwrap();
+        let mut conn = database.lock();
+        apply(
+            &mut conn,
+            &Ok(apps(&[("10", "A"), ("20", "B"), ("30", "C")])),
+            1000,
+        )
+        .unwrap();
+        for (id, source) in [("steam:10", "user"), ("steam:20", "auto")] {
+            conn.execute(
+                "INSERT INTO game_metadata(gameId,igdbId,json,fetchedAt,source) VALUES(?,1,NULL,0,?)",
+                [id, source],
+            )
+            .unwrap();
+        }
+        apply(&mut conn, &Ok(apps(&[("30", "C")])), 2000).unwrap();
+        let kept = db::get_game(&conn, "steam:10").unwrap().unwrap();
+        assert_eq!(kept.routes[0].owned, None);
+        assert!(db::get_game(&conn, "steam:20").unwrap().is_none());
+    }
+
+    #[test]
+    fn installed_games_are_never_tracked_or_dropped() {
+        let database = db::Db::memory().unwrap();
+        let mut conn = database.lock();
+        db::upsert_imported_games(&mut conn, &[installed("570", "Dota 2")]).unwrap();
+        apply(
+            &mut conn,
+            &Ok(apps(&[("570", "Dota 2"), ("10", "A")])),
+            1000,
+        )
+        .unwrap();
+        assert_eq!(load_import_state(&conn).unwrap().app_ids, ["10"]);
+        apply(&mut conn, &Ok(apps(&[("10", "A")])), 2000).unwrap();
+        assert!(
+            db::get_game(&conn, "steam:570").unwrap().unwrap().routes[0].installed == Some(true)
+        );
+        assert_eq!(undo(&mut conn).unwrap(), 1);
+        assert!(db::get_game(&conn, "steam:570").unwrap().is_some());
     }
 }

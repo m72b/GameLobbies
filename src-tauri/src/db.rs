@@ -805,7 +805,8 @@ pub fn installed_steam_app_ids(db: &Connection) -> Result<HashSet<String>> {
 /// Undoes the optional Steam owned-games import (`steam_owned`) for exactly the app ids in
 /// `app_ids` (ones an earlier import listed that are no longer owned, or all of them when the
 /// import is removed). Only `steam` routes with one of those app ids that are marked owned and
-/// not installed are touched: a game the user put something into keeps its route with the
+/// not installed are touched: a game the user put something into (including a manual IGDB
+/// match; an edited title is not detectable) keeps its route with the
 /// owned mark dropped; otherwise the route goes, and a game left without routes is deleted.
 /// Installed games and every other route are left alone. Returns the number of games deleted.
 pub fn drop_steam_owned(db: &mut Connection, app_ids: &HashSet<String>) -> Result<usize> {
@@ -813,7 +814,13 @@ pub fn drop_steam_owned(db: &mut Connection, app_ids: &HashSet<String>) -> Resul
         return Ok(0);
     }
     let rows = all_rows(db)?;
-    let customized = customized_game_ids(db)?;
+    let mut customized = customized_game_ids(db)?;
+    // A manual IGDB match is the user's work too (an automatic one is only a cache).
+    customized.extend(
+        db.prepare("SELECT gameId FROM game_metadata WHERE source<>'auto'")?
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?,
+    );
     let tx = db.transaction()?;
     let mut deleted = 0;
     for row in rows {
