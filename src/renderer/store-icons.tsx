@@ -1,5 +1,5 @@
 import { siBattledotnet, siEa, siEpicgames, siGogdotcom, siItchdotio, siSteam, siUbisoft } from 'simple-icons'
-import { Gamepad2, Plus } from 'lucide-react'
+import { FolderOpen, Gamepad2 } from 'lucide-react'
 
 // Brand icons come from simple-icons (CC0). Stores without a brand icon in the
 // installed version (Xbox, Amazon Games) fall back to a short text mark.
@@ -35,7 +35,7 @@ export function StoreIcon({ store, size = 12, className }: { store: string; size
     )
   }
   if (name === 'Emulator') return <Gamepad2 className={'store-icon ' + (className ?? '')} size={size} aria-hidden="true" />
-  if (name === 'Custom') return <Plus className={'store-icon ' + (className ?? '')} size={size} aria-hidden="true" />
+  if (name === 'Custom') return <FolderOpen className={'store-icon ' + (className ?? '')} size={size} aria-hidden="true" />
   const text = textMarks[name] ?? (name ? name[0].toUpperCase() : '•')
   return <span className={'store-icon store-icon-text ' + (className ?? '')} style={{ fontSize: Math.round(size * 0.9) }} aria-hidden="true">{text}</span>
 }
