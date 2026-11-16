@@ -1734,6 +1734,45 @@ pub fn system_for_file(path: &Path) -> Option<&'static catalog::System> {
     }
 }
 
+/// The system of a file that is the launch target of a folder-format game (a PS3
+/// `PS3_GAME\USRDIR\EBOOT.BIN`, an Xbox 360 `default.xex`): its path ends with one of a system's
+/// [`catalog::FolderFormat`] targets and the game folder above it has one of that format's
+/// markers, the same rule the scan uses (`localscan`). When several fit, a system named by one of
+/// the file's folders wins, else the longest matching target. Reads the disk.
+pub fn folder_format_system(file: &Path) -> Option<&'static catalog::System> {
+    let parts: Vec<String> = file
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().to_lowercase())
+        .collect();
+    let mut found: Vec<(&'static catalog::System, usize)> = Vec::new();
+    for system in catalog::SYSTEMS {
+        for format in system.folder_formats {
+            for target in format.targets {
+                let wanted: Vec<String> = target.split('/').map(str::to_lowercase).collect();
+                if wanted.len() >= parts.len() || parts[parts.len() - wanted.len()..] != wanted[..]
+                {
+                    continue;
+                }
+                let Some(root) = file.ancestors().nth(wanted.len()) else {
+                    continue;
+                };
+                if format
+                    .markers
+                    .iter()
+                    .any(|m| localscan::find_ci(root, m).is_some())
+                {
+                    found.push((system, wanted.len()));
+                }
+            }
+        }
+    }
+    let named = file.ancestors().skip(1).find_map(|a| {
+        let system = catalog::system_for_folder(&a.file_name()?.to_string_lossy())?;
+        found.iter().find(|(s, _)| s.id == system.id).map(|f| f.0)
+    });
+    named.or_else(|| found.iter().max_by_key(|(_, len)| *len).map(|f| f.0))
+}
+
 /// What a chosen file (`library.addLocalGame`) becomes.
 #[derive(Debug)]
 pub enum LocalFile {
@@ -2786,6 +2825,7 @@ mod tests {
             target_kind: kinds[0].into(),
             target_kinds: kinds.iter().map(|k| k.to_string()).collect(),
             working_dir: None,
+            start_mode: Default::default(),
             sort_order: 0,
             created_at: 1,
             available: false,

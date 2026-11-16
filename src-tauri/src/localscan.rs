@@ -1030,7 +1030,7 @@ fn gdi_file(line: &str) -> Option<String> {
 }
 
 /// Case-insensitive relative path lookup (`PS3_GAME/PARAM.SFO`) inside `dir`.
-fn find_ci(dir: &Path, rel: &str) -> Option<PathBuf> {
+pub(crate) fn find_ci(dir: &Path, rel: &str) -> Option<PathBuf> {
     let mut current = dir.to_path_buf();
     for part in rel.split('/') {
         let next = list_dir(&current)

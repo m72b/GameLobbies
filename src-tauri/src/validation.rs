@@ -125,6 +125,7 @@ const LAUNCHER_KEYS: &[&str] = &[
     "argsTemplate",
     "targetKind",
     "targetKinds",
+    "startMode",
     "workingDir",
     "sortOrder",
     "createdAt",

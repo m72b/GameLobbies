@@ -831,6 +831,19 @@ pub fn launcher_host(l: &CustomLauncher, route: &GameRoute) -> Result<ArgsHost> 
     if lx::is_label_only(l) {
         bail!("{name} has no program, so this route can't have launch options. Its games run directly: set options on the game's own .exe route instead.");
     }
+    if l.start_mode == crate::launchers::StartMode::OpenFirst {
+        // The launcher is opened on its own (no arguments) and the game starts directly from its
+        // own file: its options are that `.exe`'s, confirmed and checked exactly like the
+        // options of the game's own local route (`launch::direct_route` uses them that way).
+        return exe_host(&GameRoute {
+            source_id: LOCAL_SOURCE.into(),
+            launch_target: route.launch_target.clone(),
+            ..Default::default()
+        })
+        .map_err(|e| {
+            anyhow!("{name} is opened first, and then the game starts from its own file. {e}")
+        });
+    }
     if !crate::emulators::executable_path_ok(&l.executable) {
         bail!("{name}'s program must be a full path to an .exe file.");
     }
@@ -3591,6 +3604,7 @@ mod tests {
             target_kind: "file".into(),
             target_kinds: vec!["file".into(), "identifier".into()],
             working_dir: None,
+            start_mode: Default::default(),
             sort_order: 0,
             created_at: 1,
             available: false,

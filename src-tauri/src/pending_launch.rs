@@ -1,16 +1,20 @@
-//! Launches waiting for a custom launcher to open.
+//! Launches waiting for an "open first" custom launcher to open.
 //!
-//! Some launchers need a while to start, sign in and accept being woken up. When a game is played
-//! through a launcher whose program isn't running, `launch::launch_game` starts the program on
-//! its own (no game arguments) and keeps the launch here; the renderer shows "Waiting for ..."
-//! and the user's Continue only confirms the pending id (`library_launch_continue`). The renderer
-//! can't change what runs: a pending launch holds the game id and a copy of the route that was
-//! checked, and Continue launches that same route again (re-read from the library and checked
-//! again), or fails when it changed.
+//! Some launchers must be open and signed in before their games' files can be used. When a game
+//! of such a launcher (`launchers::StartMode::OpenFirst`) is played while its program isn't
+//! running, `launch::launch_game` starts the program on its own (no arguments) and keeps the
+//! launch here; the renderer shows "Waiting for ..." and the user's Continue only confirms the
+//! pending id (`library_launch_continue`). The renderer can't change what runs: a pending launch
+//! holds the game id, the launcher's program and start mode, and a copy of the route that was
+//! checked, and Continue starts the game from that same route (re-read from the library and
+//! checked again, directly from its own file), or fails when the route, the program or the start
+//! mode changed. Launchers that run games through their program never wait: they are started
+//! once, with the game.
 //!
 //! Like native picks (`picks`), a pending launch is one-shot (taken by the first Continue),
 //! short-lived ([`PENDING_LIFETIME`]), and there is at most one per game (a new one replaces it).
 
+use crate::launchers::{CustomLauncher, StartMode};
 use crate::types::{Game, GameRoute};
 use anyhow::{bail, Result};
 use std::collections::HashMap;
@@ -29,6 +33,8 @@ pub struct Pending {
     /// The launcher's program as it was when the launch was checked (Continue refuses to run a
     /// launcher whose program changed since).
     pub program: String,
+    /// The launcher's start mode when the launch was checked (Continue refuses when it changed).
+    pub start_mode: StartMode,
     /// The route that was checked (Continue launches the stored route that still equals it).
     pub route: GameRoute,
 }
@@ -119,6 +125,24 @@ fn alive(e: &Entry, now: Instant) -> bool {
     now.saturating_duration_since(e.at) < PENDING_LIFETIME
 }
 
+/// Whether Continue may go on with the launcher as it is now (`None`: deleted): still the program
+/// that was opened, and still opened first. Continue starts the game directly, which is only what
+/// the user chose while the launcher works that way (`launch_game` checks everything else again).
+pub fn check_launcher(pending: &Pending, now: Option<&CustomLauncher>) -> Result<()> {
+    let same = now.is_some_and(|l| {
+        l.executable == pending.program
+            && l.start_mode == pending.start_mode
+            && l.start_mode == StartMode::OpenFirst
+    });
+    if !same {
+        bail!(
+            "{} changed since you pressed Play. Press Play again.",
+            pending.launcher_name
+        );
+    }
+    Ok(())
+}
+
 /// Where the route a pending launch checked is in `game` now: the same launcher, target and
 /// launch options (its install state may change meanwhile). `None` when it changed: Continue
 /// then refuses instead of launching something else (`launch_game` checks everything again
@@ -141,6 +165,7 @@ mod tests {
             launcher_id: "heroic".into(),
             launcher_name: "Heroic".into(),
             program: r"D:\Launchers\Heroic\Heroic.exe".into(),
+            start_mode: StartMode::OpenFirst,
             route: GameRoute {
                 source_id: "launcher:heroic".into(),
                 store: "Custom".into(),
@@ -184,6 +209,46 @@ mod tests {
         );
         assert_eq!(route_index(&game(vec![with(None, None)]), &with_args), None);
         assert_eq!(route_index(&game(vec![other]), &checked), None);
+    }
+
+    #[test]
+    fn continue_needs_the_same_open_first_launcher() {
+        let p = pending("a");
+        let now = CustomLauncher {
+            id: "heroic".into(),
+            name: "Heroic".into(),
+            icon_kind: "builtin".into(),
+            icon_value: "rocket".into(),
+            color: "#4f8cff".into(),
+            executable: p.program.clone(),
+            args_template: String::new(),
+            target_kind: "file".into(),
+            target_kinds: vec!["file".into()],
+            working_dir: None,
+            start_mode: StartMode::OpenFirst,
+            sort_order: 0,
+            created_at: 1,
+            available: false,
+        };
+        assert!(check_launcher(&p, Some(&now)).is_ok());
+        assert!(check_launcher(&p, None).is_err(), "deleted");
+        // Switched to "through" while waiting: Continue must not start the game directly.
+        let through = CustomLauncher {
+            start_mode: StartMode::Through,
+            ..now.clone()
+        };
+        assert!(check_launcher(&p, Some(&through)).is_err());
+        let moved = CustomLauncher {
+            executable: r"D:\Other\Heroic.exe".into(),
+            ..now.clone()
+        };
+        assert!(check_launcher(&p, Some(&moved)).is_err());
+        // A pending launch recorded for "through" (none are made any more) never continues.
+        let old = Pending {
+            start_mode: StartMode::Through,
+            ..p.clone()
+        };
+        assert!(check_launcher(&old, Some(&through)).is_err());
     }
 
     #[test]

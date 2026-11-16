@@ -44,9 +44,22 @@
 //!   after this argv, with the template's path rules for the launcher's folder and a native
 //!   confirmation of the whole command line (on the game page, or in the same dialog as an
 //!   assignment, [`assign_prompt`]).
-//! - Launching: when the launcher's program isn't running ([`program_running`], by exact
-//!   path), it is started alone first (no arguments, no launch options) and the launch waits for
-//!   the user (see `pending_launch`).
+//! - Start mode ([`StartMode`], per launcher with a program):
+//!   - `through` (older launchers, and every launcher stored before start modes existed): Play
+//!     runs the launcher's program once, with the template's argv and the game's target
+//!     ([`prepare_launch`]).
+//!   - `openFirst` (for launchers the user signs in to, which may keep the games' files locked
+//!     until then): Play opens the launcher's program on its own, with no arguments, when it isn't
+//!     running ([`program_running`], by exact path), and the launch waits for the user's Continue
+//!     (see `pending_launch`). Then, or right away when it was already running, the game starts
+//!     directly from its own file, exactly like the game's own local or ROM route would start it
+//!     (`launch::direct_route`): every check of that route applies, its launch options are the
+//!     game's own `.exe` options, and the template is never used. Identifier targets can't start
+//!     directly, so an `openFirst` launcher can't use them ([`validate`]); a folder target is
+//!     refused at Play with a message (a folder isn't something Game Lobby starts by itself).
+//!
+//!   Changing the mode changes what runs, so it is confirmed like a program change
+//!   ([`needs_confirmation`]).
 
 use crate::db;
 use crate::emulators::{drive_path_ok, executable_path_ok};
@@ -197,6 +210,40 @@ pub fn kind_names(kinds: &[TargetKind]) -> Vec<String> {
     kinds.iter().map(|k| k.as_str().to_string()).collect()
 }
 
+/// How Play starts a game of a launcher with a program (see the module docs).
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum StartMode {
+    /// Run the launcher's program with the game as an argument (the template's argv).
+    #[default]
+    Through,
+    /// Open the launcher's program alone first (no arguments), wait for the user, then start the
+    /// game directly from its own file.
+    OpenFirst,
+}
+
+impl StartMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Through => "through",
+            Self::OpenFirst => "openFirst",
+        }
+    }
+
+    /// A stored value: `openFirst`, else (`through`, empty or a row from before start modes)
+    /// [`StartMode::Through`], which is what such launchers always did.
+    pub fn from_stored(raw: Option<&str>) -> Self {
+        match raw {
+            Some("openFirst") => Self::OpenFirst,
+            _ => Self::Through,
+        }
+    }
+
+    pub fn is_through(&self) -> bool {
+        *self == Self::Through
+    }
+}
+
 /// A stored launcher (table `custom_launchers`), as listed to the renderer and kept in backups.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -221,6 +268,11 @@ pub struct CustomLauncher {
     /// `None` = the executable's folder.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub working_dir: Option<String>,
+    /// How Play starts its games ([`StartMode`]). Absent in older backups and rows: `through`.
+    /// Left out when `through`, so backups without an `openFirst` launcher still restore in
+    /// older builds (which refuse unknown fields).
+    #[serde(default, skip_serializing_if = "StartMode::is_through")]
+    pub start_mode: StartMode,
     #[serde(default)]
     pub sort_order: i64,
     #[serde(default)]
@@ -502,8 +554,14 @@ pub fn validate(mut l: CustomLauncher) -> Result<CustomLauncher> {
         if !l.args_template.trim().is_empty() || l.working_dir.is_some() {
             bail!("A launcher without a program can't have arguments or a working folder.");
         }
+        if l.start_mode != StartMode::Through {
+            bail!("A launcher without a program has nothing to open first.");
+        }
         l.args_template = String::new();
     } else {
+        if l.start_mode == StartMode::OpenFirst && kinds.contains(&TargetKind::Identifier) {
+            bail!("A launcher that is opened first starts each game directly from its own file, so its games can't use identifiers. Turn off Identifier, or choose \"Start games through it\".");
+        }
         if l.executable.chars().any(char::is_control) || !executable_path_ok(&l.executable) {
             bail!(
                 r"The launcher executable must be a full path to an .exe file on a local drive, like C:\Games\Heroic\Heroic.exe."
@@ -557,6 +615,9 @@ pub struct LauncherInput {
     /// Use the folder just chosen with `launchers_browse_folder`.
     #[serde(default)]
     pub use_folder_pick: bool,
+    /// How Play starts its games; absent keeps the stored mode (`through` for a new launcher).
+    #[serde(default)]
+    pub start_mode: Option<StartMode>,
 }
 
 /// What a renderer save may draw on besides its own input.
@@ -620,6 +681,9 @@ pub fn accept_renderer_launcher(input: LauncherInput, ctx: SaveContext<'_>) -> R
         if !input.args_template.trim().is_empty() || input.working_dir != "executable" {
             bail!("A launcher without a program can't have arguments or a working folder.");
         }
+        if input.start_mode == Some(StartMode::OpenFirst) {
+            bail!("A launcher without a program has nothing to open first.");
+        }
         check_icon(&input.icon_kind, &input.icon_value)?;
         let unchanged_icon = stored
             .is_some_and(|s| s.icon_kind == input.icon_kind && s.icon_value == input.icon_value);
@@ -640,6 +704,7 @@ pub fn accept_renderer_launcher(input: LauncherInput, ctx: SaveContext<'_>) -> R
             target_kind: kinds[0].as_str().into(),
             target_kinds: kind_names(&kinds),
             working_dir: None,
+            start_mode: StartMode::Through,
             sort_order: stored.map_or(0, |s| s.sort_order),
             created_at: stored.map_or_else(now_ms, |s| s.created_at),
             available: false,
@@ -697,6 +762,10 @@ pub fn accept_renderer_launcher(input: LauncherInput, ctx: SaveContext<'_>) -> R
         target_kind: kinds[0].as_str().into(),
         target_kinds: kind_names(&kinds),
         working_dir,
+        start_mode: input
+            .start_mode
+            .or_else(|| stored.filter(|s| !is_label_only(s)).map(|s| s.start_mode))
+            .unwrap_or_default(),
         sort_order: stored.map_or(0, |s| s.sort_order),
         created_at: stored.map_or_else(now_ms, |s| s.created_at),
         available: false,
@@ -709,7 +778,7 @@ pub fn accept_renderer_launcher(input: LauncherInput, ctx: SaveContext<'_>) -> R
 }
 
 /// Whether a renderer save creates a launcher or changes what its launches run (program,
-/// arguments, target kinds or working folder). Such a save is confirmed by the user in a native
+/// arguments, target kinds, working folder or start mode). Such a save is confirmed by the user in a native
 /// dialog showing [`confirmation_prompt`], so a compromised renderer can't change it alone.
 /// Name, icon and colour changes save without asking.
 pub fn needs_confirmation(stored: Option<&CustomLauncher>, next: &CustomLauncher) -> bool {
@@ -718,6 +787,7 @@ pub fn needs_confirmation(stored: Option<&CustomLauncher>, next: &CustomLauncher
             || s.args_template != next.args_template
             || s.kinds().ok() != next.kinds().ok()
             || s.working_dir != next.working_dir
+            || s.start_mode != next.start_mode
     })
 }
 
@@ -728,6 +798,31 @@ pub fn confirmation_prompt(l: &CustomLauncher) -> Result<String> {
         return Ok(format!(
             "Save the launcher \"{}\"?\n\nIt has no program. Games found in its games folders run directly, like games found in your library folders, and show \"{}\" as where they are played from. Emulators found there are added to your emulator list with their standard settings.\n\nShortcuts with arguments still need your confirmation under Review before they are added.",
             crate::validation::display_text(&l.name, 80),
+            crate::validation::display_text(&l.name, 80)
+        ));
+    }
+    let folder = working_folder(l);
+    if l.start_mode == StartMode::OpenFirst {
+        // Facts first: the program, what Play does with it, and the working folder; the name
+        // (user-editable text) last.
+        return Ok(format!(
+            "Save this launcher?
+
+Program:
+  {}
+
+Game Lobby opens this program on its own (no arguments) when you play one of its games and it isn't running, waits until you continue, then starts the game directly from its own file: an .exe or shortcut like a game in your library folders, a ROM with its emulator. Nothing is passed to this program, and the game gets the same checks as when it is started without a launcher.
+
+Any game in your library can then be linked to this launcher without asking again; it starts the same way, from that game's own file.
+
+Working folder (for the program):
+  {}
+
+Name: {}
+
+If you give the launcher games folders, they are also searched for emulators, which are added to your emulator list with their standard settings. Save it only if you set it up yourself.",
+            crate::validation::escape_for_prompt(&l.executable),
+            crate::validation::escape_for_prompt(&folder),
             crate::validation::display_text(&l.name, 80)
         ));
     }
@@ -742,13 +837,6 @@ pub fn confirmation_prompt(l: &CustomLauncher) -> Result<String> {
         })
         .collect();
     let what = format!("the game's {}", nouns.join(" or "));
-    let folder = match &l.working_dir {
-        Some(dir) => dir.clone(),
-        None => Path::new(&l.executable)
-            .parent()
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_default(),
-    };
     // Right after the program, so a long argument list can't push it out of the dialog.
     let kinds = kinds_text(&l.kinds()?);
     Ok(format!(
@@ -758,6 +846,17 @@ pub fn confirmation_prompt(l: &CustomLauncher) -> Result<String> {
         crate::validation::escape_for_prompt(&folder),
         crate::validation::display_text(&l.name, 80)
     ))
+}
+
+/// The launcher's working folder as shown in its dialogs: the chosen one, else the program's.
+fn working_folder(l: &CustomLauncher) -> String {
+    match &l.working_dir {
+        Some(dir) => dir.clone(),
+        None => Path::new(&l.executable)
+            .parent()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+    }
 }
 
 /// Copies a user-chosen icon image into `covers_dir` and returns its new bare file name.
@@ -785,10 +884,57 @@ pub struct LauncherLaunch {
     pub cwd: PathBuf,
 }
 
-/// Checks the launcher and the route right before a launch (touches the filesystem): an
-/// existing absolute `.exe`, a valid template, a target of the launcher's kind (an existing file
-/// or folder for path kinds) and an existing working folder.
+/// Checks the launcher and the route right before a "through" launch (touches the filesystem):
+/// an existing absolute `.exe`, a valid template, a target of the launcher's kind (an existing
+/// file or folder for path kinds) and an existing working folder.
 pub fn prepare_launch(l: &CustomLauncher, route: &GameRoute) -> Result<LauncherLaunch> {
+    if l.start_mode != StartMode::Through {
+        bail!(
+            "{} is opened first, so its games don't run through its program.",
+            l.name
+        );
+    }
+    let program = checked_program(l, route)?;
+    check_launcher_template(&l.args_template, &l.executable)?;
+    let target = route.launch_target.as_str();
+    check_target_any(&l.kinds()?, target)?;
+    let argv = build_argv(&l.args_template, target)?;
+    let cwd = checked_cwd(l, &program)?;
+    Ok(LauncherLaunch { program, argv, cwd })
+}
+
+/// What an "open first" launcher opens: its program and working folder (it is started with no
+/// arguments at all, so there is deliberately no argv here).
+#[derive(Debug, PartialEq)]
+pub struct LauncherOpen {
+    pub program: PathBuf,
+    pub cwd: PathBuf,
+}
+
+/// Checks an "open first" launcher and its route right before Play (touches the filesystem): an
+/// existing absolute `.exe`, an existing working folder, and a target of one of its kinds that
+/// can start directly (not an identifier). The template is not used. The game itself is then
+/// checked like its own local or ROM route (`launch::direct_route`).
+pub fn prepare_open_first(l: &CustomLauncher, route: &GameRoute) -> Result<LauncherOpen> {
+    if l.start_mode != StartMode::OpenFirst {
+        bail!("{} runs its games through its program.", l.name);
+    }
+    let program = checked_program(l, route)?;
+    let target = route.launch_target.as_str();
+    if target_shape_ok(TargetKind::Identifier, target) {
+        bail!(
+            "This game uses an identifier, and {} is opened first, which starts games directly from their own file. Set {} to start games through it, or add the game again from its file.",
+            l.name,
+            l.name
+        );
+    }
+    check_target_any(&l.kinds()?, target)?;
+    let cwd = checked_cwd(l, &program)?;
+    Ok(LauncherOpen { program, cwd })
+}
+
+/// The launcher's program, checked for a launch of `route` (both modes).
+fn checked_program(l: &CustomLauncher, route: &GameRoute) -> Result<PathBuf> {
     if launcher_id_of(route) != Some(l.id.as_str()) {
         bail!("This game belongs to another launcher.");
     }
@@ -809,23 +955,23 @@ pub fn prepare_launch(l: &CustomLauncher, route: &GameRoute) -> Result<LauncherL
     if !program.is_file() {
         bail!("{}'s executable was not found: {}", l.name, l.executable);
     }
-    check_launcher_template(&l.args_template, &l.executable)?;
-    let target = route.launch_target.as_str();
-    check_target_any(&l.kinds()?, target)?;
-    let argv = build_argv(&l.args_template, target)?;
-    let cwd = match &l.working_dir {
+    Ok(program)
+}
+
+/// The launcher's working folder, checked: the chosen one (it must exist) or the program's.
+fn checked_cwd(l: &CustomLauncher, program: &Path) -> Result<PathBuf> {
+    match &l.working_dir {
         Some(dir) => {
             if !drive_path_ok(dir) || !Path::new(dir).is_dir() {
                 bail!("{}'s working folder was not found: {dir}", l.name);
             }
-            PathBuf::from(dir)
+            Ok(PathBuf::from(dir))
         }
         None => program
             .parent()
             .map(Path::to_path_buf)
-            .ok_or_else(|| anyhow!("{}'s folder is invalid.", l.name))?,
-    };
-    Ok(LauncherLaunch { program, argv, cwd })
+            .ok_or_else(|| anyhow!("{}'s folder is invalid.", l.name)),
+    }
 }
 
 /// Whether the launcher program `program` is running now: one of `processes` has exactly that
@@ -1077,16 +1223,13 @@ pub fn assign_prompt(
     c: &AssignCandidate,
     options: &[String],
 ) -> Result<String> {
+    if l.start_mode == StartMode::OpenFirst {
+        return Ok(open_first_assign_prompt(l, game_title, c, options));
+    }
     let mut argv = build_argv(&l.args_template, &c.target)?;
     let base = argv.len();
     argv.extend(options.iter().cloned());
-    let folder = match &l.working_dir {
-        Some(dir) => dir.clone(),
-        None => Path::new(&l.executable)
-            .parent()
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_default(),
-    };
+    let folder = working_folder(l);
     let what = kinds_text(&[c.kind]);
     // Confirming also confirms the launcher's command for later links of every kind it takes
     // (`record_confirmed` stores them all), so the dialog names them all, right after the
@@ -1112,6 +1255,32 @@ pub fn assign_prompt(
         crate::links::numbered(&argv),
         crate::validation::escape_for_prompt(&folder),
     ))
+}
+
+/// [`assign_prompt`] for an "open first" launcher: what runs, in order (the launcher's program on
+/// its own, then the game's own file with its launch options), facts first.
+fn open_first_assign_prompt(
+    l: &CustomLauncher,
+    game_title: &str,
+    c: &AssignCandidate,
+    options: &[String],
+) -> String {
+    let name = crate::validation::display_text(&l.name, 80);
+    let title = crate::validation::display_text(game_title, 80);
+    let options = if options.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\n\nThe game's launch options (one per line):\n{}",
+            crate::links::numbered(options)
+        )
+    };
+    format!(
+        "When you play this game, Game Lobby opens:\n  {}\non its own (no arguments) if it isn't running, and waits until you continue. Then it starts the game directly from its own file:\n  {}{options}\n\nWorking folder (for the launcher):\n  {}\n\nGames you link to this launcher later start the same way, each from its own file, without asking again until the launcher's settings change.\n\nFor the game: {title}\nLauncher: {name}\n\nPlay will use {name} from now on. The game's current way to start stays under Play from, and you can remove {name} from the game page at any time.",
+        crate::validation::escape_for_prompt(&l.executable),
+        crate::validation::escape_for_prompt(&c.target),
+        crate::validation::escape_for_prompt(&working_folder(l)),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -1329,7 +1498,7 @@ pub fn remove(conn: &Connection, id: &str, mode: RemoveMode) -> Result<Option<Ve
 // Storage
 
 const COLUMNS: &str =
-    "id,name,iconKind,iconValue,color,executable,argsTemplate,targetKind,workingDir,sortOrder,createdAt,targetKinds";
+    "id,name,iconKind,iconValue,color,executable,argsTemplate,targetKind,workingDir,sortOrder,createdAt,targetKinds,startMode";
 
 fn read_row(row: &Row) -> rusqlite::Result<CustomLauncher> {
     let target_kind: String = row.get(7)?;
@@ -1350,21 +1519,25 @@ fn read_row(row: &Row) -> rusqlite::Result<CustomLauncher> {
         target_kind,
         target_kinds,
         working_dir: row.get::<_, Option<String>>(8)?.filter(|d| !d.is_empty()),
+        // NULL for launchers stored before start modes: they run games through the program.
+        start_mode: StartMode::from_stored(row.get::<_, Option<String>>(12)?.as_deref()),
         sort_order: row.get(9)?,
         created_at: row.get(10)?,
         available: false,
     })
 }
 
-/// Adds `targetKinds` to `custom_launchers` and fills it from `targetKind` (idempotent; no
-/// `user_version` change: older builds keep reading `targetKind`, which stays the first kind).
+/// Adds `targetKinds` to `custom_launchers` and fills it from `targetKind`, and adds
+/// `startMode` (NULL = `through`, what every launcher stored before did). Idempotent; no
+/// `user_version` change: older builds keep reading `targetKind`, which stays the first kind, and
+/// ignore `startMode` (they run every launcher's games through its program).
 pub fn migrate(conn: &Connection) -> Result<()> {
-    let columns: std::collections::HashSet<String> = conn
-        .prepare("SELECT name FROM pragma_table_info('custom_launchers')")?
-        .query_map([], |row| row.get(0))?
-        .collect::<rusqlite::Result<_>>()?;
+    let columns = table_columns(conn, "custom_launchers")?;
     if !columns.contains("targetKinds") {
         conn.execute_batch("ALTER TABLE custom_launchers ADD COLUMN targetKinds TEXT;")?;
+    }
+    if !columns.contains("startMode") {
+        conn.execute_batch("ALTER TABLE custom_launchers ADD COLUMN startMode TEXT;")?;
     }
     let pending: Vec<(String, String)> = conn
         .prepare("SELECT id,targetKind FROM custom_launchers WHERE targetKinds IS NULL OR targetKinds=''")?
@@ -1381,7 +1554,18 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS launcher_confirmed(launcherId TEXT PRIMARY KEY,exeKey TEXT NOT NULL,template TEXT NOT NULL,cwdKey TEXT NOT NULL,targetKinds TEXT NOT NULL,confirmedAt INTEGER NOT NULL);",
     )?;
+    // The start mode a confirmation was for (NULL: confirmed before start modes, `through`).
+    if !table_columns(conn, "launcher_confirmed")?.contains("startMode") {
+        conn.execute_batch("ALTER TABLE launcher_confirmed ADD COLUMN startMode TEXT;")?;
+    }
     Ok(())
+}
+
+fn table_columns(conn: &Connection, table: &str) -> Result<std::collections::HashSet<String>> {
+    Ok(conn
+        .prepare("SELECT name FROM pragma_table_info(?)")?
+        .query_map([table], |row| row.get(0))?
+        .collect::<rusqlite::Result<_>>()?)
 }
 
 // ---------------------------------------------------------------------------
@@ -1397,25 +1581,21 @@ pub fn migrate(conn: &Connection) -> Result<()> {
 // without a dialog, saved before this table existed) has to be confirmed again. Launch options
 // are never covered by this (they keep their own confirmations, `links`).
 
+/// What a confirmation is for (see [`confirmed_key`]).
+type ConfirmedKey = (String, String, String, String, &'static str);
+
 /// What a confirmation covers for launcher `l`: its normalised program, its template (JSON), its
-/// normalised working folder and its target kinds (JSON). `None` for a launcher without a
-/// program, or one whose fields can't be read.
-fn confirmed_key(l: &CustomLauncher) -> Option<(String, String, String, String)> {
+/// normalised working folder, its target kinds (JSON) and its start mode. `None` for a launcher
+/// without a program, or one whose fields can't be read.
+fn confirmed_key(l: &CustomLauncher) -> Option<ConfirmedKey> {
     if is_label_only(l) {
         return None;
     }
     let exe = crate::tracker::normalize_path(&l.executable)?;
-    let cwd = match &l.working_dir {
-        Some(dir) => dir.clone(),
-        None => Path::new(&l.executable)
-            .parent()
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_default(),
-    };
-    let cwd = crate::tracker::normalize_path(&cwd)?;
+    let cwd = crate::tracker::normalize_path(&working_folder(l))?;
     let template = serde_json::to_string(&l.args_template).ok()?;
     let kinds = serde_json::to_string(&kind_names(&l.kinds().ok()?)).ok()?;
-    Some((exe, template, cwd, kinds))
+    Some((exe, template, cwd, kinds, l.start_mode.as_str()))
 }
 
 /// Remembers that the user confirmed launcher `l`'s command on this PC. Only called right after
@@ -1423,10 +1603,10 @@ fn confirmed_key(l: &CustomLauncher) -> Option<(String, String, String, String)>
 /// `launchers_assign`). A launcher without a program forgets any earlier confirmation.
 pub fn record_confirmed(conn: &Connection, l: &CustomLauncher) -> Result<()> {
     match confirmed_key(l) {
-        Some((exe, template, cwd, kinds)) => {
+        Some((exe, template, cwd, kinds, mode)) => {
             conn.execute(
-                "INSERT OR REPLACE INTO launcher_confirmed(launcherId,exeKey,template,cwdKey,targetKinds,confirmedAt) VALUES(?,?,?,?,?,?)",
-                params![l.id, exe, template, cwd, kinds, now_ms()],
+                "INSERT OR REPLACE INTO launcher_confirmed(launcherId,exeKey,template,cwdKey,targetKinds,confirmedAt,startMode) VALUES(?,?,?,?,?,?,?)",
+                params![l.id, exe, template, cwd, kinds, now_ms(), mode],
             )?;
         }
         None => forget_confirmed(conn, &l.id)?,
@@ -1443,13 +1623,13 @@ pub fn forget_confirmed(conn: &Connection, id: &str) -> Result<()> {
 /// Whether the user confirmed exactly launcher `l`'s current command on this PC
 /// ([`record_confirmed`]). Always false for a launcher without a program.
 pub fn is_confirmed(conn: &Connection, l: &CustomLauncher) -> Result<bool> {
-    let Some((exe, template, cwd, kinds)) = confirmed_key(l) else {
+    let Some((exe, template, cwd, kinds, mode)) = confirmed_key(l) else {
         return Ok(false);
     };
     Ok(conn
         .query_row(
-            "SELECT 1 FROM launcher_confirmed WHERE launcherId=? AND exeKey=? AND template=? AND cwdKey=? AND targetKinds=?",
-            params![l.id, exe, template, cwd, kinds],
+            "SELECT 1 FROM launcher_confirmed WHERE launcherId=? AND exeKey=? AND template=? AND cwdKey=? AND targetKinds=? AND IFNULL(startMode,'through')=?",
+            params![l.id, exe, template, cwd, kinds, mode],
             |_| Ok(()),
         )
         .optional()?
@@ -1482,8 +1662,8 @@ pub fn get(conn: &Connection, id: &str) -> Result<Option<CustomLauncher>> {
 pub fn save(conn: &Connection, l: &CustomLauncher) -> Result<()> {
     conn.execute(
         &format!(
-            "INSERT INTO custom_launchers({COLUMNS}) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
-             ON CONFLICT(id) DO UPDATE SET name=excluded.name,iconKind=excluded.iconKind,iconValue=excluded.iconValue,color=excluded.color,executable=excluded.executable,argsTemplate=excluded.argsTemplate,targetKind=excluded.targetKind,workingDir=excluded.workingDir,sortOrder=excluded.sortOrder,targetKinds=excluded.targetKinds"
+            "INSERT INTO custom_launchers({COLUMNS}) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+             ON CONFLICT(id) DO UPDATE SET name=excluded.name,iconKind=excluded.iconKind,iconValue=excluded.iconValue,color=excluded.color,executable=excluded.executable,argsTemplate=excluded.argsTemplate,targetKind=excluded.targetKind,workingDir=excluded.workingDir,sortOrder=excluded.sortOrder,targetKinds=excluded.targetKinds,startMode=excluded.startMode"
         ),
         params![
             l.id,
@@ -1501,6 +1681,7 @@ pub fn save(conn: &Connection, l: &CustomLauncher) -> Result<()> {
                 Ok(kinds) => kind_names(&kinds),
                 Err(_) => vec![l.target_kind.clone()],
             })?,
+            l.start_mode.as_str(),
         ],
     )?;
     Ok(())
@@ -1554,6 +1735,7 @@ mod tests {
             target_kind: kind.into(),
             target_kinds: vec![],
             working_dir: None,
+            start_mode: Default::default(),
             sort_order: 0,
             created_at: 1,
             available: false,
@@ -1574,6 +1756,7 @@ mod tests {
             use_executable_pick: true,
             no_program: false,
             use_folder_pick: false,
+            start_mode: None,
         }
     }
 
@@ -2305,6 +2488,17 @@ mod tests {
         assert_eq!(added.launcher.executable, EXE);
     }
 
+    /// The text of function `name` in `source` (up to the next top-level item).
+    fn function_text<'a>(source: &'a str, name: &str) -> &'a str {
+        let start = source.find(name).expect(name);
+        let rest = &source[start..];
+        let end = rest
+            .find("\n}\n")
+            .or_else(|| rest.find("\n}\r\n"))
+            .expect("end of function");
+        &rest[..end]
+    }
+
     #[test]
     fn launch_dispatch_never_uses_a_shell() {
         // The launcher branch of `launch_game` starts the program directly and returns before
@@ -2315,6 +2509,11 @@ mod tests {
             .expect("launcher branch");
         let branch = &source[start..];
         let branch = &branch[..branch.find("if is_rom_route(route)").expect("next branch")];
+        // "Open first" launchers go their own way, before anything of "through" runs.
+        let open_first = branch
+            .find("return launch_open_first(&state, game, route, &launcher, wait).await;")
+            .expect("open-first dispatch");
+        assert!(open_first < branch.find("launchers::prepare_launch").unwrap());
         assert!(branch.contains("launchers::prepare_launch"));
         // A shortcut given to the launcher is checked again before every launch, and before
         // `prepare_launch` builds the argv.
@@ -2330,29 +2529,79 @@ mod tests {
         let game = branch
             .find("spawn_detached_in(&launch.program, &argv, Some(&launch.cwd))")
             .expect("game started");
+        assert!(game > options);
         assert!(branch.contains("track_started_process(&state, &game.id, pid, &launch.program)"));
-        // A launcher that isn't open yet is started alone: its checked program, no arguments
-        // and no launch options, only after every check (the options' too), and before the
-        // game would start.
-        let alone = branch
-            .find("spawn_detached_in(&launch.program, &[], Some(&launch.cwd))")
-            .expect("launcher started alone");
-        assert!(alone > options);
-        assert!(alone < game);
-        assert_eq!(branch.matches("spawn_detached_in(").count(), 2);
-        assert!(branch.contains(".pending_launches") && branch.contains(".begin("));
+        // "Through" starts the launcher exactly once, with the game: never alone first, never
+        // waiting (that opened launchers that aren't single-instance twice).
+        assert_eq!(branch.matches("spawn_detached_in(").count(), 1);
+        assert!(!branch.contains("pending_launches"));
+        assert!(!branch.contains("&[]"));
+        // A Continue (`Never`) never runs a "through" launcher with the game: only "open first"
+        // launchers wait, and one switched to "through" while waiting is refused.
+        let refused = branch
+            .find("if wait == LauncherWait::Never {")
+            .expect("continue refused");
+        assert!(open_first < refused && refused < check);
         for forbidden in [
             "shell_open",
             "spawn_detached(",
             "cmd.exe",
             "explorer",
             "Command::new",
+            "start_direct",
         ] {
             assert!(!branch.contains(forbidden), "{forbidden}");
         }
         // The launcher branch comes first, so a launcher route is never treated as a ROM, local
         // or store route.
-        assert!(start < source.find("if is_rom_route(route) {").unwrap());
+        assert!(start < source.find("if is_rom_route(route) ||").unwrap());
+    }
+
+    #[test]
+    fn open_first_opens_the_launcher_alone_and_starts_the_game_directly() {
+        let source = include_str!("launch.rs");
+        let body = function_text(source, "async fn launch_open_first(");
+        // Everything is checked before anything runs: the launcher's program, the game's direct
+        // route and its whole direct start (shortcuts, launch options, emulator).
+        let checked = body
+            .find("launchers::prepare_open_first(launcher, route)?")
+            .unwrap();
+        let direct = body.find("direct_route(&owned_game, &owned_route").unwrap();
+        let prepared = body.find("prepare_direct(&state.db, &direct)").unwrap();
+        assert!(checked < direct && direct < prepared);
+        // The launcher alone: no arguments at all, and only when it isn't running.
+        let alone = body
+            .find("spawn_detached_in(&open.program, &[], Some(&open.cwd))")
+            .expect("launcher started alone, without arguments");
+        assert!(prepared < alone);
+        assert!(body[..alone].contains("!launcher_program_running(&open.program).await"));
+        assert_eq!(body.matches("spawn_detached_in(").count(), 1);
+        assert!(body.contains(".pending_launches") && body.contains(".begin("));
+        // The launch waits after opening the launcher; the game itself starts directly, from the
+        // checked direct route, the same way a local or ROM route starts.
+        let returned = body[alone..]
+            .find("return Ok(LaunchOutcome::Waiting")
+            .unwrap()
+            + alone;
+        let game = body
+            .find("start_direct(state, &game.id, &direct, launch).await?")
+            .expect("game started directly");
+        assert!(returned < game);
+        // The launcher never gets the game: no template, argv or launcher options here.
+        for forbidden in [
+            "build_argv",
+            "prepare_launch(",
+            "launcher_launch_argv",
+            "args_template",
+            "shell_open",
+            "Command::new",
+        ] {
+            assert!(!body.contains(forbidden), "{forbidden}");
+        }
+        // Local and ROM routes start through the very same two functions.
+        let dispatch = function_text(source, "pub async fn launch_game(");
+        assert!(dispatch.contains("let launch = prepare_direct(&state.db, route).await?;"));
+        assert!(dispatch.contains("start_direct(&state, &game.id, route, launch).await?;"));
     }
 
     fn library_with(games: &[Game]) -> Db {
@@ -3205,5 +3454,283 @@ mod tests {
             &[p("Heroic.exe")],
             Path::new("Heroic.exe")
         ));
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // Start modes
+
+    fn open_first(exe: &str, kinds: &[&str]) -> CustomLauncher {
+        validate(CustomLauncher {
+            id: "retro".into(),
+            name: "Retro Project".into(),
+            target_kind: kinds[0].into(),
+            target_kinds: kinds.iter().map(|k| k.to_string()).collect(),
+            args_template: "--open {target}".into(),
+            start_mode: StartMode::OpenFirst,
+            ..launcher(exe, kinds[0])
+        })
+        .unwrap()
+    }
+
+    fn retro_route(target: &str) -> GameRoute {
+        GameRoute {
+            source_id: "launcher:retro".into(),
+            store: "Custom".into(),
+            launch_target: target.into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn older_launchers_keep_running_games_through_their_program() {
+        // A database from before start modes: no `startMode` column.
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE custom_launchers(id TEXT PRIMARY KEY,name TEXT NOT NULL,iconKind TEXT NOT NULL,iconValue TEXT NOT NULL,color TEXT NOT NULL,executable TEXT NOT NULL,argsTemplate TEXT NOT NULL DEFAULT '',targetKind TEXT NOT NULL,workingDir TEXT,sortOrder INTEGER NOT NULL DEFAULT 0,createdAt INTEGER NOT NULL,targetKinds TEXT);
+             INSERT INTO custom_launchers VALUES('heroic','Heroic','builtin','rocket','#4f8cff','D:\\Launchers\\Heroic\\Heroic.exe','--start {target}','file',NULL,0,1,'[\"file\"]');
+             CREATE TABLE launcher_confirmed(launcherId TEXT PRIMARY KEY,exeKey TEXT NOT NULL,template TEXT NOT NULL,cwdKey TEXT NOT NULL,targetKinds TEXT NOT NULL,confirmedAt INTEGER NOT NULL);",
+        )
+        .unwrap();
+        let before = CustomLauncher {
+            start_mode: StartMode::Through,
+            ..validate(launcher(EXE, "file")).unwrap()
+        };
+        let (exe, template, cwd, kinds, _) = confirmed_key(&before).unwrap();
+        conn.execute(
+            "INSERT INTO launcher_confirmed VALUES('heroic',?,?,?,?,1)",
+            params![exe, template, cwd, kinds],
+        )
+        .unwrap();
+        migrate(&conn).unwrap();
+        migrate(&conn).unwrap(); // idempotent
+        let stored = get(&conn, "heroic").unwrap().unwrap();
+        assert_eq!(stored.start_mode, StartMode::Through);
+        assert_eq!(stored.args_template, "--start {target}");
+        // A confirmation from before start modes was for "through", and still counts for it.
+        assert!(is_confirmed(&conn, &stored).unwrap());
+        let switched = CustomLauncher {
+            start_mode: StartMode::OpenFirst,
+            ..stored.clone()
+        };
+        assert!(!is_confirmed(&conn, &switched).unwrap());
+        // Saved again, the mode is kept.
+        save(&conn, &switched).unwrap();
+        assert_eq!(
+            get(&conn, "heroic").unwrap().unwrap().start_mode,
+            StartMode::OpenFirst
+        );
+        // Older JSON (backups, renderer data) without the field: "through".
+        let mut json = serde_json::to_value(&stored).unwrap();
+        assert!(json.get("startMode").is_none(), "through isn't written");
+        json["startMode"] = "openFirst".into();
+        let parsed: CustomLauncher = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(parsed.start_mode, StartMode::OpenFirst);
+        json.as_object_mut().unwrap().remove("startMode");
+        let parsed: CustomLauncher = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(parsed.start_mode, StartMode::Through);
+        json["startMode"] = "elevated".into();
+        assert!(serde_json::from_value::<CustomLauncher>(json).is_err());
+        assert_eq!(StartMode::from_stored(None), StartMode::Through);
+        assert_eq!(StartMode::from_stored(Some("")), StartMode::Through);
+        assert_eq!(
+            StartMode::from_stored(Some("openFirst")),
+            StartMode::OpenFirst
+        );
+    }
+
+    #[test]
+    fn open_first_launchers_have_a_program_and_no_identifiers() {
+        assert!(validate(CustomLauncher {
+            start_mode: StartMode::OpenFirst,
+            ..launcher(EXE, "identifier")
+        })
+        .unwrap_err()
+        .to_string()
+        .contains("identifiers"));
+        let label = CustomLauncher {
+            executable: String::new(),
+            args_template: String::new(),
+            start_mode: StartMode::OpenFirst,
+            ..launcher(EXE, "file")
+        };
+        assert!(validate(label).is_err());
+        assert_eq!(
+            open_first(EXE, &["file", "folder"]).start_mode,
+            StartMode::OpenFirst
+        );
+
+        // Renderer saves: the mode is sent, kept when absent, "through" for a new launcher.
+        let none = |_: &str| false;
+        let mut new = input("file");
+        assert_eq!(
+            accept_renderer_launcher(new.clone(), ctx(None, Some(EXE), &none))
+                .unwrap()
+                .launcher
+                .start_mode,
+            StartMode::Through
+        );
+        new.start_mode = Some(StartMode::OpenFirst);
+        let made = accept_renderer_launcher(new.clone(), ctx(None, Some(EXE), &none))
+            .unwrap()
+            .launcher;
+        assert_eq!(made.start_mode, StartMode::OpenFirst);
+        let mut edit = input("file");
+        edit.id = Some(made.id.clone());
+        edit.use_executable_pick = false;
+        assert_eq!(
+            accept_renderer_launcher(edit.clone(), ctx(Some(&made), None, &none))
+                .unwrap()
+                .launcher
+                .start_mode,
+            StartMode::OpenFirst,
+            "kept when not sent"
+        );
+        edit.start_mode = Some(StartMode::Through);
+        let back = accept_renderer_launcher(edit, ctx(Some(&made), None, &none))
+            .unwrap()
+            .launcher;
+        assert_eq!(back.start_mode, StartMode::Through);
+        // A mode change changes what runs: it is confirmed in the native dialog.
+        assert!(needs_confirmation(Some(&made), &back));
+        assert!(needs_confirmation(Some(&back), &made));
+        assert!(!needs_confirmation(Some(&made), &made.clone()));
+        let mut ident = input("identifier");
+        ident.start_mode = Some(StartMode::OpenFirst);
+        assert!(accept_renderer_launcher(ident, ctx(None, Some(EXE), &none)).is_err());
+        let mut label = input("file");
+        label.no_program = true;
+        label.args_template = String::new();
+        label.use_executable_pick = false;
+        label.start_mode = Some(StartMode::OpenFirst);
+        assert!(accept_renderer_launcher(label, ctx(None, None, &none)).is_err());
+    }
+
+    #[test]
+    fn open_first_dialogs_say_what_runs_facts_first() {
+        let l = open_first(EXE, &["file", "folder"]);
+        let prompt = confirmation_prompt(&l).unwrap();
+        let program = prompt.find(EXE).unwrap();
+        assert!(program < prompt.find("Retro Project").unwrap());
+        assert!(prompt.contains("on its own (no arguments)"), "{prompt}");
+        assert!(prompt.contains("starts the game directly from its own file"));
+        // The argument template isn't used, so it isn't shown as something that runs.
+        assert!(!prompt.contains("--open"), "{prompt}");
+        assert!(!prompt.contains("{target}"), "{prompt}");
+        let through = confirmation_prompt(&CustomLauncher {
+            start_mode: StartMode::Through,
+            ..l.clone()
+        })
+        .unwrap();
+        assert!(through.contains("--open") && !through.contains("no arguments"));
+
+        let c = AssignCandidate {
+            route_index: 0,
+            kind: TargetKind::File,
+            target: r"M:\Retro Project\PC Game\00356\Cairn.exe".into(),
+        };
+        let prompt = assign_prompt(&l, "Cairn", &c, &[]).unwrap();
+        let program = prompt.find(EXE).unwrap();
+        let alone = prompt.find("on its own (no arguments)").unwrap();
+        let file = prompt.find(&c.target).unwrap();
+        assert!(program < alone && alone < file);
+        assert!(file < prompt.find("For the game: Cairn").unwrap());
+        assert!(!prompt.contains("--open"), "{prompt}");
+        let with = assign_prompt(&l, "Cairn", &c, &["-windowed".into()]).unwrap();
+        assert!(with.contains("1. -windowed"), "{with}");
+    }
+
+    #[test]
+    fn open_first_opens_only_the_program_and_never_through_the_template() {
+        let dir = TempDir::new("open-first");
+        let exe = dir.file("Retro/Retro Project.exe");
+        let game = dir.file("PC Game/00356/Cairn.exe");
+        let folder = dir.dir("PC Game/00357");
+        let l = open_first(&exe.to_string_lossy(), &["file", "folder"]);
+        let open = prepare_open_first(&l, &retro_route(&game.to_string_lossy())).unwrap();
+        assert_eq!(open.program, exe);
+        assert_eq!(open.cwd, exe.parent().unwrap());
+        // Folders pass here (they are refused when the game is started directly, with a message).
+        assert!(prepare_open_first(&l, &retro_route(&folder.to_string_lossy())).is_ok());
+        // An identifier never starts directly.
+        let e = prepare_open_first(&l, &retro_route("Hollow Knight")).unwrap_err();
+        assert!(e.to_string().contains("identifier"), "{e}");
+        let missing = dir.path().join("gone.exe");
+        assert!(prepare_open_first(&l, &retro_route(&missing.to_string_lossy())).is_err());
+        let other = GameRoute {
+            source_id: "launcher:other".into(),
+            ..retro_route(&game.to_string_lossy())
+        };
+        assert!(prepare_open_first(&l, &other).is_err());
+        // The modes never mix: no argv is built for an "open first" launcher, and a "through"
+        // launcher isn't opened alone.
+        assert!(prepare_launch(&l, &retro_route(&game.to_string_lossy())).is_err());
+        let through = CustomLauncher {
+            start_mode: StartMode::Through,
+            ..l.clone()
+        };
+        assert!(prepare_open_first(&through, &retro_route(&game.to_string_lossy())).is_err());
+        let launch = prepare_launch(&through, &retro_route(&game.to_string_lossy())).unwrap();
+        assert_eq!(
+            launch.argv,
+            ["--open".to_string(), game.to_string_lossy().into_owned()]
+        );
+    }
+
+    #[test]
+    fn backups_round_trip_the_start_mode() {
+        let dir = TempDir::new("backup-mode");
+        let exe = dir.file("Retro/Retro.exe");
+        let l = open_first(&exe.to_string_lossy(), &["file"]);
+        let db = Db::memory().unwrap();
+        save(&db.lock(), &l).unwrap();
+        save(
+            &db.lock(),
+            &CustomLauncher {
+                id: "heroic".into(),
+                ..validate(launcher(EXE, "file")).unwrap()
+            },
+        )
+        .unwrap();
+        let backup = crate::types::Backup {
+            games: vec![],
+            settings: None,
+            emulators: None,
+            game_page_custom: None,
+            game_notes: None,
+            game_added: None,
+            play_sessions: None,
+            game_links: None,
+            launchers: Some(list(&db.lock()).unwrap()),
+        };
+        let json = serde_json::to_value(&backup).unwrap();
+        let entries = json["customLaunchers"].as_array().unwrap();
+        let retro = entries.iter().find(|e| e["id"] == "retro").unwrap();
+        let heroic = entries.iter().find(|e| e["id"] == "heroic").unwrap();
+        assert_eq!(retro["startMode"], "openFirst");
+        assert!(heroic.get("startMode").is_none());
+        let parsed = crate::validation::backup(&json).unwrap();
+        let restored = Db::memory().unwrap();
+        db::restore_backup(&mut restored.lock(), &parsed).unwrap();
+        let conn = restored.lock();
+        assert_eq!(
+            get(&conn, "retro").unwrap().unwrap().start_mode,
+            StartMode::OpenFirst
+        );
+        assert_eq!(
+            get(&conn, "heroic").unwrap().unwrap().start_mode,
+            StartMode::Through
+        );
+        // A restored launcher is confirmed again before one-click linking.
+        assert!(!is_confirmed(&conn, &get(&conn, "retro").unwrap().unwrap()).unwrap());
+        drop(conn);
+        // Checked like a save: an unknown mode, or an identifier launcher opened first, is refused.
+        let mut bad = json.clone();
+        let index = entries.iter().position(|e| e["id"] == "retro").unwrap();
+        bad["customLaunchers"][index]["startMode"] = "shell".into();
+        assert!(crate::validation::backup(&bad).is_err());
+        let mut bad = json.clone();
+        bad["customLaunchers"][index]["targetKind"] = "identifier".into();
+        bad["customLaunchers"][index]["targetKinds"] = serde_json::json!(["identifier"]);
+        assert!(crate::validation::backup(&bad).is_err());
     }
 }

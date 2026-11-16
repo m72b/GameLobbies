@@ -2651,7 +2651,8 @@ mod tests {
                 "template",
                 "cwdKey",
                 "targetKinds",
-                "confirmedAt"
+                "confirmedAt",
+                "startMode"
             ]
         );
         let rows: i64 = conn

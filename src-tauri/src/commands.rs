@@ -139,10 +139,11 @@ fn after_launch(app: &AppHandle, state: &AppState, outcome: &LaunchOutcome) {
     }
 }
 
-/// Continues a launch that waited for its custom launcher (`library_launch` returned
-/// `waiting`). The renderer names only the game and the pending id: the launch runs the route
-/// that was checked when Play was pressed, found again in the library and checked again (it
-/// fails when that route or the launcher's program changed meanwhile). Each id works once.
+/// Continues a launch that waited for its "open first" custom launcher (`library_launch`
+/// returned `waiting`). The renderer names only the game and the pending id: the game starts
+/// directly from the route that was checked when Play was pressed, found again in the library
+/// and checked again (it fails when that route, the launcher's program or its start mode changed
+/// meanwhile). Each id works once.
 #[tauri::command]
 pub async fn library_launch_continue(
     app: AppHandle,
@@ -159,12 +160,7 @@ pub async fn library_launch_continue(
         let launcher = crate::launchers::get(&conn, &pending.launcher_id).map_err(err)?;
         (game, launcher)
     };
-    if launcher.is_none_or(|l| l.executable != pending.program) {
-        return Err(format!(
-            "{} changed since you pressed Play. Press Play again.",
-            pending.launcher_name
-        ));
-    }
+    crate::pending_launch::check_launcher(&pending, launcher.as_ref()).map_err(err)?;
     // What a launcher route runs is its launcher, target and launch options (all checked again
     // by `launch_game`, options against their confirmation); its install state may change
     // meanwhile.

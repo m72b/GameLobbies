@@ -875,7 +875,22 @@ where
         .await
         .map_err(err)?
         .map_err(err)?;
-        launchers::prepare_launch(&launcher, &route).map_err(err)?;
+        if launcher.start_mode == launchers::StartMode::OpenFirst {
+            // Opened first: the launcher's program and folder, and the game's own file as it
+            // would start without a launcher (a folder or a shortcut nobody confirmed is refused
+            // here already; the emulator for a ROM is checked at Play).
+            launchers::prepare_open_first(&launcher, &route).map_err(err)?;
+            let confirmations = db::shortcut_confirmations(&db.lock()).map_err(err)?;
+            let (owned_game, owned_route) = (game.clone(), route.clone());
+            crate::platform::on_thread(move || {
+                crate::launch::direct_route(&owned_game, &owned_route, &confirmations)
+            })
+            .await
+            .map_err(err)?
+            .map_err(err)?;
+        } else {
+            launchers::prepare_launch(&launcher, &route).map_err(err)?;
+        }
         // Launch options get the checks of options set on the game page, for this launcher and
         // this route's target, and are shown in the same dialog as the route.
         let checked = if options.trim().is_empty() {
@@ -1078,6 +1093,7 @@ mod tests {
             target_kind: kinds[0].into(),
             target_kinds: kinds.iter().map(|k| k.to_string()).collect(),
             working_dir: None,
+            start_mode: Default::default(),
             sort_order: 0,
             created_at: 1,
             available: false,
@@ -1621,5 +1637,119 @@ mod tests {
             body.contains("None,\n        None,\n        String::new(),"),
             "{body}"
         );
+    }
+
+    fn open_first(id: &str, exe: &str) -> CustomLauncher {
+        launchers::validate(CustomLauncher {
+            start_mode: launchers::StartMode::OpenFirst,
+            args_template: "--open {target}".into(),
+            ..launcher(id, exe, &["file", "folder"])
+        })
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn changing_the_start_mode_asks_with_the_new_modes_wording() {
+        let dir = TempDir::new("save-mode");
+        let exe = dir.file("Retro/Retro Project.exe");
+        let through = CustomLauncher {
+            args_template: "--open {target}".into(),
+            ..launcher("retro", &exe.to_string_lossy(), &["file", "folder"])
+        };
+        let db = Db::memory().unwrap();
+        let (result, _) = save(&db, None, &through, true).await;
+        let through = result.unwrap();
+        assert!(launchers::is_confirmed(&db.lock(), &through).unwrap());
+
+        // Switching to "open first" is a command change: the dialog shows it, and cancelling it
+        // changes nothing.
+        let next = CustomLauncher {
+            start_mode: launchers::StartMode::OpenFirst,
+            ..through.clone()
+        };
+        let prompt = launchers::confirmation_prompt(&next).unwrap();
+        assert!(prompt.contains("on its own (no arguments)"), "{prompt}");
+        let (result, shown) = save(&db, Some("retro"), &next, false).await;
+        assert!(result.is_err());
+        assert_eq!(shown, 1);
+        assert_eq!(
+            launchers::get(&db.lock(), "retro").unwrap(),
+            Some(through.clone())
+        );
+        let (result, shown) = save(&db, Some("retro"), &next, true).await;
+        let saved = result.unwrap();
+        assert_eq!(shown, 1);
+        assert_eq!(saved.start_mode, launchers::StartMode::OpenFirst);
+        // The confirmation is for the new mode only.
+        assert!(launchers::is_confirmed(&db.lock(), &saved).unwrap());
+        assert!(!launchers::is_confirmed(&db.lock(), &through).unwrap());
+        // And back: asked again.
+        let (result, shown) = save(&db, Some("retro"), &through, true).await;
+        assert!(result.is_ok());
+        assert_eq!(shown, 1);
+    }
+
+    #[tokio::test]
+    async fn linking_to_an_open_first_launcher_shows_what_runs_and_then_takes_one_click() {
+        let dir = TempDir::new("link-open-first");
+        let exe = dir.file("Retro/Retro Project.exe");
+        let a_exe = dir.file("PC Game/00356/Cairn.exe");
+        let b_exe = dir.file("PC Game/00357/Other.exe");
+        let l = open_first("retro", &exe.to_string_lossy());
+        let a = game("a", vec![local_route(&a_exe)]);
+        let b = game("b", vec![local_route(&b_exe)]);
+        let folder_game = game(
+            "f",
+            vec![GameRoute {
+                source_id: "steam".into(),
+                store: "Steam".into(),
+                launch_target: "steam://rungameid/1".into(),
+                install_path: Some(dir.dir("Steam/F").to_string_lossy().into_owned()),
+                installed: Some(true),
+                ..Default::default()
+            }],
+        );
+        let db = library(&[&l], &[&a, &b, &folder_game]);
+        let shown = Cell::new(0);
+        let ask = |prompt: String| {
+            assert!(
+                prompt.starts_with("When you play this game, Game Lobby opens:"),
+                "{prompt}"
+            );
+            assert!(prompt.contains("on its own (no arguments)"), "{prompt}");
+            assert!(!prompt.contains("--open"), "{prompt}");
+            shown.set(shown.get() + 1);
+            async { true }
+        };
+        let result = assign_game(&db, "a", "retro", None, None, String::new(), ask).await;
+        assert!(result.unwrap().asked);
+        assert_eq!(shown.get(), 1);
+        assert!(launchers::is_confirmed(&db.lock(), &l).unwrap());
+        let route = stored(&db, "a").routes[0].clone();
+        assert_eq!(route.source_id, "launcher:retro");
+        assert_eq!(route.launch_target, a_exe.to_string_lossy());
+        // The next link of this launcher needs no dialog: it starts the game's own file too.
+        let result = assign_game(&db, "b", "retro", None, None, String::new(), |_| async {
+            panic!("no dialog")
+        })
+        .await;
+        assert!(!result.unwrap().asked);
+        // A folder can't start directly: refused before anything is saved.
+        let e = assign_game(&db, "f", "retro", None, None, String::new(), |_| async {
+            true
+        })
+        .await
+        .err()
+        .unwrap();
+        assert!(e.contains("folder"), "{e}");
+        assert_eq!(stored(&db, "f").routes, folder_game.routes);
+
+        // Launch options for the route are the game's own .exe options, confirmed for that .exe.
+        let host = crate::links::launcher_host(&l, &route).unwrap();
+        assert_eq!(host.program, a_exe.to_string_lossy());
+        assert!(host.base.is_empty());
+        assert!(host.launcher.is_none());
+        let own = crate::links::args_host(&db.lock(), &local_route(&a_exe)).unwrap();
+        assert_eq!(host, own);
     }
 }
