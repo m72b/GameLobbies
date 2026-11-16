@@ -169,15 +169,15 @@ test('linking to a launcher says what Play does now', () => {
 })
 
 test('start modes: older launchers run games through their program, new ones may be opened first', () => {
-  const program = { name: 'Retro Project', executable: 'C:\Retro\Retro Project.exe' }
+  const program = { name: 'Game Hub', executable: 'C:\\Hub\\Game Hub.exe' }
   assert.equal(startModeOf(program), 'through', 'absent = through')
   assert.equal(startModeOf({ ...program, startMode: 'through' }), 'through')
   assert.equal(startModeOf({ ...program, startMode: 'openFirst' }), 'openFirst')
   assert.equal(startModeOf({ ...program, executable: '', startMode: 'openFirst' }), 'through', 'no program: nothing to open')
   assert.equal(opensFirst({ ...program, startMode: 'openFirst' }), true)
-  assert.equal(linkedMessage({ ...program, startMode: 'openFirst' }), 'Linked to Retro Project. Play now opens Retro Project first, then starts the game from its own file.')
-  assert.equal(playsWithText({ ...program, startMode: 'openFirst' }), 'Opens Retro Project first')
-  assert.equal(playsWithText(program), 'Plays through Retro Project')
+  assert.equal(linkedMessage({ ...program, startMode: 'openFirst' }), 'Linked to Game Hub. Play now opens Game Hub first, then starts the game from its own file.')
+  assert.equal(playsWithText({ ...program, startMode: 'openFirst' }), 'Opens Game Hub first')
+  assert.equal(playsWithText(program), 'Plays through Game Hub')
   // Opened first, games start from their own file: no identifiers.
   assert.deepEqual(kindsForMode(['file', 'folder', 'identifier'], 'openFirst'), ['file', 'folder'])
   assert.deepEqual(kindsForMode(['identifier'], 'openFirst'), ['file'])

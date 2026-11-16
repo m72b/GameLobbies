@@ -3536,7 +3536,7 @@ mod tests {
     fn open_first(exe: &str, kinds: &[&str]) -> CustomLauncher {
         validate(CustomLauncher {
             id: "retro".into(),
-            name: "Retro Project".into(),
+            name: "Game Hub".into(),
             target_kind: kinds[0].into(),
             target_kinds: kinds.iter().map(|k| k.to_string()).collect(),
             args_template: "--open {target}".into(),
@@ -3684,7 +3684,7 @@ mod tests {
         let l = open_first(EXE, &["file", "folder"]);
         let prompt = confirmation_prompt(&l).unwrap();
         let program = prompt.find(EXE).unwrap();
-        assert!(program < prompt.find("Retro Project").unwrap());
+        assert!(program < prompt.find("Game Hub").unwrap());
         assert!(prompt.contains("on its own (no arguments)"), "{prompt}");
         assert!(prompt.contains("starts the game directly from its own file"));
         // The argument template isn't used, but it is stored (and part of what this dialog
@@ -3693,7 +3693,7 @@ mod tests {
             .find("Arguments kept for \"Start games through it\" (not used now; one per line, {target} is the game's file or folder):\n  1. --open\n  2. {target}")
             .unwrap_or_else(|| panic!("{prompt}"));
         assert!(prompt.find("Working folder").unwrap() < kept);
-        assert!(kept < prompt.find("Name: Retro Project").unwrap());
+        assert!(kept < prompt.find("Name: Game Hub").unwrap());
         assert!(!prompt.contains("runs this command"), "{prompt}");
         // No template: no such line.
         let bare = validate(CustomLauncher {
@@ -3713,7 +3713,7 @@ mod tests {
         let c = AssignCandidate {
             route_index: 0,
             kind: TargetKind::File,
-            target: r"M:\Retro Project\PC Game\00356\Cairn.exe".into(),
+            target: r"D:\Games\PC\Cairn\Cairn.exe".into(),
         };
         let prompt = assign_prompt(&l, "Cairn", &c, &[]).unwrap();
         let program = prompt.find(EXE).unwrap();
@@ -3732,13 +3732,13 @@ mod tests {
         let c = AssignCandidate {
             route_index: 0,
             kind: TargetKind::File,
-            target: r"M:\Roms\GBA\Cairn Quest.gba".into(),
+            target: r"D:\Roms\GBA\Cairn Quest.gba".into(),
         };
         let with =
             |facts: OpenFirstFacts| assign_prompt_with(&l, "Cairn", &c, &[], &facts).unwrap();
         let file = with(OpenFirstFacts::default());
         assert!(
-            file.contains("Then it starts the game directly from its own file:\n  M:\\Roms"),
+            file.contains("Then it starts the game directly from its own file:\n  D:\\Roms"),
             "{file}"
         );
         let named = with(OpenFirstFacts {
@@ -3820,7 +3820,7 @@ mod tests {
     #[test]
     fn open_first_opens_only_the_program_and_never_through_the_template() {
         let dir = TempDir::new("open-first");
-        let exe = dir.file("Retro/Retro Project.exe");
+        let exe = dir.file("Hub/Game Hub.exe");
         let game = dir.file("PC Game/00356/Cairn.exe");
         let folder = dir.dir("PC Game/00357");
         let l = open_first(&exe.to_string_lossy(), &["file", "folder"]);

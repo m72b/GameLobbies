@@ -1676,7 +1676,7 @@ mod tests {
     #[tokio::test]
     async fn changing_the_start_mode_asks_with_the_new_modes_wording() {
         let dir = TempDir::new("save-mode");
-        let exe = dir.file("Retro/Retro Project.exe");
+        let exe = dir.file("Hub/Game Hub.exe");
         let through = CustomLauncher {
             args_template: "--open {target}".into(),
             ..launcher("retro", &exe.to_string_lossy(), &["file", "folder"])
@@ -1717,7 +1717,7 @@ mod tests {
     #[tokio::test]
     async fn linking_to_an_open_first_launcher_shows_what_runs_and_then_takes_one_click() {
         let dir = TempDir::new("link-open-first");
-        let exe = dir.file("Retro/Retro Project.exe");
+        let exe = dir.file("Hub/Game Hub.exe");
         let a_exe = dir.file("PC Game/00356/Cairn.exe");
         let b_exe = dir.file("PC Game/00357/Other.exe");
         let l = open_first("retro", &exe.to_string_lossy());
@@ -1781,7 +1781,7 @@ mod tests {
     #[tokio::test]
     async fn an_open_first_link_to_another_launchers_file_always_asks() {
         let dir = TempDir::new("link-other-launcher");
-        let exe = dir.file("Retro/Retro Project.exe");
+        let exe = dir.file("Hub/Game Hub.exe");
         let hub_exe = dir.file("Hub/Hub.exe");
         let a_exe = dir.file("Hub Games/Cairn/Cairn.exe");
         let b_exe = dir.file("PC Game/00357/Other.exe");
@@ -1847,7 +1847,7 @@ mod tests {
     #[tokio::test]
     async fn an_open_first_launchers_own_games_and_through_launchers_are_unaffected() {
         let dir = TempDir::new("link-own-launcher");
-        let exe = dir.file("Retro/Retro Project.exe");
+        let exe = dir.file("Hub/Game Hub.exe");
         let hub_exe = dir.file("Hub/Hub.exe");
         let own_exe = dir.file("Retro Games/Cairn/Cairn.exe");
         let other_exe = dir.file("Retro Games/Sly/Sly.exe");
@@ -1911,7 +1911,7 @@ mod tests {
     #[tokio::test]
     async fn an_open_first_link_says_a_rom_starts_with_its_emulator() {
         let dir = TempDir::new("link-open-first-rom");
-        let exe = dir.file("Retro/Retro Project.exe");
+        let exe = dir.file("Hub/Game Hub.exe");
         let rom = dir.file("Roms/GBA/Cairn Quest.gba");
         let l = open_first("retro", &exe.to_string_lossy());
         let rom_route = GameRoute {
