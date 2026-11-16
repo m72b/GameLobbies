@@ -93,6 +93,11 @@ test('launcher routes take launch options only when their launcher has a program
   const route = { sourceId: 'launcher:hub', store: 'Custom', launchTarget: 'D:\\Games\\hk.exe' }
   const hub = { id: 'hub', name: 'Hub', executable: 'D:\\Launchers\\Hub\\Hub.exe' }
   assert.deepEqual(argsSupport(route, [hub]), { ok: true, launcher: 'Hub' })
+  // Opened first, the launcher gets nothing: the options are the game's own .exe options.
+  const first = { ...hub, startMode: 'openFirst' }
+  assert.deepEqual(argsSupport(route, [first]), { ok: true })
+  for (const launchTarget of ['D:\Games\hk.lnk', 'D:\Roms\a.chd', 'D:\Games\HK'])
+    assert.match(argsSupport({ ...route, launchTarget }, [first]).reason, /opened first/, launchTarget)
   const label = argsSupport(route, [{ ...hub, executable: '' }])
   assert.equal(label.ok, false)
   assert.match(label.reason, /no program/)

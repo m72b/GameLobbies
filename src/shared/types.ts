@@ -259,20 +259,27 @@ export interface RootsAPI { list(): Promise<LibraryRoot[]>; add(kind: LibraryRoo
 /** What a custom launcher's games use as their target. */
 export type LauncherTargetKind = 'file' | 'folder' | 'identifier'
 /**
+ * How Play starts a game of a launcher with a program: `openFirst` opens the launcher on its own
+ * (no arguments) when it isn't running, waits for Continue, then starts the game directly from its
+ * own file; `through` runs the launcher's program once with the game as an argument. Absent means
+ * `through` (launchers saved before start modes).
+ */
+export type LauncherStartMode = 'openFirst' | 'through'
+/**
  * A custom launcher (output of `launchers.list`). Its games have a route with `sourceId`
  * `launcher:<id>` and store `Custom`, or (a launcher without a program: `executable` is empty)
  * ordinary local and ROM routes found in its games folders with `launcherId` as a label.
  * `executable` and `workingDir` are shown, never sent back. `targetKinds`: what its games may use
  * (at least one); `targetKind` is the first of them.
  */
-export interface CustomLauncher { id: string; name: string; iconKind: 'builtin' | 'image'; /** A built-in icon name or an icon file name in the covers folder. */ iconValue: string; /** `#rrggbb`. */ color: string; executable: string; argsTemplate: string; targetKind: LauncherTargetKind; targetKinds: LauncherTargetKind[]; /** Absent = the executable's folder. */ workingDir?: string; sortOrder: number; createdAt: number; /** The executable exists right now (always true without a program). */ available: boolean }
+export interface CustomLauncher { id: string; name: string; iconKind: 'builtin' | 'image'; /** A built-in icon name or an icon file name in the covers folder. */ iconValue: string; /** `#rrggbb`. */ color: string; executable: string; argsTemplate: string; targetKind: LauncherTargetKind; targetKinds: LauncherTargetKind[]; /** Absent = the executable's folder. */ workingDir?: string; /** Absent = `through`. */ startMode?: LauncherStartMode; sortOrder: number; createdAt: number; /** The executable exists right now (always true without a program). */ available: boolean }
 /**
  * What `launchers.save` takes: never a path. `useExecutablePick` / `useFolderPick` use the file or
  * folder just chosen with `browseExecutable` / `browseFolder` (for up to 10 minutes); otherwise the
  * stored ones are kept. A new launcher needs an executable pick, unless `noProgram` (no program,
  * arguments or working folder: its games run directly).
  */
-export interface LauncherInput { id?: string; name: string; iconKind: 'builtin' | 'image'; iconValue: string; color: string; argsTemplate: string; targetKinds: LauncherTargetKind[]; workingDir: 'executable' | 'folder'; useExecutablePick?: boolean; useFolderPick?: boolean; noProgram?: boolean }
+export interface LauncherInput { id?: string; name: string; iconKind: 'builtin' | 'image'; iconValue: string; color: string; argsTemplate: string; targetKinds: LauncherTargetKind[]; workingDir: 'executable' | 'folder'; useExecutablePick?: boolean; useFolderPick?: boolean; noProgram?: boolean; /** Absent keeps the stored mode (`through` for a new launcher). Not with `noProgram`. */ startMode?: LauncherStartMode }
 export interface AddedLauncherGame { gameId: string; games: Game[] }
 /**
  * Custom launchers. Calls reject with a user-facing message on invalid input.

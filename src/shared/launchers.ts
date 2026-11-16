@@ -1,4 +1,4 @@
-import type { AssignTarget, CustomLauncher, Game, GameRoute, LauncherTargetKind, LibraryRoot, LocalScanSummary } from './types'
+import type { AssignTarget, CustomLauncher, Game, GameRoute, LauncherStartMode, LauncherTargetKind, LibraryRoot, LocalScanSummary } from './types'
 
 /**
  * Pure helpers for custom launchers. The Rust side (`launchers.rs`) is the authority: these only
@@ -88,6 +88,26 @@ export function toggleKind(kinds: readonly LauncherTargetKind[], kind: LauncherT
 /** A launcher without a program: only a label for the games found in its folders, which run directly. */
 export function isLabelOnly(launcher: Pick<CustomLauncher, 'executable'>): boolean {
   return !launcher.executable
+}
+
+/** How Play starts a launcher's games (`through` when absent: launchers saved before start modes). */
+export function startModeOf(launcher: Pick<CustomLauncher, 'executable'> & { startMode?: LauncherStartMode }): LauncherStartMode {
+  return !isLabelOnly(launcher) && launcher.startMode === 'openFirst' ? 'openFirst' : 'through'
+}
+
+/** Whether a launcher is opened first, with its games then started directly from their own file. */
+export function opensFirst(launcher: Pick<CustomLauncher, 'executable'> & { startMode?: LauncherStartMode }): boolean {
+  return startModeOf(launcher) === 'openFirst'
+}
+
+/**
+ * The target kinds a launcher may use in a start mode: an "open first" launcher starts each game
+ * from its own file, so identifiers are dropped (file is kept when nothing else is left).
+ */
+export function kindsForMode(kinds: readonly LauncherTargetKind[], mode: LauncherStartMode): LauncherTargetKind[] {
+  if (mode !== 'openFirst') return TARGET_KIND_ORDER.filter(kind => kinds.includes(kind))
+  const next = TARGET_KIND_ORDER.filter(kind => kind !== 'identifier' && kinds.includes(kind))
+  return next.length ? next : ['file']
 }
 
 /** Whether a launcher's games folders can be scanned: no program, or it takes files or folders. */
@@ -246,11 +266,18 @@ export function assignTargetLabel(target: AssignTarget, routes: readonly Pick<Ga
 }
 
 /** What "Link to launcher" says once a game is linked to `launcher` (its name cut to 64 characters). */
-export function linkedMessage(launcher: Pick<CustomLauncher, 'name' | 'executable'>): string {
+export function linkedMessage(launcher: Pick<CustomLauncher, 'name' | 'executable'> & { startMode?: LauncherStartMode }): string {
   const name = launcher.name.length > 64 ? launcher.name.slice(0, 63) + '…' : launcher.name
   return isLabelOnly(launcher)
     ? 'Listed under ' + name + '. It keeps starting the same way.'
-    : 'Linked to ' + name + '. Play now starts it through ' + name + '.'
+    : opensFirst(launcher)
+      ? 'Linked to ' + name + '. Play now opens ' + name + ' first, then starts the game from its own file.'
+      : 'Linked to ' + name + '. Play now starts it through ' + name + '.'
+}
+
+/** How a game linked to a launcher with a program starts, in a few words for its row. */
+export function playsWithText(launcher: Pick<CustomLauncher, 'name' | 'executable'> & { startMode?: LauncherStartMode }): string {
+  return opensFirst(launcher) ? 'Opens ' + launcher.name + ' first' : 'Plays through ' + launcher.name
 }
 
 /**

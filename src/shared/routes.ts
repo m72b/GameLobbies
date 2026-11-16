@@ -65,12 +65,16 @@ export const LAUNCH_OPTIONS_HELP = 'https://github.com/m72b/GameLobby/blob/main/
  * with a program (`launcher` is its name: the options come after its own arguments). Store links,
  * Xbox apps, emulators and launchers without a program start the game themselves.
  */
-export function argsSupport(route: Pick<GameRoute, 'sourceId' | 'store' | 'launchTarget' | 'emulatorId'>, launchers: readonly Pick<CustomLauncher, 'id' | 'name' | 'executable'>[] = []): ArgsSupport {
+export function argsSupport(route: Pick<GameRoute, 'sourceId' | 'store' | 'launchTarget' | 'emulatorId'>, launchers: readonly (Pick<CustomLauncher, 'id' | 'name' | 'executable'> & { startMode?: CustomLauncher['startMode'] })[] = []): ArgsSupport {
   if (route.sourceId.startsWith('launcher:')) {
     const launcher = launchers.find(item => 'launcher:' + item.id === route.sourceId)
     if (!launcher) return { ok: false, reason: 'This game’s launcher was deleted. Add the game again to another launcher.' }
     if (!launcher.executable) return { ok: false, reason: `${launcher.name} has no program, so this route can’t have launch options. Its games run directly: set options on the game’s own .exe route instead.` }
-    return { ok: true, launcher: launcher.name }
+    // Opened first, the launcher gets nothing: the game starts from its own .exe, which takes the options.
+    if (launcher.startMode !== 'openFirst') return { ok: true, launcher: launcher.name }
+    const own = route.launchTarget.trim()
+    if (!/^[a-z]:[\\/]/i.test(own) ||!/\.exe$/i.test(own)) return { ok: false, reason: `${launcher.name} is opened first, and then the game starts from its own file. Only a game started from its own .exe can have launch options here (not a shortcut, folder or ROM).` }
+    return { ok: true }
   }
   if (route.sourceId === 'rom' || route.emulatorId) return { ok: false, reason: 'ROMs start with their emulator’s arguments. Change them under Settings → Emulators.' }
   if (route.sourceId !== 'local') return { ok: false, reason: `${route.store} starts this game itself, so Game Lobby can’t pass launch options to it. Set them in ${route.store} instead.` }

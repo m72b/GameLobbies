@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { FolderPlus, ImagePlus } from 'lucide-react'
-import type { CustomLauncher, Game, LauncherInput, LauncherTargetKind, LibraryRoot } from '../shared/types'
-import { LAUNCHER_ICONS, LAUNCHER_SWATCHES, TARGET_KIND_ORDER, TARGET_PLACEHOLDER, canScanFolders, formatArgv, isHexColor, isLabelOnly, kindLabel, launcherKinds, launcherRoots, previewArgv, routeLauncherId, sampleTarget, toggleKind } from '../shared/launchers'
+import type { CustomLauncher, Game, LauncherInput, LauncherStartMode, LauncherTargetKind, LibraryRoot } from '../shared/types'
+import { LAUNCHER_ICONS, LAUNCHER_SWATCHES, TARGET_KIND_ORDER, TARGET_PLACEHOLDER, canScanFolders, formatArgv, isHexColor, isLabelOnly, kindLabel, kindsForMode, launcherKinds, launcherRoots, opensFirst, previewArgv, routeLauncherId, sampleTarget, startModeOf, toggleKind } from '../shared/launchers'
 import { LauncherIcon } from './launcher-icon'
 import { ScanProgress, ScanSummary, alreadyRunning, type LocalScan } from './library-settings'
 
@@ -20,8 +20,14 @@ interface Draft extends LauncherInput {
   workingDirPath: string
 }
 
-const blankDraft = (): Draft => ({ name: '', iconKind: 'builtin', iconValue: 'gamepad-2', color: LAUNCHER_SWATCHES[0], argsTemplate: TARGET_PLACEHOLDER, targetKinds: ['identifier'], workingDir: 'executable', noProgram: false, executablePath: '', workingDirPath: '' })
-const draftOf = (launcher: CustomLauncher): Draft => ({ id: launcher.id, name: launcher.name, iconKind: launcher.iconKind, iconValue: launcher.iconValue, color: launcher.color, argsTemplate: launcher.argsTemplate, targetKinds: launcherKinds(launcher), workingDir: launcher.workingDir ? 'folder' : 'executable', noProgram: isLabelOnly(launcher), executablePath: launcher.executable, workingDirPath: launcher.workingDir ?? '' })
+// New launchers with a program are opened first by default: most launchers people sign in to don't
+// take a game on their command line.
+const blankDraft = (): Draft => ({ name: '', iconKind: 'builtin', iconValue: 'gamepad-2', color: LAUNCHER_SWATCHES[0], argsTemplate: TARGET_PLACEHOLDER, targetKinds: ['file'], workingDir: 'executable', noProgram: false, startMode: 'openFirst', executablePath: '', workingDirPath: '' })
+const draftOf = (launcher: CustomLauncher): Draft => ({ id: launcher.id, name: launcher.name, iconKind: launcher.iconKind, iconValue: launcher.iconValue, color: launcher.color, argsTemplate: launcher.argsTemplate, targetKinds: launcherKinds(launcher), workingDir: launcher.workingDir ? 'folder' : 'executable', noProgram: isLabelOnly(launcher), startMode: isLabelOnly(launcher) ? undefined : startModeOf(launcher), executablePath: launcher.executable, workingDirPath: launcher.workingDir ?? '' })
+const startModes: Array<{ mode: LauncherStartMode; label: string; hint: string }> = [
+  { mode: 'openFirst', label: 'Open it first, then start games directly (for launchers you sign in to)', hint: 'Play opens the launcher on its own, with no arguments, if it isn’t running, and waits until you continue (once it’s open and you’re signed in). Then Game Lobby starts the game from its own file: its .exe or shortcut, or a ROM with its emulator.' },
+  { mode: 'through', label: 'Start games through it (it takes the game as an argument)', hint: 'Play runs the launcher once, with the arguments below. Use this only if the launcher’s own documentation says it can start a game from its command line.' }
+]
 
 function LauncherEditor({ initial, gameCount, onSaved, onCancel }: { initial: Draft; gameCount: number; onSaved(list: CustomLauncher[]): void; onCancel(): void }) {
   const [draft, setDraft] = useState(initial)
@@ -38,6 +44,9 @@ function LauncherEditor({ initial, gameCount, onSaved, onCancel }: { initial: Dr
   const browseFolder = () => pick(async () => { const chosen = await window.lobby.launchers.browseFolder(); if (chosen) set({ workingDir: 'folder', workingDirPath: chosen, useFolderPick: true }) }, 'Could not open the folder picker')
   const chooseIcon = () => pick(async () => { const name = await window.lobby.launchers.chooseIcon(); if (name) set({ iconKind: 'image', iconValue: name }) }, 'Could not use that image')
   const noProgram = !!draft.noProgram
+  const mode: LauncherStartMode = draft.startMode ?? 'openFirst'
+  const through = !noProgram && mode === 'through'
+  const shownKinds = noProgram ? draft.targetKinds : kindsForMode(draft.targetKinds, mode)
   const argv = useMemo(() => previewArgv(draft.argsTemplate, sampleTarget(draft.targetKinds[0] ?? 'file')), [draft.argsTemplate, draft.targetKinds])
   const program = draft.executablePath ? fileName(draft.executablePath) : 'launcher.exe'
   const colorOk = isHexColor(draft.color)
@@ -49,7 +58,7 @@ function LauncherEditor({ initial, gameCount, onSaved, onCancel }: { initial: Dr
     setBusy(true); setError('')
     const input: LauncherInput = noProgram
       ? { id: draft.id, name: draft.name.trim(), iconKind: draft.iconKind, iconValue: draft.iconValue, color: draft.color, argsTemplate: '', targetKinds: draft.targetKinds, workingDir: 'executable', noProgram: true }
-      : { id: draft.id, name: draft.name.trim(), iconKind: draft.iconKind, iconValue: draft.iconValue, color: draft.color, argsTemplate: draft.argsTemplate, targetKinds: draft.targetKinds, workingDir: draft.workingDir, useExecutablePick: !!draft.useExecutablePick, useFolderPick: draft.workingDir === 'folder' && !!draft.useFolderPick }
+      : { id: draft.id, name: draft.name.trim(), iconKind: draft.iconKind, iconValue: draft.iconValue, color: draft.color, argsTemplate: draft.argsTemplate, targetKinds: shownKinds, workingDir: draft.workingDir, useExecutablePick: !!draft.useExecutablePick, useFolderPick: draft.workingDir === 'folder' && !!draft.useFolderPick, startMode: mode }
     try { onSaved(await window.lobby.launchers.save(input)) }
     catch (caught) { setError(errorText(caught, 'The launcher could not be saved')) }
     finally { setBusy(false) }
@@ -84,21 +93,37 @@ function LauncherEditor({ initial, gameCount, onSaved, onCancel }: { initial: Dr
       {!noProgram && <button type="button" className="secondary-button" disabled={programLocked} onClick={() => set({ noProgram: true, executablePath: '', useExecutablePick: false, argsTemplate: '', workingDir: 'executable' })}>No program</button>}</span>
       <small className="chip-hint">Leave empty to run each game directly; the launcher name is used as the label. With a program, only .exe files on a local drive can be used (no .bat, .cmd, .ps1 or network folders).{programLocked ? ' This can’t change while the launcher has games or games folders.' : ''}</small></label>
 
+    {!noProgram && <div className="field-label">When you play one of its games
+      <div className="launcher-modes" role="radiogroup" aria-label="When you play one of its games">
+        {startModes.map(option => <label key={option.mode} className={'launcher-mode' + (mode === option.mode ? ' active' : '')}>
+          <input type="radio" name="launcher-start-mode" value={option.mode} checked={mode === option.mode} onChange={() => set({ startMode: option.mode, targetKinds: kindsForMode(draft.targetKinds, option.mode) })} />
+          <span><b>{option.label}</b><small>{option.hint}</small></span>
+        </label>)}
+      </div>
+      <small className="chip-hint">Changing this asks you to confirm what will run.</small>
+    </div>}
+
     <div className="field-label">Each game may use
       <div className="chip-group" role="group" aria-label="What each game may use">
-        {TARGET_KIND_ORDER.map(kind => { const on = draft.targetKinds.includes(kind); return <button key={kind} type="button" role="checkbox" aria-checked={on} className={'chip ' + (on ? 'active' : '')} onClick={() => set({ targetKinds: toggleKind(draft.targetKinds, kind) })}>{kindLabel(kind)}</button> })}
+        {TARGET_KIND_ORDER.filter(kind => noProgram || through || kind !== 'identifier').map(kind => { const on = shownKinds.includes(kind); return <button key={kind} type="button" role="checkbox" aria-checked={on} className={'chip ' + (on ? 'active' : '')} onClick={() => set({ targetKinds: toggleKind(shownKinds, kind) })}>{kindLabel(kind)}</button> })}
       </div>
-      <small className="chip-hint">{draft.targetKinds.map(kind => kindLabel(kind) + ': ' + kindHints[kind]).join('. ')}. At least one is needed; kinds your games already use stay on.{noProgram ? ' Without a program, games are found in its games folders or added as files.' : ''}</small>
+      <small className="chip-hint">{shownKinds.map(kind => kindLabel(kind) + ': ' + kindHints[kind]).join('. ')}. At least one is needed; kinds your games already use stay on.{noProgram ? ' Without a program, games are found in its games folders or added as files.' : ''}{!noProgram && !through ? ' Games start from their own file, so identifiers aren’t available here, and a game added as a folder can’t start: add it from its .exe or ROM file.' : ''}</small>
     </div>
 
-    {!noProgram && <>
+    {through && <>
       <label className="field-label">Arguments<input value={draft.argsTemplate} onChange={event => set({ argsTemplate: event.target.value })} placeholder={TARGET_PLACEHOLDER} spellCheck={false} maxLength={2048} />
-        <small className="chip-hint">Use <code>{TARGET_PLACEHOLDER}</code> for the game, as an argument on its own, e.g. <code>{'--start {target}'}</code>. It is always passed as one argument, whatever it contains; without it the game is added last. No shell is used, and files named in the arguments must be inside the launcher’s folder.</small></label>
+        <small className="chip-hint">Use <code>{TARGET_PLACEHOLDER}</code> for the game, as an argument on its own. Which arguments work depends on the launcher: check its own documentation for its command line (some take something like <code>{'--start {target}'}</code>, many take nothing). It is always passed as one argument, whatever it contains; without it the game is added last. No shell is used, and files named in the arguments must be inside the launcher’s folder.</small></label>
       <div className="launcher-preview" aria-live="polite">
         <span className="detail-label">Preview</span>
         {argv ? <code>{program} {formatArgv(argv)}</code> : <span className="text-warn">{TARGET_PLACEHOLDER} must be an argument on its own (not glued to other text), quotes must be closed, and no other placeholders exist.</span>}
       </div>
+    </>}
+    {!noProgram && !through && <div className="launcher-preview" aria-live="polite">
+      <span className="detail-label">Preview</span>
+      <code>{program}</code> <span>on its own (no arguments), then the game from its own file. Arguments aren’t used.</span>
+    </div>}
 
+    {!noProgram && <>
       <div className="field-label">Working folder
         <div className="chip-group" role="radiogroup" aria-label="Working folder">
           <button type="button" role="radio" aria-checked={draft.workingDir === 'executable'} className={'chip ' + (draft.workingDir === 'executable' ? 'active' : '')} onClick={() => set({ workingDir: 'executable' })}>The program’s folder</button>
@@ -109,7 +134,7 @@ function LauncherEditor({ initial, gameCount, onSaved, onCancel }: { initial: Dr
     </>}
 
     {error && <div className="form-error" role="alert">{error}</div>}
-    <div className="settings-actions"><button type="submit" className="primary-button" disabled={busy || (!noProgram && !argv) || (!noProgram && !draft.executablePath)}>{busy ? 'Saving…' : 'Save'}</button><button type="button" className="secondary-button" onClick={onCancel}>Cancel</button></div>
+    <div className="settings-actions"><button type="submit" className="primary-button" disabled={busy || (through && !argv) || (!noProgram && !draft.executablePath)}>{busy ? 'Saving…' : 'Save'}</button><button type="button" className="secondary-button" onClick={onCancel}>Cancel</button></div>
   </form>
 }
 
@@ -143,7 +168,7 @@ function GamesFolders({ launcher, roots, scan, onRoots, onError }: { launcher: C
   }
   if (!canScanFolders(launcher)) return <small className="chip-hint">Games folders need a launcher whose games use files or folders, or one without a program.</small>
   return <div className="launcher-folders">
-    <div className="card-heading"><div><b>Games folders</b><small className="chip-hint">Game Lobby looks through each folder and its subfolders for PC games (one folder per game, or shortcuts), emulators and ROMs, and adds them {isLabelOnly(launcher) ? 'to run directly, labelled “' + launcher.name + '”' : 'to run through ' + launcher.name}. Nothing found is run while scanning. Games already in your library get another route instead of a copy.</small></div>
+    <div className="card-heading"><div><b>Games folders</b><small className="chip-hint">Game Lobby looks through each folder and its subfolders for PC games (one folder per game, or shortcuts), emulators and ROMs, and adds them {isLabelOnly(launcher) ? 'to run directly, labelled “' + launcher.name + '”' : opensFirst(launcher) ? 'to start directly once ' + launcher.name + ' is open' : 'to run through ' + launcher.name}. Nothing found is run while scanning. Games already in your library get another route instead of a copy.</small></div>
       <button type="button" className="secondary-button" disabled={scanning} onClick={() => void add()}><FolderPlus size={14} /> Add folder…</button></div>
     {folders.length === 0 && <div className="empty-inline">No games folders yet.</div>}
     {folders.map(root => {
@@ -209,7 +234,7 @@ export function LaunchersSection({ scan, say }: { scan: LocalScan; say(text: str
   }
   const saved = (list: CustomLauncher[]) => { setLaunchers(list); setEditing(null); say('Launcher saved') }
   return <div className="settings-card">
-    <div className="card-heading"><div><h3>Custom launchers</h3><p>Add your own launchers, such as Playnite, a mod manager, an older store client, or an app folder full of games and emulators. Each one gets its own entry in the side bar and library filter. Add games to it with Add game, or give it games folders to scan. Saving a new launcher, or a new program or arguments, asks you to confirm exactly what will run.</p></div>
+    <div className="card-heading"><div><h3>Custom launchers</h3><p>Add your own launchers, such as Playnite, a mod manager, an older store client, or an app folder full of games and emulators. Each one gets its own entry in the side bar and library filter. Add games to it with Add game, or give it games folders to scan. Saving a new launcher, or a new program, start mode or arguments, asks you to confirm exactly what will run.</p></div>
       <button type="button" className="primary-button" onClick={() => setEditing({ draft: blankDraft() })}>Add launcher</button></div>
     {error && <div className="form-error" role="alert">{error}</div>}
     {editing && !editing.id && <LauncherEditor initial={editing.draft} gameCount={0} onSaved={saved} onCancel={() => setEditing(null)} />}
@@ -229,7 +254,7 @@ export function LaunchersSection({ scan, say }: { scan: LocalScan; say(text: str
               {isLabelOnly(launcher) && <span className="status-pill">No program</span>}
               {!launcher.available && <span className="status-pill warn">Program not found</span>}
             </div>
-            <div className="root-path" title={launcher.executable}>{isLabelOnly(launcher) ? 'Games run directly; “' + launcher.name + '” is their label.' : launcher.executable + (launcher.argsTemplate ? ' ' + launcher.argsTemplate : '')}</div>
+            <div className="root-path" title={launcher.executable}>{isLabelOnly(launcher) ? 'Games run directly; “' + launcher.name + '” is their label.' : opensFirst(launcher) ? launcher.executable + ' (opened first; games start from their own file)' : launcher.executable + (launcher.argsTemplate ? ' ' + launcher.argsTemplate : '')}</div>
           </div>
           <button type="button" className="secondary-button" onClick={() => setEditing(isEditing ? null : { draft: draftOf(launcher), id: launcher.id })}>{isEditing ? 'Close' : 'Edit'}</button>
           {confirming === launcher.id

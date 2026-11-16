@@ -1,7 +1,7 @@
 // Run with `npm run test:web` (Node strips the TypeScript types of launchers.ts).
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { LAUNCHER_ICONS, assignTargetLabel, assignedLauncherIds, canScanFolders, isAssignedRoute, playLauncher, displayStore, filterLauncherId, formatArgv, gameLauncher, gameMatchesFilter, identifierProblem, isHexColor, isLabelOnly, launcherFilter, linkedMessage, launcherIdOf, launcherKinds, launcherOfRoute, launcherRoots, libraryRoots, previewArgv, routeLauncherId, scanSummaryLines, toggleKind, tokenizeTemplate } from './launchers.ts'
+import { LAUNCHER_ICONS, assignTargetLabel, assignedLauncherIds, canScanFolders, isAssignedRoute, playLauncher, displayStore, filterLauncherId, formatArgv, gameLauncher, gameMatchesFilter, identifierProblem, isHexColor, isLabelOnly, kindsForMode, launcherFilter, linkedMessage, opensFirst, playsWithText, startModeOf, launcherIdOf, launcherKinds, launcherOfRoute, launcherRoots, libraryRoots, previewArgv, routeLauncherId, scanSummaryLines, toggleKind, tokenizeTemplate } from './launchers.ts'
 
 const heroic = { id: 'abc', name: 'Heroic', iconKind: 'builtin', iconValue: 'rocket', color: '#4f8cff' }
 const route = (sourceId, extra = {}) => ({ sourceId, store: 'Custom', launchTarget: 'x', ...extra })
@@ -166,4 +166,20 @@ test('linking to a launcher says what Play does now', () => {
   const long = linkedMessage({ name: 'x'.repeat(200), executable: 'C:\\x.exe' })
   assert.ok(long.startsWith('Linked to ' + 'x'.repeat(63) + '\u2026. '))
   assert.ok(long.length < 200)
+})
+
+test('start modes: older launchers run games through their program, new ones may be opened first', () => {
+  const program = { name: 'Retro Project', executable: 'C:\Retro\Retro Project.exe' }
+  assert.equal(startModeOf(program), 'through', 'absent = through')
+  assert.equal(startModeOf({ ...program, startMode: 'through' }), 'through')
+  assert.equal(startModeOf({ ...program, startMode: 'openFirst' }), 'openFirst')
+  assert.equal(startModeOf({ ...program, executable: '', startMode: 'openFirst' }), 'through', 'no program: nothing to open')
+  assert.equal(opensFirst({ ...program, startMode: 'openFirst' }), true)
+  assert.equal(linkedMessage({ ...program, startMode: 'openFirst' }), 'Linked to Retro Project. Play now opens Retro Project first, then starts the game from its own file.')
+  assert.equal(playsWithText({ ...program, startMode: 'openFirst' }), 'Opens Retro Project first')
+  assert.equal(playsWithText(program), 'Plays through Retro Project')
+  // Opened first, games start from their own file: no identifiers.
+  assert.deepEqual(kindsForMode(['file', 'folder', 'identifier'], 'openFirst'), ['file', 'folder'])
+  assert.deepEqual(kindsForMode(['identifier'], 'openFirst'), ['file'])
+  assert.deepEqual(kindsForMode(['identifier', 'file'], 'through'), ['file', 'identifier'])
 })

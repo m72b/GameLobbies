@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Check, Link2, X } from 'lucide-react'
 import { LauncherIcon } from './launcher-icon'
-import { assignTargetLabel, isLabelOnly, linkedMessage } from '../shared/launchers'
+import { assignTargetLabel, isLabelOnly, linkedMessage, playsWithText } from '../shared/launchers'
 import type { AssignmentOption, CustomLauncher, Game } from '../shared/types'
 
 /** The launchers as seen from a game (`launchers.assignments`), loaded again when its routes change. */
@@ -49,7 +49,7 @@ export function LauncherBlock({ game, launchers, libraryVersion, onOpenLink, onU
       const launcher = byId.get(option.launcherId)!
       return <div className="gp-route-row" key={option.launcherId}>
         <span className="store-badge small"><LauncherIcon launcher={launcher} /></span>
-        <span className="route-name"><span className="route-label">{launcher.name}</span><small>{option.assigned ? (isLabelOnly(launcher) ? 'Listed here' : 'Plays through ' + launcher.name) : 'Added in the launcher'}</small></span>
+        <span className="route-name"><span className="route-label">{launcher.name}</span><small>{option.assigned ? (isLabelOnly(launcher) ? 'Listed here' : playsWithText(launcher)) : 'Added in the launcher'}</small></span>
         {option.assigned && <button type="button" className="gp-launcher-remove" disabled={busy} title={'Unlink from ' + launcher.name} aria-label={'Unlink from ' + launcher.name} onClick={() => void remove(option.launcherId)}><X size={13} /></button>}
       </div>
     })}
@@ -115,7 +115,7 @@ export function LinkLauncherDialog({ game, launchers, onGames, onClose }: {
           const launcher = byId.get(option.launcherId)!
           const ownGame = option.listed && !option.assigned
           const blocked = !option.listed && !!option.problem
-          const status = option.assigned ? (isLabelOnly(launcher) ? 'Listed here' : 'Plays through ' + launcher.name)
+          const status = option.assigned ? (isLabelOnly(launcher) ? 'Listed here' : playsWithText(launcher))
             : ownGame ? 'Added in the launcher'
             : option.problem ? option.problem
             : isLabelOnly(launcher) ? 'Lists the game here; it keeps starting the same way'
@@ -152,9 +152,10 @@ export function LinkLauncherDialog({ game, launchers, onGames, onClose }: {
 export interface WaitingLaunch { game: Game; pendingId: string; launcherName: string }
 
 /**
- * "Waiting for <launcher>": the launcher's program was started on its own. Continue confirms the
- * pending launch (Rust launches what it checked when Play was pressed); the renderer sends only the
- * game and pending ids. The launcher's process is watched to show when it is open.
+ * "Waiting for <launcher>": an "open first" launcher's program was started on its own (no
+ * arguments). Continue confirms the pending launch: Rust then starts the game directly from its own
+ * file, checked again; the renderer sends only the game and pending ids. The launcher's process is
+ * watched to show when it is open.
  */
 export function LauncherWaitDialog({ wait, onClose, onStarted }: { wait: WaitingLaunch; onClose(): void; onStarted(): void }) {
   const [running, setRunning] = useState(false)
@@ -186,7 +187,7 @@ export function LauncherWaitDialog({ wait, onClose, onStarted }: { wait: Waiting
   return <div className="modal-scrim" onMouseDown={event => { if (event.target === event.currentTarget && !busy) cancel() }}>
     <div className="modal launcher-wait" role="dialog" aria-modal="true" aria-labelledby="launcher-wait-title">
       <div className="modal-head"><h2 id="launcher-wait-title">Waiting for {wait.launcherName}</h2></div>
-      <p>Continue when it’s open and signed in. Game Lobby then starts <b>{wait.game.title}</b> through it.</p>
+      <p>Continue when it’s open and you’re signed in. Game Lobby then starts <b>{wait.game.title}</b> directly from its own file; {wait.launcherName} stays open.</p>
       <div className={'launcher-wait-status' + (running ? ' ready' : '')} aria-live="polite">
         <span className="gp-live-dot" />{expired ? 'This launch expired. Press Play again.' : running ? wait.launcherName + ' is running.' : 'Starting ' + wait.launcherName + '…'}
       </div>
