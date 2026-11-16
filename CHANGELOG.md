@@ -2,6 +2,17 @@
 
 All notable changes to Game Lobby are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Custom launchers
+- Fixed: pressing **Play** on a game of a custom launcher that wasn't running opened the launcher twice and the game never started. Game Lobby started the launcher on its own, then on **Continue** started it a second time with the game as an argument, which launchers that aren't single-instance, or don't understand those arguments, can't handle. A launcher set to run games through its program is now started once, with the game, and no longer waits.
+- New: each launcher with a program has a start mode, chosen under **When you play one of its games**:
+  - **Open it first, then start games directly (for launchers you sign in to)**, the default for new launchers: Play opens the launcher on its own, with no arguments, when it isn't running, shows **Waiting for …** until you continue (once you're signed in), then starts the game itself from its own file, exactly like a local game or ROM: the `.exe` in its folder, a plain or confirmed shortcut, or a ROM with its emulator (a ROM no emulator fits names the file). When the launcher is already running, the game starts right away. The launcher's arguments aren't used, identifiers aren't available, a game added as a folder can't start this way, and launch options are the game's own `.exe` options.
+  - **Start games through it (it takes the game as an argument)**: what launchers did before. Launchers you already have keep this mode.
+  - Changing the mode shows a Windows confirmation saying what will run, and linking a game to a launcher one click at a time is only possible for the mode you confirmed. The link dialog and the waiting dialog describe the launcher's mode.
+- The user guide's launcher argument examples no longer read like options every launcher supports: check your launcher's own documentation for its command line.
+  - Note: the start mode is a new `startMode` column of `custom_launchers` and of `launcher_confirmed` (no schema version change; launchers and confirmations stored before count as **Start games through it**). Backups include the start mode only for launchers that are opened first. Older versions of Game Lobby ignore the column, so they run the games of a launcher that is opened first through its program with its arguments, and refuse to import a backup that contains such a launcher.
+
 ## [0.5.0] — 2026-11-16
 
 ### Library
