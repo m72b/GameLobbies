@@ -2,7 +2,7 @@
 
 All notable changes to Game Lobby are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.5.1] — 2026-11-16
 
 ### Custom launchers
 - Fixed: pressing **Play** on a game of a custom launcher that wasn't running opened the launcher twice and the game never started. Game Lobby started the launcher on its own, then on **Continue** started it a second time with the game as an argument, which launchers that aren't single-instance, or don't understand those arguments, can't handle. A launcher set to run games through its program is now started once, with the game, and no longer waits.
