@@ -791,13 +791,16 @@ struct Assigned {
 ///
 /// A launcher without a program only labels a route: no dialog. A launcher with a program gets
 /// a new launch route whose target comes from the game's own stored routes, checked like every
-/// launch. The dialog ([`launchers::assign_prompt`]) is skipped only when no launch options are
+/// launch. The dialog ([`launchers::assign_prompt_with`]) is skipped only when no launch options are
 /// added and the user already confirmed exactly this launcher's command on this PC
 /// ([`launchers::is_confirmed`]): the route then runs that command with the game's own target,
 /// which is what that confirmation covered. When the dialog is confirmed, the launcher's
 /// command is remembered as confirmed too ([`launchers::record_confirmed`]), so the next link
 /// needs none, unless the dialog was too long to be sure it was read whole
-/// (`links::MAX_CONFIRM_CHARS` plus 1,000 characters). Everything is saved only over what was checked (compare-and-save).
+/// (`links::MAX_CONFIRM_CHARS` plus 1,000 characters). An "open first" launcher starts the game
+/// directly from the chosen file, so a file of another launcher's game
+/// ([`launchers::takes_another_launchers_file`]) always gets the dialog and never confirms the
+/// launcher for later links. Everything is saved only over what was checked (compare-and-save).
 async fn assign_game<F, Fut>(
     db: &db::Db,
     game_id: &str,
@@ -875,15 +878,35 @@ where
         .await
         .map_err(err)?
         .map_err(err)?;
+        // A file of another launcher's game would start directly, outside that launcher: such
+        // a link always asks, and never confirms the launcher for later links.
+        let other_launcher =
+            launchers::takes_another_launchers_file(&launcher, &game.routes[chosen.route_index]);
+        let mut facts = launchers::OpenFirstFacts {
+            other_launcher,
+            ..Default::default()
+        };
         if launcher.start_mode == launchers::StartMode::OpenFirst {
             // Opened first: the launcher's program and folder, and the game's own file as it
             // would start without a launcher (a folder or a shortcut nobody confirmed is refused
-            // here already; the emulator for a ROM is checked at Play).
+            // here already; the emulator for a ROM is checked at Play, and named in the dialog
+            // when one is set up).
             launchers::prepare_open_first(&launcher, &route).map_err(err)?;
-            let confirmations = db::shortcut_confirmations(&db.lock()).map_err(err)?;
+            let (confirmations, profiles) = {
+                let conn = db.lock();
+                (
+                    db::shortcut_confirmations(&conn).map_err(err)?,
+                    db::emulator_profiles(&conn).map_err(err)?,
+                )
+            };
             let (owned_game, owned_route) = (game.clone(), route.clone());
-            crate::platform::on_thread(move || {
-                crate::launch::direct_route(&owned_game, &owned_route, &confirmations)
+            facts.start = crate::platform::on_thread(move || {
+                crate::launch::direct_route(&owned_game, &owned_route, &confirmations).map(
+                    |direct| {
+                        let profiles = crate::emulators::refresh_available(profiles);
+                        crate::launch::direct_start(&direct, &profiles)
+                    },
+                )
             })
             .await
             .map_err(err)?
@@ -901,14 +924,16 @@ where
                 .map_err(err)?
                 .map(|argv| (host, argv))
         };
-        // Nothing new runs when the command was confirmed and no options are added.
-        if checked.is_some() || !confirmed {
+        // Nothing new runs when the command was confirmed and no options are added (and the
+        // file isn't another launcher's).
+        if checked.is_some() || !confirmed || other_launcher {
             let shown = checked.as_ref().map(|(_, argv)| argv.as_slice());
-            let prompt = launchers::assign_prompt(
+            let prompt = launchers::assign_prompt_with(
                 &launcher,
                 &game.title,
                 &chosen,
                 shown.unwrap_or_default(),
+                &facts,
             )
             .map_err(err)?;
             // A dialog this long may be clipped on screen, hiding what confirming it means: it
@@ -922,7 +947,7 @@ where
                 ));
             }
             asked = true;
-            record = fits;
+            record = fits && !other_launcher;
         }
         Some((chosen, checked))
     };
@@ -1751,5 +1776,184 @@ mod tests {
         assert!(host.launcher.is_none());
         let own = crate::links::args_host(&db.lock(), &local_route(&a_exe)).unwrap();
         assert_eq!(host, own);
+    }
+
+    #[tokio::test]
+    async fn an_open_first_link_to_another_launchers_file_always_asks() {
+        let dir = TempDir::new("link-other-launcher");
+        let exe = dir.file("Retro/Retro Project.exe");
+        let hub_exe = dir.file("Hub/Hub.exe");
+        let a_exe = dir.file("Hub Games/Cairn/Cairn.exe");
+        let b_exe = dir.file("PC Game/00357/Other.exe");
+        let l = open_first("retro", &exe.to_string_lossy());
+        let hub = launcher("hub", &hub_exe.to_string_lossy(), &["file"]);
+        // A game of the "hub" launcher (found in its games folder), and a plain local game.
+        let hub_route = GameRoute {
+            source_id: launchers::source_id("hub"),
+            store: "Custom".into(),
+            launch_target: a_exe.to_string_lossy().into_owned(),
+            installed: Some(true),
+            ..Default::default()
+        };
+        let a = game("a", vec![hub_route.clone()]);
+        let b = game("b", vec![local_route(&b_exe)]);
+        let db = library(&[&l, &hub], &[&a, &b]);
+        launchers::record_confirmed(&db.lock(), &l).unwrap();
+        assert!(launchers::takes_another_launchers_file(&l, &hub_route));
+
+        // Confirmed, yet the hub's file asks: it would start outside the hub.
+        let shown = Cell::new(0);
+        let ask = |answer: bool| {
+            let shown = &shown;
+            move |prompt: String| {
+                assert!(
+                    prompt.contains("belongs to another launcher's game"),
+                    "{prompt}"
+                );
+                assert!(prompt.contains("always asks first"), "{prompt}");
+                assert!(!prompt.contains("without asking again"), "{prompt}");
+                shown.set(shown.get() + 1);
+                async move { answer }
+            }
+        };
+        let e = assign_game(&db, "a", "retro", None, None, String::new(), ask(false))
+            .await
+            .err()
+            .unwrap();
+        assert!(e.contains("was not added"), "{e}");
+        assert_eq!(shown.get(), 1);
+        assert_eq!(stored(&db, "a").routes, a.routes);
+        // Confirming links it, and doesn't confirm the launcher for later links.
+        launchers::forget_confirmed(&db.lock(), "retro").unwrap();
+        let assigned = assign_game(&db, "a", "retro", None, None, String::new(), ask(true))
+            .await
+            .unwrap();
+        assert!(assigned.asked);
+        assert_eq!(shown.get(), 2);
+        assert!(!launchers::is_confirmed(&db.lock(), &l).unwrap());
+        assert_eq!(confirmations(&db), 0);
+        assert_eq!(stored(&db, "a").routes[0].source_id, "launcher:retro");
+        // So the next ordinary link asks, and then confirms the launcher as before.
+        let assigned = assign_game(&db, "b", "retro", None, None, String::new(), |prompt| {
+            assert!(prompt.contains("without asking again"), "{prompt}");
+            async { true }
+        })
+        .await
+        .unwrap();
+        assert!(assigned.asked);
+        assert!(launchers::is_confirmed(&db.lock(), &l).unwrap());
+    }
+
+    #[tokio::test]
+    async fn an_open_first_launchers_own_games_and_through_launchers_are_unaffected() {
+        let dir = TempDir::new("link-own-launcher");
+        let exe = dir.file("Retro/Retro Project.exe");
+        let hub_exe = dir.file("Hub/Hub.exe");
+        let own_exe = dir.file("Retro Games/Cairn/Cairn.exe");
+        let other_exe = dir.file("Retro Games/Sly/Sly.exe");
+        let l = open_first("retro", &exe.to_string_lossy());
+        let own_route = GameRoute {
+            source_id: launchers::source_id("retro"),
+            store: "Custom".into(),
+            launch_target: own_exe.to_string_lossy().into_owned(),
+            installed: Some(true),
+            ..Default::default()
+        };
+        // The launcher's own route is not "another launcher's"; a route naming no launcher is.
+        assert!(!launchers::takes_another_launchers_file(&l, &own_route));
+        let unnamed = GameRoute {
+            source_id: "launcher:".into(),
+            ..own_route.clone()
+        };
+        assert!(launchers::takes_another_launchers_file(&l, &unnamed));
+        assert!(!launchers::takes_another_launchers_file(
+            &l,
+            &local_route(&own_exe)
+        ));
+        // A game from the open-first launcher's own games folder, linked to a "through"
+        // launcher that was confirmed: one click as before (it gets the file as an argument,
+        // which its confirmation covers).
+        let hub = launcher("hub", &hub_exe.to_string_lossy(), &["file"]);
+        assert!(!launchers::takes_another_launchers_file(&hub, &own_route));
+        let own = game("own", vec![own_route.clone()]);
+        let db = library(&[&l, &hub], &[&own]);
+        launchers::record_confirmed(&db.lock(), &hub).unwrap();
+        let assigned = assign_game(&db, "own", "hub", None, None, String::new(), |_| async {
+            panic!("no dialog")
+        })
+        .await
+        .unwrap();
+        assert!(!assigned.asked);
+        // The open-first launcher's own games are already its own: nothing to link.
+        let other = game(
+            "other",
+            vec![GameRoute {
+                launch_target: other_exe.to_string_lossy().into_owned(),
+                ..own_route
+            }],
+        );
+        db::save_game(&db.lock(), &GamePatch::from(&other)).unwrap();
+        let e = assign_game(
+            &db,
+            "other",
+            "retro",
+            None,
+            None,
+            String::new(),
+            |_| async { panic!("no dialog") },
+        )
+        .await
+        .err()
+        .unwrap();
+        assert!(e.contains("already listed"), "{e}");
+    }
+
+    #[tokio::test]
+    async fn an_open_first_link_says_a_rom_starts_with_its_emulator() {
+        let dir = TempDir::new("link-open-first-rom");
+        let exe = dir.file("Retro/Retro Project.exe");
+        let rom = dir.file("Roms/GBA/Cairn Quest.gba");
+        let l = open_first("retro", &exe.to_string_lossy());
+        let rom_route = GameRoute {
+            source_id: crate::local::ROM_SOURCE.into(),
+            store: "Emulator".into(),
+            launch_target: rom.to_string_lossy().into_owned(),
+            system: Some("gba".into()),
+            installed: Some(true),
+            ..Default::default()
+        };
+        let g = game("g", vec![rom_route.clone()]);
+        let h = game("h", vec![rom_route.clone()]);
+        let db = library(&[&l], &[&g, &h]);
+        // No emulator yet: said so.
+        let result = assign_game(&db, "g", "retro", None, None, String::new(), |prompt| {
+            assert!(
+                prompt.contains("Then it starts the game directly: its ROM, with the emulator set up for its system (none is set up yet"),
+                "{prompt}"
+            );
+            assert!(!prompt.contains("from its own file:"), "{prompt}");
+            async { false }
+        })
+        .await;
+        assert!(result.is_err());
+        // With one: named.
+        let emulator = dir.file("mGBA/mGBA.exe");
+        let profile = crate::emulators::new_profile(
+            &emulator,
+            crate::catalog::known_emulator("mgba").unwrap(),
+        );
+        db::save_emulator(&db.lock(), &profile).unwrap();
+        let name = profile.name.clone();
+        let result = assign_game(&db, "h", "retro", None, None, String::new(), |prompt| {
+            assert!(
+                prompt.contains(&format!(
+                    "Then it starts the game directly: its ROM, with the emulator {name}:"
+                )),
+                "{prompt}"
+            );
+            async { true }
+        })
+        .await;
+        assert!(result.unwrap().asked);
     }
 }

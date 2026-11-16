@@ -728,14 +728,42 @@ pub fn direct_route(
             },
         },
     };
-    if non_empty(&route.launch_args).is_some() && direct.launch_target != route.launch_target {
-        bail!("Confirm this route's launch options again on its game page.");
+    // An internet shortcut is read again at every Play, so its link must have one of the plain
+    // store shapes the renderer may create too (no extra options for the store client).
+    if let Ok(uri) = validate_launch_uri(&direct.launch_target) {
+        if !crate::validation::renderer_link_ok(&uri) {
+            bail!("This internet shortcut opens a link Game Lobby doesn't start directly: only a store's plain game link (like steam://rungameid/400) is allowed. Add the game from its store instead.");
+        }
+    }
+    if non_empty(&route.launch_args).is_some() {
+        // An emulator's own arguments apply to a ROM: options left from "Start games through it"
+        // would otherwise be dropped without a word.
+        if is_rom_route(&direct) {
+            bail!("Launch options don't apply to ROMs started with an emulator; remove them under Launch options.");
+        }
+        let same = crate::tracker::normalize_path(&direct.launch_target)
+            .is_some_and(|d| crate::tracker::normalize_path(&route.launch_target) == Some(d));
+        if !same {
+            bail!("Confirm this route's launch options again on its game page.");
+        }
     }
     direct.launch_args = route.launch_args.clone();
     direct.installed = route.installed;
     direct.launcher_id = None;
     direct.assigned = None;
     Ok(direct)
+}
+
+/// How a [`direct_route`] starts, for an "open first" link dialog: a ROM with the emulator it
+/// would use now (`profiles` with their availability filled in), else from its own file.
+pub fn direct_start(direct: &GameRoute, profiles: &[EmulatorProfile]) -> launchers::DirectStart {
+    if is_rom_route(direct) {
+        launchers::DirectStart::Rom {
+            emulator: emulator_for_route(profiles, direct).ok().map(|p| p.name),
+        }
+    } else {
+        launchers::DirectStart::File
+    }
 }
 
 /// A game's own local or ROM route, checked and ready to start (nothing started yet).
@@ -1579,14 +1607,95 @@ pub(crate) mod tests {
             crate::links::checked_stored_args(&conn, &direct).unwrap(),
             ["-windowed"]
         );
-        // A ROM takes no launch options (its emulator's arguments apply).
+        // A ROM takes no launch options (its emulator's arguments apply): options left from
+        // "Start games through it" are refused with a clear message, not dropped silently.
         let rom = dir.file(r"GBA\x.gba");
         let route = GameRoute {
             launch_args: Some(r#"["-x"]"#.into()),
             ..launcher_route(&rom)
         };
+        let e = direct_route(&game_with(vec![route.clone()]), &route, &none).unwrap_err();
+        assert_eq!(
+            e.to_string(),
+            "Launch options don't apply to ROMs started with an emulator; remove them under Launch options."
+        );
+        // Also when the game's own ROM route for that file is used (it keeps its emulator).
+        let own = rom_route(&rom, Some("mgba"));
+        let e =
+            direct_route(&game_with(vec![route.clone(), own.clone()]), &route, &none).unwrap_err();
+        assert!(e.to_string().contains("don't apply to ROMs"), "{e}");
+        // Without options it starts.
+        let plain = GameRoute {
+            launch_args: None,
+            ..route
+        };
+        assert!(direct_route(&game_with(vec![plain.clone(), own]), &plain, &none).is_ok());
+    }
+
+    #[test]
+    fn open_first_launch_options_survive_a_case_or_slash_difference() {
+        let dir = TempDir::new("direct-options-case");
+        let none = HashMap::new();
+        let exe = dir.file(r"Cairn\Cairn.exe");
+        // The game's own local route spells the same file differently.
+        let own = GameRoute {
+            source_id: local::LOCAL_SOURCE.into(),
+            launch_target: exe.to_string_lossy().into_owned(),
+            ..Default::default()
+        };
+        let spelled = exe.to_string_lossy().to_uppercase().replace('\\', "/");
+        let route = GameRoute {
+            launch_target: spelled.clone(),
+            launch_args: Some(r#"["-windowed"]"#.into()),
+            ..launcher_route(&exe)
+        };
+        let game = game_with(vec![route.clone(), own.clone()]);
+        let direct = direct_route(&game, &route, &none).unwrap();
+        assert_eq!(direct.launch_target, own.launch_target);
+        assert_ne!(direct.launch_target, spelled);
+        assert_eq!(direct.launch_args, route.launch_args);
+        // A link that starts something else than the route's file still asks again.
+        let url = dir.path().join("Cairn.url");
+        std::fs::write(&url, "[InternetShortcut]\r\nURL=steam://rungameid/400\r\n").unwrap();
+        let link = GameRoute {
+            launch_args: route.launch_args.clone(),
+            ..launcher_route(&url)
+        };
+        let e = direct_route(&game_with(vec![link.clone()]), &link, &none).unwrap_err();
+        assert!(
+            e.to_string()
+                .contains("Confirm this route's launch options again"),
+            "{e}"
+        );
+    }
+
+    #[test]
+    fn open_first_internet_shortcuts_need_a_plain_store_link() {
+        let dir = TempDir::new("direct-url");
+        let none = HashMap::new();
+        let write = |name: &str, link: &str| {
+            let path = dir.path().join(name);
+            std::fs::write(&path, format!("[InternetShortcut]\r\nURL={link}\r\n")).unwrap();
+            path
+        };
+        let good = write("Good.url", "steam://rungameid/400");
+        let route = launcher_route(&good);
         let direct = direct_route(&game_with(vec![route.clone()]), &route, &none).unwrap();
-        assert!(crate::links::checked_stored_args(&conn, &direct).is_err());
+        assert_eq!(direct.launch_target, "steam://rungameid/400");
+        // Links a store client accepts that pass it more than a game: refused, although
+        // `validate_launch_uri` alone lets them through. The file is read again at every Play, so
+        // an edited one is caught too.
+        for link in [
+            "steam://run/400//-console",
+            "com.epicgames.launcher://apps/x?action=launch&extra=1",
+            "eaapp://launch/1",
+        ] {
+            assert!(validate_launch_uri(link).is_ok(), "{link}");
+            let bad = write("Bad.url", link);
+            let route = launcher_route(&bad);
+            let e = direct_route(&game_with(vec![route.clone()]), &route, &none).unwrap_err();
+            assert!(e.to_string().contains("plain game link"), "{link}: {e}");
+        }
     }
 
     #[tokio::test]

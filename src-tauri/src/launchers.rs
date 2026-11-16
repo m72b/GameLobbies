@@ -803,6 +803,18 @@ pub fn confirmation_prompt(l: &CustomLauncher) -> Result<String> {
     }
     let folder = working_folder(l);
     if l.start_mode == StartMode::OpenFirst {
+        // The argument template is kept for switching back to "Start games through it", and is
+        // part of what this dialog confirms (`confirmed_key`), so it is shown too, plainly as
+        // not used now.
+        let kept = if l.args_template.trim().is_empty() {
+            String::new()
+        } else {
+            format!(
+                "\n\nArguments kept for \"Start games through it\" (not used now; one per line, {TARGET} is the game's {}):\n{}",
+                kinds_text(&l.kinds()?),
+                crate::links::numbered(&build_argv(&l.args_template, TARGET)?)
+            )
+        };
         // Facts first: the program, what Play does with it, and the working folder; the name
         // (user-editable text) last.
         return Ok(format!(
@@ -813,10 +825,10 @@ Program:
 
 Game Lobby opens this program on its own (no arguments) when you play one of its games and it isn't running, waits until you continue, then starts the game directly from its own file: an .exe or shortcut like a game in your library folders, a ROM with its emulator. Nothing is passed to this program, and the game gets the same checks as when it is started without a launcher.
 
-Any game in your library can then be linked to this launcher without asking again; it starts the same way, from that game's own file.
+Any game in your library can then be linked to this launcher without asking again (except another launcher's games, which always ask); it starts the same way, from that game's own file.
 
 Working folder (for the program):
-  {}
+  {}{kept}
 
 Name: {}
 
@@ -1212,19 +1224,64 @@ pub fn unassign(game: &Game, launcher_id: &str) -> Option<Vec<GameRoute>> {
     changed.then_some(routes)
 }
 
-/// The native confirmation text for an assignment that adds a launcher route: the launcher's
-/// program, the exact argument list with this game's target and the route's launch options
-/// (`options`, already checked by `links::prepare_options`; may be empty), and the working
-/// folder. One dialog covers both the route and its options. Confirming it also confirms the
-/// launcher's command for later links ([`record_confirmed`]), which the text says.
+/// How an "open first" game starts after its launcher was opened, for the link dialog
+/// ([`assign_prompt_with`]): from its own file (an .exe or a shortcut), or a ROM with its emulator
+/// (named when one is set up for it).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum DirectStart {
+    #[default]
+    File,
+    Rom {
+        emulator: Option<String>,
+    },
+}
+
+/// What the link dialog of an "open first" launcher says besides the launcher and the target.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OpenFirstFacts {
+    pub start: DirectStart,
+    /// The target comes from another launcher's game ([`takes_another_launchers_file`]).
+    pub other_launcher: bool,
+}
+
+/// Whether linking the "open first" launcher `l` from the game's route `base` must always ask,
+/// and never confirms the launcher for later links: `base` is another launcher's route, so its
+/// file would start directly, outside that launcher. `l`'s own routes (games from its own games
+/// folders) don't count, and neither does a "through" launcher (it gets the target as an argument,
+/// which its own confirmation covers).
+pub fn takes_another_launchers_file(l: &CustomLauncher, base: &GameRoute) -> bool {
+    l.start_mode == StartMode::OpenFirst
+        && is_launcher_route(base)
+        && launcher_id_of(base) != Some(l.id.as_str())
+}
+
+/// [`assign_prompt_with`] with no "open first" facts (tests).
+#[cfg(test)]
 pub fn assign_prompt(
     l: &CustomLauncher,
     game_title: &str,
     c: &AssignCandidate,
     options: &[String],
 ) -> Result<String> {
+    assign_prompt_with(l, game_title, c, options, &OpenFirstFacts::default())
+}
+
+/// The native confirmation text for an assignment that adds a launcher route: the launcher's
+/// program, the exact argument list with this game's target and the route's launch options
+/// (`options`, already checked by `links::prepare_options`; may be empty), and the working
+/// folder. One dialog covers both the route and its options. Confirming it also confirms the
+/// launcher's command for later links ([`record_confirmed`]), which the text says, except for
+/// another launcher's file (`facts`, which also says how an "open first" game starts; not used
+/// for a "through" launcher).
+pub fn assign_prompt_with(
+    l: &CustomLauncher,
+    game_title: &str,
+    c: &AssignCandidate,
+    options: &[String],
+    facts: &OpenFirstFacts,
+) -> Result<String> {
     if l.start_mode == StartMode::OpenFirst {
-        return Ok(open_first_assign_prompt(l, game_title, c, options));
+        return Ok(open_first_assign_prompt(l, game_title, c, options, facts));
     }
     let mut argv = build_argv(&l.args_template, &c.target)?;
     let base = argv.len();
@@ -1257,13 +1314,15 @@ pub fn assign_prompt(
     ))
 }
 
-/// [`assign_prompt`] for an "open first" launcher: what runs, in order (the launcher's program on
-/// its own, then the game's own file with its launch options), facts first.
+/// [`assign_prompt_with`] for an "open first" launcher: what runs, in order (the launcher's program on
+/// its own, then the game's own file, or its ROM with its emulator, with its launch options),
+/// facts first.
 fn open_first_assign_prompt(
     l: &CustomLauncher,
     game_title: &str,
     c: &AssignCandidate,
     options: &[String],
+    facts: &OpenFirstFacts,
 ) -> String {
     let name = crate::validation::display_text(&l.name, 80);
     let title = crate::validation::display_text(game_title, 80);
@@ -1275,8 +1334,23 @@ fn open_first_assign_prompt(
             crate::links::numbered(options)
         )
     };
+    let how = match &facts.start {
+        DirectStart::File => "directly from its own file".to_string(),
+        DirectStart::Rom {
+            emulator: Some(emulator),
+        } => format!(
+            "directly: its ROM, with the emulator {}",
+            crate::validation::display_text(emulator, 80)
+        ),
+        DirectStart::Rom { emulator: None } => "directly: its ROM, with the emulator set up for its system (none is set up yet: add one under Settings → Emulators)".to_string(),
+    };
+    let later = if facts.other_launcher {
+        "This file belongs to another launcher's game: it starts directly, outside that launcher. Linking such a game to this launcher always asks first."
+    } else {
+        "Games you link to this launcher later start the same way, each from its own file, without asking again until the launcher's settings change."
+    };
     format!(
-        "When you play this game, Game Lobby opens:\n  {}\non its own (no arguments) if it isn't running, and waits until you continue. Then it starts the game directly from its own file:\n  {}{options}\n\nWorking folder (for the launcher):\n  {}\n\nGames you link to this launcher later start the same way, each from its own file, without asking again until the launcher's settings change.\n\nFor the game: {title}\nLauncher: {name}\n\nPlay will use {name} from now on. The game's current way to start stays under Play from, and you can remove {name} from the game page at any time.",
+        "When you play this game, Game Lobby opens:\n  {}\non its own (no arguments) if it isn't running, and waits until you continue. Then it starts the game {how}:\n  {}{options}\n\nWorking folder (for the launcher):\n  {}\n\n{later}\n\nFor the game: {title}\nLauncher: {name}\n\nPlay will use {name} from now on. The game's current way to start stays under Play from, and you can remove {name} from the game page at any time.",
         crate::validation::escape_for_prompt(&l.executable),
         crate::validation::escape_for_prompt(&c.target),
         crate::validation::escape_for_prompt(&working_folder(l)),
@@ -3613,9 +3687,22 @@ mod tests {
         assert!(program < prompt.find("Retro Project").unwrap());
         assert!(prompt.contains("on its own (no arguments)"), "{prompt}");
         assert!(prompt.contains("starts the game directly from its own file"));
-        // The argument template isn't used, so it isn't shown as something that runs.
-        assert!(!prompt.contains("--open"), "{prompt}");
-        assert!(!prompt.contains("{target}"), "{prompt}");
+        // The argument template isn't used, but it is stored (and part of what this dialog
+        // confirms), so it is shown, plainly as kept for the other mode, after the facts.
+        let kept = prompt
+            .find("Arguments kept for \"Start games through it\" (not used now; one per line, {target} is the game's file or folder):\n  1. --open\n  2. {target}")
+            .unwrap_or_else(|| panic!("{prompt}"));
+        assert!(prompt.find("Working folder").unwrap() < kept);
+        assert!(kept < prompt.find("Name: Retro Project").unwrap());
+        assert!(!prompt.contains("runs this command"), "{prompt}");
+        // No template: no such line.
+        let bare = validate(CustomLauncher {
+            args_template: String::new(),
+            ..l.clone()
+        })
+        .unwrap();
+        let shown = confirmation_prompt(&bare).unwrap();
+        assert!(!shown.contains("Arguments kept"), "{shown}");
         let through = confirmation_prompt(&CustomLauncher {
             start_mode: StartMode::Through,
             ..l.clone()
@@ -3637,6 +3724,97 @@ mod tests {
         assert!(!prompt.contains("--open"), "{prompt}");
         let with = assign_prompt(&l, "Cairn", &c, &["-windowed".into()]).unwrap();
         assert!(with.contains("1. -windowed"), "{with}");
+    }
+
+    #[test]
+    fn open_first_link_dialogs_say_how_the_game_starts() {
+        let l = open_first(EXE, &["file", "folder"]);
+        let c = AssignCandidate {
+            route_index: 0,
+            kind: TargetKind::File,
+            target: r"M:\Roms\GBA\Cairn Quest.gba".into(),
+        };
+        let with =
+            |facts: OpenFirstFacts| assign_prompt_with(&l, "Cairn", &c, &[], &facts).unwrap();
+        let file = with(OpenFirstFacts::default());
+        assert!(
+            file.contains("Then it starts the game directly from its own file:\n  M:\\Roms"),
+            "{file}"
+        );
+        let named = with(OpenFirstFacts {
+            start: DirectStart::Rom {
+                emulator: Some("mGBA\u{202e}x".into()),
+            },
+            other_launcher: false,
+        });
+        assert!(
+            named.contains("Then it starts the game directly: its ROM, with the emulator mGBA"),
+            "{named}"
+        );
+        assert!(
+            !named.contains('\u{202e}'),
+            "the name is sanitised: {named}"
+        );
+        assert!(!named.contains("from its own file:"), "{named}");
+        let unknown = with(OpenFirstFacts {
+            start: DirectStart::Rom { emulator: None },
+            other_launcher: false,
+        });
+        assert!(unknown.contains("none is set up yet"), "{unknown}");
+        // A file of another launcher's game: said so, and no promise about later links.
+        let other = with(OpenFirstFacts {
+            other_launcher: true,
+            ..Default::default()
+        });
+        assert!(
+            other.contains("belongs to another launcher's game"),
+            "{other}"
+        );
+        assert!(!other.contains("without asking again"), "{other}");
+        assert!(file.contains("without asking again"), "{file}");
+        // A "through" launcher's dialog doesn't change with the facts.
+        let through = CustomLauncher {
+            start_mode: StartMode::Through,
+            ..l.clone()
+        };
+        assert_eq!(
+            assign_prompt_with(
+                &through,
+                "Cairn",
+                &c,
+                &[],
+                &OpenFirstFacts {
+                    other_launcher: true,
+                    start: DirectStart::Rom { emulator: None },
+                }
+            )
+            .unwrap(),
+            assign_prompt(&through, "Cairn", &c, &[]).unwrap()
+        );
+    }
+
+    #[test]
+    fn only_another_launchers_route_counts_as_its_file() {
+        let l = open_first(EXE, &["file"]);
+        assert!(!takes_another_launchers_file(
+            &l,
+            &retro_route(r"C:\G\a.exe")
+        ));
+        let other = GameRoute {
+            source_id: "launcher:hub".into(),
+            ..retro_route(r"C:\G\a.exe")
+        };
+        assert!(takes_another_launchers_file(&l, &other));
+        let local = GameRoute {
+            source_id: "local".into(),
+            ..retro_route(r"C:\G\a.exe")
+        };
+        assert!(!takes_another_launchers_file(&l, &local));
+        let through = CustomLauncher {
+            start_mode: StartMode::Through,
+            ..l
+        };
+        assert!(!takes_another_launchers_file(&through, &other));
     }
 
     #[test]
