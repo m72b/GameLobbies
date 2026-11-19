@@ -77,9 +77,11 @@ Game Lobby works without any account. Three optional features use free keys that
 
 | Feature | What you need | Where to enter it |
 | --- | --- | --- |
-| Cover art, heroes and logos | A free [SteamGridDB API key](https://www.steamgriddb.com/profile/preferences/api) | **Settings → Appearance → Cover art** |
-| Game details, screenshots and time to beat | Your own [Twitch developer application](https://dev.twitch.tv/console) (Client ID and Client Secret) for IGDB | **Settings → Playtime and Stats → Metadata provider** |
-| Steam games you own but haven't installed | A free [Steam Web API key](https://steamcommunity.com/dev/apikey) and your SteamID64, with your Steam profile's game details set to Public | **Settings → Libraries → Steam → Show games you own but haven't installed** |
+| Cover art, heroes and logos | A free [SteamGridDB API key](https://www.steamgriddb.com/profile/preferences/api) | **Settings → API keys** |
+| Game details, screenshots and time to beat | Your own [Twitch developer application](https://dev.twitch.tv/console) (Client ID and Client Secret) for IGDB | **Settings → API keys** |
+| Steam games you own but haven't installed | A free [Steam Web API key](https://steamcommunity.com/dev/apikey) and your SteamID64, with your Steam profile's game details set to Public | **Settings → API keys** |
+
+Settings opens inside the main window (the gear in the side rail, or **Ctrl+,**; **Esc** goes back). **Settings → API keys** lists all three keys with what each unlocks and whether it is set; **Add keys** opens a side sheet with every key at once, with links and short steps. Keys you have set can be changed or removed there.
 
 Keep your keys private: don't paste them into issues, screenshots or logs. **Copy diagnostics** in **Settings → About and Updates** leaves them out.
 

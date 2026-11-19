@@ -2,6 +2,16 @@
 
 All notable changes to Game Lobby are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Interface
+- Settings now opens inside the main window instead of a separate window: the gear, **Ctrl+,** and every "open settings" link switch the library to Settings with its own section list; **Back** or **Esc** returns to the library where you were. Changes show in the library immediately.
+- New **Settings → API keys** tab: the SteamGridDB key, the IGDB (Twitch) Client ID and Secret, and the Steam Web API key with SteamID64, each with what it unlocks, its status and **Add**, **Change** and **Remove**. **Add keys** opens a sheet from the right with all of them at once and short steps. Finding a cover or searching IGDB without a key offers **Add API key**. The old places show a status line and **Manage in API keys**. Keys stay write-only: the app only learns whether each is set.
+- Transitions: a game page grows out of the clicked poster (and shrinks back on close when the poster is still on screen); changing launcher, store or Installed/All fades the old games out and the new ones in; Settings and the keys sheet slide in.
+- Micro-interactions: buttons, cards, rail and menu items shrink slightly while pressed and spring back. Covers, heroes, logos and previews show a small spinning ring while loading (not at all for cached images), then fade in.
+- New **Settings → Appearance → Reduce motion**: Follow Windows (default), Reduced (short fades only) or Off (no animation at all).
+- Technical: the separate settings window and its page are gone, so the `settings` window label is removed from the capabilities (no permission was added); `settings_open` focuses the main window and sends it a `settings:open` event with the section (now also `api-keys`). New stored setting `motion` (older settings default to following Windows).
+
 ## [0.5.1] — 2026-11-16
 
 ### Custom launchers

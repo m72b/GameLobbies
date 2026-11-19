@@ -29,9 +29,17 @@ The Windows scanners support these sources:
 
 All stores are detected automatically; no store accounts or keys are needed. **Settings → Libraries** shows which stores and launchers were found on this PC, lets you turn each one off, and sets the scan interval. In the library, **Sort → Library** orders games by store, then title.
 
+### API keys
+
+Every optional key lives in **Settings → API keys**: the SteamGridDB key (cover art, heroes, logos), the IGDB Client ID and Client Secret from a free Twitch application (game details), and the Steam Web API key with your SteamID64 (owned games). Each row shows what it unlocks and whether it is **Set**, **Incomplete** or **Not set**, with the last error if a test or import failed, and has **Add** or **Change** and **Remove**. **Add keys** opens a sheet that slides in from the right and shows all three at once, with links to where to get each and the steps; **Esc** or a click outside closes it. Places that need a missing key (finding a cover, searching IGDB) offer **Add API key**, which opens the same sheet. Keys are encrypted for your Windows user and never shown again after saving.
+
+### Motion
+
+Screens and game pages animate subtly: a game page grows out of the poster you clicked, the library fades when you switch launcher or filter, and buttons respond to a press. **Settings → Appearance → Reduce motion** sets this: **Follow Windows** (the default) uses Windows' animation setting, **Reduced** keeps only short fades, and **Off** turns every animation off.
+
 ### Steam games you own but haven't installed
 
-Steam is installed-games only unless you set this up. Under the Steam row in **Settings → Libraries**, open **Show games you own but haven't installed**:
+Steam is installed-games only unless you set this up. In **Settings → API keys** (also reachable from the Steam row in **Settings → Libraries**), choose **Add keys** and fill in the **Steam Web API key and SteamID64** card:
 
 1. Get a free Steam Web API key at [steamcommunity.com/dev/apikey](https://steamcommunity.com/dev/apikey) (any domain name, such as `localhost`, works).
 2. Find your SteamID64: it is the 17-digit number starting with `7656119`, shown as "Steam ID" on your [Steam account page](https://store.steampowered.com/account/).
