@@ -17,6 +17,8 @@ import { GameNotesSection, YourScore } from './game-notes'
 import { ControllerBadge, ControllerBlock, useGameInput } from './controller-info'
 import { SessionHistory } from './session-history'
 import { formatRange } from '../shared/sessions'
+import { addedTooltip, additionOf, mergeActivity } from '../shared/store-time'
+import { SteamAddedText, SteamTag } from './steam-added'
 import { elapsedSeconds, formatClock, formatDate, formatSession, formatTime, formatTotal, useNow } from './format'
 import { LaunchOptionsDialog, RouteToolPanel, type RouteTool } from './route-tools'
 import type { ArgsPreview, CustomLauncher, EmulatorCatalog, EmulatorProfile, Game, GamePageArt, GameRoute, PlaySession, PlayStats, RunningGame, Settings, UnlinkPreview } from '../shared/types'
@@ -166,6 +168,9 @@ export function GamePage({ game, index, settings, launchers, running, libraryVer
   const installFolder = game.routes.find(item => item.installPath)?.installPath
   const sourceLabel = (source: string) => source === 'launch' ? 'Launched from Game Lobby' : 'Detected'
   const hasLiveRow = sessions.some(item => !item.endedAt)
+  // Steam's hours that Game Lobby did not track: one read-only entry, never a session.
+  const steamEntry = additionOf(game, stats?.store)
+  const activityRows = mergeActivity(sessions, steamEntry ? [steamEntry] : [])
   const menuItems: Array<[string, () => void]> = [
     ['Edit metadata', () => actions.edit(game)],
     ['Customize page', () => setCustomizing(true)],
@@ -257,7 +262,7 @@ export function GamePage({ game, index, settings, launchers, running, libraryVer
       <section className="gp-activity">
         <div className="gp-activity-head"><h2>Activity</h2><button type="button" className="secondary-button" onClick={() => setHistoryOpen(true)}>All sessions</button></div>
         {historyOpen && <SessionHistory gameId={game.id} title={game.title} running={running ? [running] : []} onClose={() => setHistoryOpen(false)} />}
-        {sessions.length === 0 && !isRunning
+        {sessions.length === 0 && !isRunning && !steamEntry
           ? <div className="gp-empty">No play sessions recorded yet. Sessions appear here once you play{settings.tracking ? '.' : ' (tracking is off in settings).'}</div>
           : <ul className="gp-sessions">
             {running && isRunning && !hasLiveRow && <li className="live">
@@ -265,7 +270,13 @@ export function GamePage({ game, index, settings, launchers, running, libraryVer
               <span className="gp-tag">{sourceLabel(running.source)}</span>
               <span className="gp-dur"><span className="gp-live-dot" /> {formatClock(elapsedSeconds(running.startedAt, now))}</span>
             </li>}
-            {sessions.map(session => {
+            {activityRows.map(row => {
+              if (row.kind === 'steam') return <li key="steam-added" className="gp-steam-row" title={addedTooltip(row.entry)}>
+                <SteamAddedText entry={row.entry} />
+                <SteamTag />
+                <span className="gp-dur" />
+              </li>
+              const session = row.session
               const inProgress = !session.endedAt
               // Only a session the tracker is running now counts up; any other keeps its saved length.
               const live = inProgress && isRunning

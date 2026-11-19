@@ -1090,15 +1090,28 @@ pub fn play_stats(db: &Connection, game_id: &str, now: i64) -> Result<PlayStats>
         (Some(a), Some(b)) => Some(a.max(b)),
         (a, b) => a.or(b),
     };
+    let tracked_total = game.as_ref().map_or(session_total, GameRow::seconds);
+    // A store's own figure (Steam) counts where it is larger; the tracked tables are untouched.
+    let store = match get_game(db, game_id)? {
+        Some(full) => crate::stats::store_time_of(db, &full, last_played)?,
+        None => None,
+    };
     Ok(PlayStats {
-        total_seconds: game.as_ref().map_or(session_total, GameRow::seconds),
+        total_seconds: store
+            .as_ref()
+            .map_or(tracked_total, |t| t.effective_seconds.max(tracked_total)),
         last_two_weeks_seconds: sessions
             .iter()
             .map(|&(start, end, secs)| seconds_after(start, end, secs, cutoff))
             .sum(),
         session_count: sessions.len() as i64,
         first_played: sessions.iter().map(|s| s.0).min(),
-        last_played: last_played.filter(|v| *v != 0),
+        last_played: store
+            .as_ref()
+            .and_then(|t| t.effective_last_played)
+            .or(last_played)
+            .filter(|v| *v != 0),
+        store,
     })
 }
 
@@ -2594,6 +2607,7 @@ mod tests {
                 session_count: 3,
                 first_played: Some(cutoff - 50_000_000),
                 last_played: Some(now - 3_600_000),
+                store: None,
             }
         );
         let json = serde_json::to_value(&stats).unwrap();

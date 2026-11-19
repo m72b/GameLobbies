@@ -4,7 +4,8 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import { BarChart3, CloudDownload, EyeOff, Gamepad2, HardDrive, Heart, History, Library, MoreHorizontal, Pencil, Play, Plus, Search, Settings2, Star, X } from 'lucide-react'
 import { StoreIcon } from './store-icons'
 import { GlMark } from './gl-mark'
-import type { CustomLauncher, Game, LauncherTargetKind, RunningGame, Settings, Store as StoreName, SteamGridDbCover, UpdateInfo } from '../shared/types'
+import type { CustomLauncher, Game, LauncherTargetKind, RunningGame, Settings, Store as StoreName, SteamGridDbCover, StoreTime, UpdateInfo } from '../shared/types'
+import { effectiveLastPlayed, effectiveSeconds } from '../shared/store-time'
 import { defaultSettings } from '../shared/defaults'
 import { applyTheme } from './theme'
 import { coverSrc, coverStyle } from './cover'
@@ -52,6 +53,8 @@ const stores: StoreName[] = ['Steam', 'Epic Games', 'GOG', 'EA app', 'Battle.net
 
 export default function App() {
   const [games, setGames] = useState<Game[]>([])
+  // Steam's own playtime per game, computed by the backend (read-only; never written back to games).
+  const [storeTimes, setStoreTimes] = useState<Record<string, StoreTime>>({})
   const [settings, setSettings] = useState<Settings>(defaultSettings)
   const [query, setQuery] = useState('')
   const [store, setStore] = useState('All Games')
@@ -112,8 +115,9 @@ export default function App() {
   const scrollToRowRef = useRef<(row: number) => void>(() => {})
 
   const refresh = async () => {
-    const [nextGames, nextSettings] = await Promise.all([window.lobby.library.list(), window.lobby.settings.get()])
+    const [nextGames, nextSettings, nextTimes] = await Promise.all([window.lobby.library.list(), window.lobby.settings.get(), window.lobby.stats.storeTimes().catch(() => ({}) as Record<string, StoreTime>)])
     setGames(nextGames)
+    setStoreTimes(nextTimes)
     setSettings(nextSettings)
   }
   const notice = (message: string) => {
@@ -493,11 +497,11 @@ export default function App() {
     if (query.trim()) return filtered
     const name = (game: Game) => displayStore(game, launchers)
     return [...filtered].sort((a, b) =>
-      sortBy === 'lastPlayed' ? (b.lastPlayed || 0) - (a.lastPlayed || 0) :
-        sortBy === 'playtime' ? b.playtimeMinutes - a.playtimeMinutes :
+      sortBy === 'lastPlayed' ? effectiveLastPlayed(b, storeTimes) - effectiveLastPlayed(a, storeTimes) :
+        sortBy === 'playtime' ? effectiveSeconds(b, storeTimes) - effectiveSeconds(a, storeTimes) :
           sortBy === 'library' ? name(a).localeCompare(name(b)) || a.title.localeCompare(b.title) : a.title.localeCompare(b.title)
     )
-  }, [filtered, query, sortBy, launchers])
+  }, [filtered, query, sortBy, launchers, storeTimes])
   // Launcher, store, view or Installed/All changes: the old grid fades out, then the new games fade in.
   // Library updates and typing in search do not animate.
   const filterKey = gridKey(view, store, onlyInstalled)
@@ -664,7 +668,7 @@ export default function App() {
                   <button className="card-more" aria-label="Game actions" onClick={event => { event.stopPropagation(); setMenu({ x: event.clientX, y: event.clientY, game }) }}><MoreHorizontal size={17} /></button>
                 </CardPoster>
                 <div className="card-title">{game.title}</div>
-                <div className="card-subtitle">{storeName(game)}{game.playtimeMinutes > 0 ? ' · ' + Math.floor(game.playtimeMinutes / 60) + 'h played' : ''}</div>
+                <div className="card-subtitle">{storeName(game)}{effectiveSeconds(game, storeTimes) >= 60 ? ' · ' + Math.floor(effectiveSeconds(game, storeTimes) / 3600) + 'h played' : ''}</div>
               </article>)}
             </div>
           })}

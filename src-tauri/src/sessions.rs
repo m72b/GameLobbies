@@ -149,6 +149,10 @@ pub struct SessionPage {
     /// Pass back to load the next page; absent on the last page.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next: Option<Cursor>,
+    /// Read-only "Added from Steam" entries (one per game with a positive difference), on the
+    /// first page only. Not sessions: they cannot be edited, deleted, shared or exported, and
+    /// are not counted as sessions.
+    pub store_entries: Vec<crate::stats::StoreAddition>,
 }
 
 const ENTRY_SELECT: &str = "SELECT s.id,s.gameId,COALESCE(g.title,s.gameId),s.startedAt,s.endedAt,s.seconds,s.source,s.edited,s.interrupted,n.note FROM play_sessions s LEFT JOIN games g ON g.id=s.gameId LEFT JOIN session_notes n ON n.sessionId=s.id";
@@ -234,7 +238,16 @@ pub fn page(
         started_at: last.started_at,
         id: last.id,
     });
-    Ok(SessionPage { sessions, next })
+    let store_entries = if cursor.is_none() {
+        crate::stats::additions(db, game_id)?
+    } else {
+        Vec::new()
+    };
+    Ok(SessionPage {
+        sessions,
+        next,
+        store_entries,
+    })
 }
 
 // ---------------------------------------------------------------------------

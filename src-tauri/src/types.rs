@@ -514,6 +514,10 @@ pub struct PlayStats {
     pub first_played: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_played: Option<i64>,
+    /// Set when a store reports time for the game: `total_seconds` and `last_played` already
+    /// count it (larger figure, newer date); the sessions and `first_played` stay tracked-only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub store: Option<crate::stats::StoreTime>,
 }
 
 /// Game page art candidates in priority order (`art_get`), with the game's customization.

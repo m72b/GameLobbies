@@ -353,6 +353,7 @@ pub fn run() {
             storage::recent_list,
             storage::recent_dismiss,
             stats::stats_summary,
+            stats::stats_store_times,
             updater::updates_check,
             updater::updates_auto_check,
             updater::updates_last,

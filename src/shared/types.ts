@@ -437,7 +437,16 @@ export interface PlaySession { id: number; startedAt: number; endedAt?: number; 
  *   counts in proportion).
  * - `firstPlayed` / `lastPlayed`: ms epoch; absent when unknown.
  */
-export interface PlayStats { totalSeconds: number; lastTwoWeeksSeconds: number; sessionCount: number; firstPlayed?: number; lastPlayed?: number }
+export interface PlayStats { totalSeconds: number; lastTwoWeeksSeconds: number; sessionCount: number; firstPlayed?: number; lastPlayed?: number; /** Present when Steam reports time for the game; `totalSeconds` and `lastPlayed` already count it. */ store?: StoreTime }
+/**
+ * A game's playtime once a store's figure (Steam's `playtime_forever`) is counted. Computed by
+ * the backend; never written to the game's tracked playtime or sessions.
+ * - `seconds`: the store's figure. `trackedSeconds`: what Game Lobby recorded.
+ * - `effectiveSeconds`: the larger of the two (never added). `addedSeconds`: `max(0, seconds - trackedSeconds)`.
+ * - `lastPlayed`: the store's last-played time (ms); `effectiveLastPlayed`: the newer of that and the tracked one.
+ * - `syncedAt`: ms of the last sync of the store's figures.
+ */
+export interface StoreTime { source: 'steam'; seconds: number; trackedSeconds: number; effectiveSeconds: number; addedSeconds: number; lastPlayed?: number; effectiveLastPlayed?: number; syncedAt: number }
 /**
  * Play tracking (needs `Settings.tracking`; see also `Settings.detectExternalLaunches`).
  * - status(): games currently launching or running. Empty when tracking is off.
@@ -683,7 +692,7 @@ export interface LobbyAPI {
   storage: { list(): Promise<StorageReport>; rescan(): Promise<StorageReport>; uninstall(gameId: string, routeIndex: number): Promise<void>; onProgress(callback: (progress: StorageProgress) => void): () => void }
   /** The "Recently added" shelf. `dismiss()` without an id clears it. Both return the remaining shelf. */
   /** Read-only library statistics, computed by the backend. Hidden games are left out unless `includeHidden`. */
-  stats: { summary(includeHidden: boolean): Promise<StatsSummary> }
+  stats: { summary(includeHidden: boolean): Promise<StatsSummary>; /** Games Steam reports time for, by game id (the others are absent). Refetch on `library.onChanged`. */ storeTimes(): Promise<Record<string, StoreTime>> }
   recent: { list(): Promise<RecentGame[]>; dismiss(gameId?: string): Promise<RecentGame[]> }
 }
 declare global { interface Window { lobby: LobbyAPI } }

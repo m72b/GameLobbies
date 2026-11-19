@@ -216,7 +216,8 @@ const api: LobbyAPI = {
     onProgress: callback => subscribe<StorageProgress>('storage:progress', callback)
   },
   stats: {
-    summary: includeHidden => call('stats_summary', { includeHidden })
+    summary: includeHidden => call('stats_summary', { includeHidden }),
+    storeTimes: () => call('stats_store_times')
   },
   recent: {
     list: () => call('recent_list'),

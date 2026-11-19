@@ -27,7 +27,7 @@ use crate::types::{now_ms, Game, GameRoute};
 use anyhow::Result;
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -40,6 +40,8 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_GAMES: usize = 50_000;
 const MAX_NAME_CHARS: usize = 200;
+/// 2000-01-01 in unix seconds: an earlier `rtime_last_played` is not a play time.
+const MIN_LAST_PLAYED_SECONDS: u64 = 946_684_800;
 /// A larger `playtime_forever` is not believable (about 19 years) and is capped.
 const MAX_PLAYTIME_MINUTES: u64 = 10_000_000;
 /// After a successful fetch, scans don't ask Steam again for this long.
@@ -112,7 +114,10 @@ pub struct OwnedList {
     /// Steam's `playtime_forever` per app id, in seconds (it reports minutes). Only apps with
     /// time above zero, named or not. Kept in its own table ([`crate::stats`]), never merged
     /// into the playtime Game Lobby tracks.
-    pub playtime: std::collections::HashMap<String, i64>,
+    pub playtime: HashMap<String, i64>,
+    /// Steam's `rtime_last_played` per app id, in ms (it reports seconds). Only believable
+    /// values (after 2000); kept with the playtime and never merged into tracked data.
+    pub last_played: HashMap<String, i64>,
 }
 
 /// Where the request goes. Production is fixed to [`HOST`] over https; tests use a local server.
@@ -183,6 +188,9 @@ struct OwnedItem {
     /// Minutes, all time. Anything but a non-negative whole number is ignored.
     #[serde(default)]
     playtime_forever: Option<serde_json::Value>,
+    /// Unix seconds. Anything but a whole number after 2000 is ignored.
+    #[serde(default)]
+    rtime_last_played: Option<serde_json::Value>,
 }
 
 /// Plain one-line text: control and bidi characters dropped, whitespace collapsed, capped.
@@ -221,6 +229,16 @@ pub fn parse_owned(body: &[u8]) -> Result<OwnedList, FetchError> {
         if minutes > 0 {
             list.playtime
                 .insert(item.appid.to_string(), minutes as i64 * 60);
+        }
+        let last_played = item
+            .rtime_last_played
+            .as_ref()
+            .and_then(|v| v.as_u64())
+            .filter(|s| *s >= MIN_LAST_PLAYED_SECONDS)
+            .and_then(|s| i64::try_from(s).ok())
+            .and_then(|s| s.checked_mul(1000));
+        if let Some(ms) = last_played {
+            list.last_played.insert(item.appid.to_string(), ms);
         }
         if let Some(name) = item.name.as_deref().and_then(clean_name) {
             list.apps.push(OwnedApp {
@@ -414,7 +432,20 @@ pub fn apply(
             db::upsert_imported_games(conn, &games)?;
             // Steam's own playtime, for every owned app (installed ones too). It is replaced
             // as a whole by each successful fetch and never touches the tracked playtime.
-            crate::stats::replace_store_playtime(conn, crate::stats::STEAM, &list.playtime, now)?;
+            // A last-played time in the future is not believable and is dropped.
+            let last_played: HashMap<String, i64> = list
+                .last_played
+                .iter()
+                .filter(|(_, ms)| **ms <= now.saturating_add(86_400_000))
+                .map(|(id, ms)| (id.clone(), *ms))
+                .collect();
+            crate::stats::replace_store_playtime(
+                conn,
+                crate::stats::STEAM,
+                &list.playtime,
+                &last_played,
+                now,
+            )?;
             let previous: HashSet<String> = state.app_ids.iter().cloned().collect();
             let gone: HashSet<String> = previous
                 .iter()
@@ -713,6 +744,7 @@ mod tests {
                 })
                 .collect(),
             playtime: Default::default(),
+            last_played: Default::default(),
         }
     }
 
@@ -1185,6 +1217,41 @@ mod tests {
         );
         assert_eq!(undo(&mut conn).unwrap(), 1);
         assert!(db::get_game(&conn, "steam:570").unwrap().is_some());
+    }
+
+    #[test]
+    fn rtime_last_played_is_parsed_into_ms_and_stored_with_the_playtime() {
+        let body = br#"{"response":{"games":[
+            {"appid":10,"name":"CS","playtime_forever":90,"rtime_last_played":1700000000},
+            {"appid":20,"name":"Never","playtime_forever":5,"rtime_last_played":0},
+            {"appid":30,"name":"Old","playtime_forever":5,"rtime_last_played":12},
+            {"appid":40,"name":"Text","playtime_forever":5,"rtime_last_played":"1700000000"},
+            {"appid":50,"name":"Future","playtime_forever":5,"rtime_last_played":4000000000},
+            {"appid":60,"name":"Missing","playtime_forever":5}
+        ]}}"#;
+        let list = parse_owned(body).unwrap();
+        assert_eq!(list.last_played["10"], 1_700_000_000_000);
+        assert_eq!(list.last_played.len(), 2);
+        let database = db::Db::memory().unwrap();
+        let mut conn = database.lock();
+        let now = 1_800_000_000_000;
+        apply(&mut conn, &Ok(list), now).unwrap();
+        let stored: Vec<(String, Option<i64>)> = {
+            let mut stmt = conn
+                .prepare("SELECT appId,lastPlayed FROM store_playtime ORDER BY appId")
+                .unwrap();
+            stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+                .unwrap()
+                .collect::<rusqlite::Result<_>>()
+                .unwrap()
+        };
+        // The future date (app 50) is dropped, the playtime is kept.
+        assert_eq!(
+            stored.iter().find(|r| r.0 == "10").unwrap().1,
+            Some(1_700_000_000_000)
+        );
+        assert_eq!(stored.iter().find(|r| r.0 == "50").unwrap().1, None);
+        assert_eq!(stored.len(), 6);
     }
 
     #[test]

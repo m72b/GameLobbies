@@ -13,7 +13,14 @@ export interface SessionShot { id: string; src: string }
 export interface SessionEntry { id: number; gameId: string; gameTitle: string; startedAt: number; endedAt?: number; seconds: number; source: PlaySource; edited: boolean; interrupted: boolean; note?: string; screenshots: SessionShot[] }
 /** Keyset position for the next page. */
 export interface SessionCursor { startedAt: number; id: number }
-export interface SessionPage { sessions: SessionEntry[]; next?: SessionCursor }
+/**
+ * The read-only "Added from Steam" entry: the hours Steam has that Game Lobby did not track
+ * (`seconds`, always above zero), dated at the last sync. Not a session: it has no id, cannot be
+ * edited, deleted, shared or exported, and is not counted in any session total.
+ */
+export interface StoreAddition { gameId: string; gameTitle: string; source: 'steam'; seconds: number; storeSeconds: number; trackedSeconds: number; syncedAt: number }
+/** `storeEntries` come with the first page only. */
+export interface SessionPage { sessions: SessionEntry[]; next?: SessionCursor; storeEntries: StoreAddition[] }
 export type ShareFormat = 'txt' | 'md'
 
 /** Mirrors `sessions::MAX_NOTE_CHARS`. */

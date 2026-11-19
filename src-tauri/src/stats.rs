@@ -9,6 +9,10 @@
 //!   Game Lobby recorded) and Steam's own figure usually count the same hours, so the two are
 //!   never added. Store figures live in `store_playtime` and are never merged into the tracked
 //!   playtime; they are refetched on every Steam owned-games import and are not part of backups.
+//! - Last played: the newer of the tracked time and the store's own last-played time.
+//! - The part of the store's figure Game Lobby did not track, `max(0, store - tracked)`, is shown
+//!   as one read-only "Added from Steam" entry in a game's activity (never a session, never
+//!   written to the tracked tables). A game with several Steam routes uses the largest figure.
 //! - Played: that time is above zero, or the game has a last-played time or a recorded session.
 //!   Not played: the rest.
 //! - Average playtime: total time over the games with time above zero.
@@ -39,27 +43,40 @@ pub const TOP_LIMIT: usize = 50;
 /// ignore it). Called from `db::migrate`.
 pub fn migrate(conn: &Connection) -> Result<()> {
     conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS store_playtime(source TEXT NOT NULL,appId TEXT NOT NULL,seconds INTEGER NOT NULL,updatedAt INTEGER NOT NULL,PRIMARY KEY(source,appId));",
+        "CREATE TABLE IF NOT EXISTS store_playtime(source TEXT NOT NULL,appId TEXT NOT NULL,seconds INTEGER NOT NULL,updatedAt INTEGER NOT NULL,lastPlayed INTEGER,PRIMARY KEY(source,appId));",
     )?;
+    // The table of 0.6.0 had no `lastPlayed` (ms the store says the game was last played).
+    let has_last_played = conn
+        .prepare("SELECT name FROM pragma_table_info('store_playtime')")?
+        .query_map([], |r| r.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?
+        .iter()
+        .any(|name| name == "lastPlayed");
+    if !has_last_played {
+        conn.execute_batch("ALTER TABLE store_playtime ADD COLUMN lastPlayed INTEGER;")?;
+    }
     Ok(())
 }
 
-/// Replaces everything stored for `source` with `seconds_by_app` (app id to seconds), in one
-/// transaction. Zero and negative figures are not stored.
+/// Replaces everything stored for `source` with `seconds_by_app` (app id to seconds) and
+/// `last_played_by_app` (app id to ms), in one transaction. Zero and negative figures are not
+/// stored.
 pub fn replace_store_playtime(
     conn: &mut Connection,
     source: &str,
     seconds_by_app: &HashMap<String, i64>,
+    last_played_by_app: &HashMap<String, i64>,
     now: i64,
 ) -> Result<()> {
     let tx = conn.transaction()?;
     tx.execute("DELETE FROM store_playtime WHERE source=?", [source])?;
     {
         let mut insert = tx.prepare(
-            "INSERT OR REPLACE INTO store_playtime(source,appId,seconds,updatedAt) VALUES(?,?,?,?)",
+            "INSERT OR REPLACE INTO store_playtime(source,appId,seconds,updatedAt,lastPlayed) VALUES(?,?,?,?,?)",
         )?;
         for (app_id, seconds) in seconds_by_app.iter().filter(|(_, s)| **s > 0) {
-            insert.execute(params![source, app_id, seconds, now])?;
+            let last = last_played_by_app.get(app_id).filter(|v| **v > 0);
+            insert.execute(params![source, app_id, seconds, now, last])?;
         }
     }
     tx.commit()?;
@@ -173,30 +190,197 @@ fn store_label(source: &str) -> &'static str {
     }
 }
 
-fn app_playtime(conn: &Connection) -> Result<HashMap<(String, String), i64>> {
-    let mut stmt = conn.prepare("SELECT source,appId,seconds FROM store_playtime")?;
+/// One store row: the store's figure for an app.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct StoreRow {
+    pub seconds: i64,
+    /// Ms the store says the game was last played.
+    pub last_played: Option<i64>,
+    /// Ms of the sync that wrote the row.
+    pub updated_at: i64,
+}
+
+type StoreRows = HashMap<(String, String), StoreRow>;
+
+fn app_playtime(conn: &Connection) -> Result<StoreRows> {
+    let mut stmt =
+        conn.prepare("SELECT source,appId,seconds,lastPlayed,updatedAt FROM store_playtime")?;
     let rows = stmt
         .query_map([], |r| {
             Ok((
                 (r.get::<_, String>(0)?, r.get::<_, String>(1)?),
-                r.get::<_, i64>(2)?,
+                StoreRow {
+                    seconds: r.get::<_, i64>(2)?,
+                    last_played: r.get::<_, Option<i64>>(3)?.filter(|v| *v > 0),
+                    updated_at: r.get::<_, i64>(4)?,
+                },
             ))
         })?
         .collect::<rusqlite::Result<_>>()?;
     Ok(rows)
 }
 
-/// A game's largest store-reported time across its routes, with the store it came from.
-fn store_time(game: &Game, store: &HashMap<(String, String), i64>) -> Option<(i64, &'static str)> {
-    game.routes
+/// What the store reports for a game: the largest figure across its Steam routes, the latest
+/// last-played time and the latest sync among those routes. `None` when no route has a figure.
+fn game_store_row(game: &Game, store: &StoreRows) -> Option<StoreRow> {
+    let rows: Vec<&StoreRow> = game
+        .routes
         .iter()
         .filter(|r: &&GameRoute| r.source_id == STEAM)
         .filter_map(|r| {
             let id = r.app_id.as_deref().filter(|id| !id.is_empty())?;
-            let seconds = *store.get(&(STEAM.to_string(), id.to_string()))?;
-            (seconds > 0).then_some((seconds, STEAM))
+            store
+                .get(&(STEAM.to_string(), id.to_string()))
+                .filter(|row| row.seconds > 0)
         })
-        .max_by_key(|(seconds, _)| *seconds)
+        .collect();
+    let seconds = rows.iter().map(|r| r.seconds).max()?;
+    Some(StoreRow {
+        seconds,
+        last_played: rows.iter().filter_map(|r| r.last_played).max(),
+        updated_at: rows.iter().map(|r| r.updated_at).max().unwrap_or(0),
+    })
+}
+
+/// A game's largest store-reported time across its routes, with the store it came from.
+fn store_time(game: &Game, store: &StoreRows) -> Option<(i64, &'static str)> {
+    game_store_row(game, store).map(|row| (row.seconds, STEAM))
+}
+
+/// How a game's playtime reads once the store's figure is counted. Delivered to the renderer
+/// (`stats_store_times`, `tracking_stats`); it is never stored and never written to the tracked
+/// tables.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct StoreTime {
+    /// `"steam"`.
+    pub source: String,
+    /// The store's figure.
+    pub seconds: i64,
+    /// What Game Lobby recorded itself.
+    pub tracked_seconds: i64,
+    /// What counts: `max(tracked, store)`.
+    pub effective_seconds: i64,
+    /// `max(0, store - tracked)`: the hours the store has that Game Lobby did not track.
+    pub added_seconds: i64,
+    /// The store's last-played time (ms), when it gave one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_played: Option<i64>,
+    /// The newer of the tracked and the store's last-played time (ms).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effective_last_played: Option<i64>,
+    /// Ms of the last sync of the store's figures.
+    pub synced_at: i64,
+}
+
+/// The pure rules: effective time is the larger figure, the added part never negative, last
+/// played the newer of the two.
+pub fn combine(
+    tracked_seconds: i64,
+    tracked_last_played: Option<i64>,
+    row: &StoreRow,
+) -> StoreTime {
+    let tracked = tracked_seconds.max(0);
+    let store = row.seconds.max(0);
+    StoreTime {
+        source: STEAM.to_string(),
+        seconds: store,
+        tracked_seconds: tracked,
+        effective_seconds: tracked.max(store),
+        added_seconds: (store - tracked).max(0),
+        last_played: row.last_played,
+        effective_last_played: tracked_last_played
+            .filter(|v| *v > 0)
+            .into_iter()
+            .chain(row.last_played)
+            .max(),
+        synced_at: row.updated_at,
+    }
+}
+
+/// A game's tracked time in seconds (older rows only have minutes).
+pub fn tracked_seconds(game: &Game) -> i64 {
+    game.playtime_seconds
+        .unwrap_or(game.playtime_minutes * 60)
+        .max(0)
+}
+
+fn game_store_time(game: &Game, rows: &StoreRows) -> Option<StoreTime> {
+    let row = game_store_row(game, rows)?;
+    Some(combine(tracked_seconds(game), game.last_played, &row))
+}
+
+/// One game's playtime with the store's figure counted, or `None` when no store reports time
+/// for it. `tracked_last_played` replaces the game's own last-played time (the game page also
+/// knows its sessions).
+pub fn store_time_of(
+    conn: &Connection,
+    game: &Game,
+    tracked_last_played: Option<i64>,
+) -> Result<Option<StoreTime>> {
+    let rows = app_playtime(conn)?;
+    Ok(game_store_row(game, &rows)
+        .map(|row| combine(tracked_seconds(game), tracked_last_played, &row)))
+}
+
+/// Every game that has a store figure, by game id.
+pub fn store_times(conn: &Connection) -> Result<HashMap<String, StoreTime>> {
+    let rows = app_playtime(conn)?;
+    if rows.is_empty() {
+        return Ok(HashMap::new());
+    }
+    Ok(db::all_games(conn)?
+        .into_iter()
+        .filter_map(|game| game_store_time(&game, &rows).map(|t| (game.id, t)))
+        .collect())
+}
+
+/// The read-only "Added from Steam" entry of a game's activity (never a play session).
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct StoreAddition {
+    pub game_id: String,
+    pub game_title: String,
+    pub source: String,
+    /// The hours the store has that Game Lobby did not track; always above zero.
+    pub seconds: i64,
+    pub store_seconds: i64,
+    pub tracked_seconds: i64,
+    /// Ms of the last sync; the entry is dated here.
+    pub synced_at: i64,
+}
+
+/// The additions for one game or (None) every game; games whose difference is zero have none.
+pub fn additions(conn: &Connection, game_id: Option<&str>) -> Result<Vec<StoreAddition>> {
+    let rows = app_playtime(conn)?;
+    if rows.is_empty() {
+        return Ok(Vec::new());
+    }
+    let games = match game_id {
+        Some(id) => db::get_game(conn, id)?.into_iter().collect(),
+        None => db::all_games(conn)?,
+    };
+    let mut out: Vec<StoreAddition> = games
+        .iter()
+        .filter_map(|game| {
+            let t = game_store_time(game, &rows)?;
+            (t.added_seconds > 0).then(|| StoreAddition {
+                game_id: game.id.clone(),
+                game_title: game.title.clone(),
+                source: t.source,
+                seconds: t.added_seconds,
+                store_seconds: t.seconds,
+                tracked_seconds: t.tracked_seconds,
+                synced_at: t.synced_at,
+            })
+        })
+        .collect();
+    out.sort_by(|a, b| {
+        b.synced_at
+            .cmp(&a.synced_at)
+            .then_with(|| a.game_title.cmp(&b.game_title))
+    });
+    Ok(out)
 }
 
 /// The name a game is counted under (the store shown on its card).
@@ -246,10 +430,7 @@ pub fn summarize(conn: &Connection, include_hidden: bool) -> Result<StatsSummary
     let rows: Vec<Row> = games
         .iter()
         .map(|game| {
-            let tracked = game
-                .playtime_seconds
-                .unwrap_or(game.playtime_minutes * 60)
-                .max(0);
+            let tracked = tracked_seconds(game);
             let store = store_time(game, &store);
             let seconds = tracked.max(store.map_or(0, |(s, _)| s));
             Row {
@@ -391,6 +572,13 @@ pub fn summarize(conn: &Connection, include_hidden: bool) -> Result<StatsSummary
     });
     summary.library = library;
     Ok(summary)
+}
+
+#[tauri::command]
+pub async fn stats_store_times(
+    state: State<'_, AppState>,
+) -> CmdResult<HashMap<String, StoreTime>> {
+    store_times(&state.db.lock()).map_err(|e| format!("{e:#}"))
 }
 
 #[tauri::command]
@@ -618,7 +806,7 @@ mod tests {
             ("99".into(), 5),
         ]
         .into();
-        replace_store_playtime(&mut conn, STEAM, &store, 1).unwrap();
+        replace_store_playtime(&mut conn, STEAM, &store, &HashMap::new(), 1).unwrap();
         let s = summarize(&conn, false).unwrap();
         let by_id = |id: &str| s.top.iter().find(|t| t.game_id == id).unwrap().clone();
         assert_eq!(by_id("t").seconds, 7200);
@@ -659,6 +847,7 @@ mod tests {
             &mut conn,
             STEAM,
             &[("1".into(), 60), ("2".into(), 120)].into(),
+            &HashMap::new(),
             1,
         )
         .unwrap();
@@ -666,12 +855,13 @@ mod tests {
             &mut conn,
             STEAM,
             &[("2".into(), 180), ("3".into(), 0)].into(),
+            &HashMap::new(),
             2,
         )
         .unwrap();
         let rows = app_playtime(&conn).unwrap();
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[&(STEAM.to_string(), "2".to_string())], 180);
+        assert_eq!(rows[&(STEAM.to_string(), "2".to_string())].seconds, 180);
         clear_store_playtime(&conn, STEAM).unwrap();
         assert!(app_playtime(&conn).unwrap().is_empty());
     }
@@ -813,5 +1003,190 @@ mod tests {
         let s = summarize(&conn, false).unwrap();
         assert_eq!(s.top.len(), TOP_LIMIT);
         assert_eq!(s.top[0].game_id, format!("g{:03}", TOP_LIMIT + 4));
+    }
+
+    fn row(seconds: i64, last_played: Option<i64>, updated_at: i64) -> StoreRow {
+        StoreRow {
+            seconds,
+            last_played,
+            updated_at,
+        }
+    }
+
+    const H: i64 = 3600;
+
+    #[test]
+    fn effective_playtime_is_the_larger_figure_and_the_added_part_never_negative() {
+        // Steam has 165 h, Game Lobby tracked 40 h: 165 h count, 125 h are "added".
+        let t = combine(40 * H, None, &row(165 * H, None, 9));
+        assert_eq!(
+            (
+                t.effective_seconds,
+                t.added_seconds,
+                t.seconds,
+                t.tracked_seconds
+            ),
+            (165 * H, 125 * H, 165 * H, 40 * H)
+        );
+        assert_eq!(t.synced_at, 9);
+        // Tracked is larger: tracked counts, nothing is added (never negative).
+        let t = combine(200 * H, None, &row(165 * H, None, 9));
+        assert_eq!((t.effective_seconds, t.added_seconds), (200 * H, 0));
+        // Equal: nothing added.
+        let t = combine(165 * H, None, &row(165 * H, None, 9));
+        assert_eq!((t.effective_seconds, t.added_seconds), (165 * H, 0));
+        // A negative tracked figure is treated as zero.
+        let t = combine(-5, None, &row(60, None, 9));
+        assert_eq!((t.tracked_seconds, t.added_seconds), (0, 60));
+    }
+
+    #[test]
+    fn last_played_is_the_newer_of_tracked_and_steam() {
+        let last = |tracked, steam| combine(0, tracked, &row(60, steam, 1)).effective_last_played;
+        assert_eq!(last(Some(2_000), Some(5_000)), Some(5_000));
+        assert_eq!(last(Some(9_000), Some(5_000)), Some(9_000));
+        assert_eq!(last(None, Some(5_000)), Some(5_000));
+        assert_eq!(last(Some(7), None), Some(7));
+        assert_eq!(last(None, None), None);
+        // Zero means unknown.
+        assert_eq!(last(Some(0), None), None);
+    }
+
+    fn steam_game(conn: &mut Connection, id: &str, tracked: i64, apps: &[&str]) {
+        put(
+            conn,
+            &game(
+                id,
+                "Steam",
+                tracked,
+                apps.iter()
+                    .map(|a| route(STEAM, Some(a), false, None))
+                    .collect(),
+            ),
+        );
+    }
+
+    #[test]
+    fn additions_cover_each_game_with_a_positive_difference_and_use_the_largest_steam_route() {
+        let db = setup();
+        let mut conn = db.lock();
+        steam_game(&mut conn, "more", 40 * H, &["1"]);
+        steam_game(&mut conn, "same", 10 * H, &["2"]);
+        steam_game(&mut conn, "less", 50 * H, &["3"]);
+        // A linked game with two Steam routes: the larger Steam figure counts, not the sum.
+        steam_game(&mut conn, "linked", 5 * H, &["4", "5"]);
+        steam_game(&mut conn, "none", 5 * H, &["6"]);
+        let store: HashMap<String, i64> = [
+            ("1".into(), 165 * H),
+            ("2".into(), 10 * H),
+            ("3".into(), 20 * H),
+            ("4".into(), 30 * H),
+            ("5".into(), 20 * H),
+        ]
+        .into();
+        let last: HashMap<String, i64> = [("4".into(), 8_000), ("5".into(), 9_000)].into();
+        replace_store_playtime(&mut conn, STEAM, &store, &last, 777).unwrap();
+
+        let all = additions(&conn, None).unwrap();
+        let by_id = |id: &str| all.iter().find(|a| a.game_id == id).cloned();
+        assert_eq!(by_id("more").unwrap().seconds, 125 * H);
+        assert_eq!(by_id("more").unwrap().synced_at, 777);
+        assert!(by_id("same").is_none(), "a zero difference is hidden");
+        assert!(by_id("less").is_none(), "never negative");
+        assert!(by_id("none").is_none());
+        let linked = by_id("linked").unwrap();
+        assert_eq!(
+            (linked.store_seconds, linked.seconds),
+            (30 * H, 25 * H),
+            "max across routes, not the sum"
+        );
+        assert_eq!(all.len(), 2);
+        assert_eq!(additions(&conn, Some("more")).unwrap().len(), 1);
+        assert!(additions(&conn, Some("same")).unwrap().is_empty());
+        assert!(additions(&conn, Some("missing")).unwrap().is_empty());
+
+        let times = store_times(&conn).unwrap();
+        assert_eq!(times.len(), 4);
+        assert_eq!(times["linked"].effective_seconds, 30 * H);
+        assert_eq!(times["linked"].last_played, Some(9_000));
+        assert_eq!(times["less"].effective_seconds, 50 * H);
+        assert_eq!(times["less"].added_seconds, 0);
+    }
+
+    #[test]
+    fn reading_store_time_never_writes_to_tracked_tables() {
+        let db = setup();
+        let mut conn = db.lock();
+        steam_game(&mut conn, "g", 600, &["1"]);
+        db::insert_session(&conn, "g", 1_000_000, 600, "launch").unwrap();
+        replace_store_playtime(
+            &mut conn,
+            STEAM,
+            &[("1".into(), 9 * H)].into(),
+            &[("1".into(), 5_000_000)].into(),
+            3,
+        )
+        .unwrap();
+        let snapshot = |conn: &Connection| -> (String, String) {
+            let games: String = conn
+                .query_row(
+                    "SELECT group_concat(id||':'||playtimeSeconds||':'||COALESCE(lastPlayed,''),'|') FROM games",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            let sessions: String = conn
+                .query_row(
+                    "SELECT group_concat(gameId||':'||seconds||':'||startedAt,'|') FROM play_sessions",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            (games, sessions)
+        };
+        let before = snapshot(&conn);
+        store_times(&conn).unwrap();
+        additions(&conn, None).unwrap();
+        let stats = db::play_stats(&conn, "g", 10_000_000).unwrap();
+        let page = crate::sessions::page(&conn, Some("g"), None, 10).unwrap();
+        assert_eq!(snapshot(&conn), before);
+
+        // The game page totals count Steam's figure and date; sessions stay real sessions.
+        assert_eq!(stats.total_seconds, 9 * H);
+        assert_eq!(stats.last_played, Some(5_000_000));
+        assert_eq!(stats.session_count, 1);
+        assert_eq!(stats.first_played, Some(1_000_000));
+        assert_eq!(stats.store.as_ref().unwrap().added_seconds, 9 * H - 600);
+        assert_eq!(page.sessions.len(), 1);
+        assert_eq!(page.store_entries.len(), 1);
+        assert_eq!(page.store_entries[0].seconds, 9 * H - 600);
+        // Only the first page carries the entries.
+        let later = crate::sessions::page(
+            &conn,
+            Some("g"),
+            Some(crate::sessions::Cursor {
+                started_at: 2_000_000,
+                id: 99,
+            }),
+            10,
+        )
+        .unwrap();
+        assert!(later.store_entries.is_empty());
+    }
+
+    #[test]
+    fn a_database_from_before_last_played_gains_the_column() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE store_playtime(source TEXT NOT NULL,appId TEXT NOT NULL,seconds INTEGER NOT NULL,updatedAt INTEGER NOT NULL,PRIMARY KEY(source,appId));INSERT INTO store_playtime VALUES('steam','1',60,5);",
+        )
+        .unwrap();
+        migrate(&conn).unwrap();
+        migrate(&conn).unwrap();
+        let rows = app_playtime(&conn).unwrap();
+        assert_eq!(
+            rows[&(STEAM.to_string(), "1".to_string())],
+            row(60, None, 5)
+        );
     }
 }

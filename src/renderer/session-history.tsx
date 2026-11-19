@@ -3,8 +3,10 @@ import { BookOpen, Copy, Download, ExternalLink, History, Pencil, RefreshCw, Sha
 import { coverUrl } from './lobby-api'
 import { sessionsApi } from './sessions-api'
 import { elapsedSeconds, formatClock, formatDate, formatSession, formatTime, useNow } from './format'
-import { backloggdSearchUrl, durationSeconds, editProblem, formatRange, fromLocalInput, MAX_NOTE_CHARS, MAX_SESSION_SCREENSHOTS, noteLength, sourceLabel, toLocalInput, utcOffsetMinutes, type SessionCursor, type SessionEntry, type ShareFormat } from '../shared/sessions'
+import { backloggdSearchUrl, durationSeconds, editProblem, formatRange, fromLocalInput, MAX_NOTE_CHARS, MAX_SESSION_SCREENSHOTS, noteLength, sourceLabel, toLocalInput, utcOffsetMinutes, type SessionCursor, type SessionEntry, type ShareFormat, type StoreAddition } from '../shared/sessions'
 import type { RunningGame, Screenshot } from '../shared/types'
+import { addedTooltip, mergeActivity } from '../shared/store-time'
+import { SteamAddedText, SteamTag } from './steam-added'
 
 const PAGE_SIZE = 50
 const errorText = (error: unknown, fallback: string) => error instanceof Error && error.message ? error.message : fallback
@@ -18,6 +20,8 @@ type Mode = 'edit' | 'journal' | 'share'
 export function SessionHistory({ gameId, title, running, onClose }: { gameId?: string; title?: string; running: RunningGame[]; onClose(): void }) {
   const [sessions, setSessions] = useState<SessionEntry[]>([])
   const [next, setNext] = useState<SessionCursor | undefined>()
+  // Read-only "Added from Steam" entries (first page only); never sessions.
+  const [storeEntries, setStoreEntries] = useState<StoreAddition[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [open, setOpen] = useState<{ id: number; mode: Mode } | null>(null)
@@ -31,6 +35,7 @@ export function SessionHistory({ gameId, title, running, onClose }: { gameId?: s
       const page = await sessionsApi.page(gameId ?? null, cursor, PAGE_SIZE)
       setSessions(current => cursor ? [...current, ...page.sessions.filter(item => !current.some(have => have.id === item.id))] : page.sessions)
       setNext(page.next)
+      if (!cursor) setStoreEntries(page.storeEntries ?? [])
     } catch (e) {
       setError(errorText(e, 'Could not load the play history.'))
     } finally {
@@ -72,12 +77,22 @@ export function SessionHistory({ gameId, title, running, onClose }: { gameId?: s
         <summary>About play history</summary>
         <p>Sessions are recorded while Game Lobby is running: a game launched from Game Lobby, or (with detection on) one whose process is seen with a game window. Sessions that start and end while Game Lobby is closed aren't recorded. Games without a visible window or whose process isn't recognized can't be detected.</p>
         <p>If Game Lobby closes unexpectedly (a crash or the PC shutting down), the session is ended at the last time the game was seen running and marked <b>Interrupted</b>. Corrected sessions are marked <b>Edited</b>; editing or deleting a session changes the game's playtime by the same amount.</p>
+        <p>An <b>Added from Steam</b> entry is not a session: it is the part of Steam's playtime for the game that Game Lobby did not track (Steam's total minus what Game Lobby recorded), dated at the last Steam sync. It can't be edited, deleted or shared, and it isn't counted as a session.</p>
         <p>History, notes and screenshot links are stored only on this PC, in the library database in Game Lobby's app data folder, and are included in library backups (Export library). Nothing is sent anywhere unless you copy, save or open a link.</p>
       </details>
       {error && <div className="form-error" role="alert">{error}</div>}
       <div className="sh-list">
-        {!loading && sessions.length === 0 && !error && <div className="empty-inline">No play sessions recorded yet.</div>}
-        {sessions.map(session => {
+        {!loading && sessions.length === 0 && storeEntries.length === 0 && !error && <div className="empty-inline">No play sessions recorded yet.</div>}
+        {mergeActivity(sessions, storeEntries).map(row => {
+          if (row.kind === 'steam') return <div key={'steam-' + row.entry.gameId} className="sh-row sh-steam-row" title={addedTooltip(row.entry)}>
+            <div className="sh-main">
+              <SteamAddedText entry={row.entry} showGame={!gameId} />
+              <div className="sh-tags"><SteamTag /></div>
+              <span className="gp-dur" />
+              <div className="sh-actions" />
+            </div>
+          </div>
+          const session = row.session
           const live = !session.endedAt
           const isRunning = live && runningIds.has(session.gameId)
           const mode = open?.id === session.id ? open.mode : null
