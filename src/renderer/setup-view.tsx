@@ -1,18 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowLeft, ArrowRight, Check, Sparkles } from 'lucide-react'
-import type { SetupChoice, SetupInfo, SetupStore, SetupStoreInfo } from '../shared/types'
-import { choiceLabel, choicesFor, defaultChoice, setupSteps, type SetupStep } from '../shared/accounts'
+import type { AccountStore, SetupChoice, SetupInfo, SetupStore, SetupStoreInfo } from '../shared/types'
+import { choiceLabel, choicesFor, defaultChoice, setupSteps, signInStores, type SetupStep } from '../shared/accounts'
 import { StoreIcon } from './store-icons'
 import { LibraryFoldersSection, useLocalScan } from './library-settings'
 import { ApiKeysSection, type ApiKeys } from './api-keys'
 import { SteamOwnedSetup } from './steam-owned-setup'
-import { SignInNote, SteamSignIn, type Accounts } from './accounts'
+import { SignInNote, StoreSignIn, type Accounts } from './accounts'
 import { GlMark } from './gl-mark'
 
 const errorText = (error: unknown, fallback: string) => error instanceof Error ? error.message : typeof error === 'string' ? error : fallback
 
 const stepTitles: Record<SetupStep, string> = {
-  welcome: 'Welcome', stores: 'Your stores', choices: 'How to use each store', steam: 'Steam account',
+  welcome: 'Welcome', stores: 'Your stores', choices: 'How to use each store', signin: 'Sign in',
   folders: 'Library folders', keys: 'Optional keys', done: 'All set'
 }
 
@@ -61,7 +61,6 @@ export function SetupView({ info, accounts, keys, say, onDone }: { info: SetupIn
     finally { setSaving(false) }
   }
   const toggle = (store: SetupStoreInfo) => setPicked(current => current.includes(store.id) ? current.filter(id => id !== store.id) : [...current, store.id])
-  const steam = accounts.get('steam')
 
   return <div className="settings-view setup-view">
     <header className="settings-head">
@@ -76,7 +75,7 @@ export function SetupView({ info, accounts, keys, say, onDone }: { info: SetupIn
 
         {step === 'welcome' && <>
           <p className="settings-description">Game Lobby puts the games from all your stores and folders in one library. It finds installed games on its own by reading each launcher's files on this PC; no account is needed for that.</p>
-          <p className="muted-text">The next steps let you choose your stores, sign in to Steam to also list the games you own but haven't installed, add game folders, and add optional keys for cover art and game details. Every step can be skipped, and everything can be changed later in Settings.</p>
+          <p className="muted-text">The next steps let you choose your stores, sign in to Steam, GOG, Battle.net or Humble to also list the games you own but haven't installed, add game folders, and add optional keys for cover art and game details. Every step can be skipped, and everything can be changed later in Settings.</p>
         </>}
 
         {step === 'stores' && <>
@@ -98,25 +97,34 @@ export function SetupView({ info, accounts, keys, say, onDone }: { info: SetupIn
               <div className="setup-choice-head"><span className="store-badge small"><StoreIcon store={iconName[store.id]} /></span><b>{store.name}</b>{!store.signIn && store.id !== 'ea' && store.id !== 'ubisoft' && store.id !== 'itch' && <span className="coming-soon">SIGN-IN COMING SOON</span>}</div>
               <p className="muted-text">{store.note}</p>
               <div className="chip-group" role="radiogroup" aria-label={'How to use ' + store.name}>
-                {options.map(option => <button type="button" key={option} role="radio" aria-checked={current === option} className={'chip ' + (current === option ? 'active' : '')} onClick={() => setChoices(value => ({ ...value, [store.id]: option }))}>{option === 'signin' && store.id === 'steam' ? 'Sign in through Steam' : choiceLabel[option]}</button>)}
+                {options.map(option => <button type="button" key={option} role="radio" aria-checked={current === option} className={'chip ' + (current === option ? 'active' : '')} onClick={() => setChoices(value => ({ ...value, [store.id]: option }))}>{option === 'signin' ? (store.id === 'steam' ? 'Sign in through Steam' : 'Sign in to ' + store.name) : choiceLabel[option]}</button>)}
               </div>
             </div>
           })}
         </>}
 
-        {step === 'steam' && steam && <>
-          <p className="settings-description">Sign in through Steam so Game Lobby knows your Steam account, then add a free Steam Web API key. Together they list the games you own but haven't installed, with Steam's playtime.</p>
-          <div className="settings-card">
-            <h3>1. Sign in through Steam</h3>
-            {steam.signedIn && !steam.signingIn ? <p className="setup-ok" role="status"><Check size={14} /> Signed in to Steam.</p> : <p className="muted-text">Your web browser opens steamcommunity.com. Sign in there (approve with Steam Guard as usual); when Steam confirms, the tab says so and Game Lobby comes back to the front.</p>}
-            {steam.notice && !steam.notice.ok && <p className="key-row-problem" role="status">✗ {steam.notice.message}</p>}
-            <SteamSignIn accounts={accounts} status={steam} />
-            <SignInNote />
-          </div>
-          <div className="settings-card">
-            <h3>2. Add your Steam Web API key</h3>
-            <SteamOwnedSetup status={keys.steam.status} busy={keys.steam.busy} error={keys.steam.error} onSave={keys.steam.save} onRemove={keys.steam.remove} />
-          </div>
+        {step === 'signin' && <>
+          <p className="settings-description">Sign in to the stores you chose. Each sign-in lists the games you own but haven't installed; skip any you like.</p>
+          {signInStores(info.stores, all).map(store => {
+            const status = accounts.get(store.id as AccountStore)
+            if (!status) return null
+            const steamStore = store.id === 'steam'
+            return <div className="settings-card setup-choice" key={store.id}>
+              <div className="setup-choice-head"><span className="store-badge small"><StoreIcon store={iconName[store.id]} /></span><b>{steamStore ? 'Sign in through Steam' : 'Sign in to ' + store.name}</b></div>
+              {status.signedIn && !status.signingIn
+                ? <p className="setup-ok" role="status"><Check size={14} /> Signed in to {store.name}.</p>
+                : <p className="muted-text">{steamStore
+                  ? 'Your web browser opens steamcommunity.com. Sign in there (approve with Steam Guard as usual); when Steam confirms, the tab says so and Game Lobby comes back to the front.'
+                  : 'A Game Lobby window opens with ' + store.name + "'s sign-in page. Sign in there; when the store's account page appears, the window closes by itself. If it never finishes, close it and choose Installed files only."}</p>}
+              {status.notice && !status.notice.ok && <p className="key-row-problem" role="status">✗ {status.notice.message}</p>}
+              <StoreSignIn accounts={accounts} status={status} />
+              <SignInNote store={status.store} />
+              {steamStore && <div className="setup-key">
+                <h3>Then add your Steam Web API key</h3>
+                <SteamOwnedSetup status={keys.steam.status} busy={keys.steam.busy} error={keys.steam.error} onSave={keys.steam.save} onRemove={keys.steam.remove} />
+              </div>}
+            </div>
+          })}
         </>}
 
         {step === 'folders' && <>
@@ -130,7 +138,7 @@ export function SetupView({ info, accounts, keys, say, onDone }: { info: SetupIn
         </>}
 
         {step === 'done' && <>
-          <p className="settings-description"><Sparkles size={15} className="setup-sparkle" /> Game Lobby now scans your stores and folders{all.steam === 'signin' && steam?.signedIn && steam.keySet ? ' and asks Steam for the games you own' : ''}.</p>
+          <p className="settings-description"><Sparkles size={15} className="setup-sparkle" /> Game Lobby now scans your stores and folders{accounts.statuses.some(s => s.signedIn && s.mode === 'account') ? ' and asks your signed-in stores for the games you own' : ''}.</p>
           <p className="muted-text">Change any of this later: stores and accounts in Settings → Accounts and Libraries, folders in Library folders, keys in API keys. Settings → Accounts also has Run setup again.</p>
         </>}
       </main>

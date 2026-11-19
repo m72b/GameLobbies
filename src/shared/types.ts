@@ -603,7 +603,8 @@ export interface AccountStatus {
   keySet: boolean
   /** A sign-in for this store is running (Steam: waiting for the browser). */
   signingIn: boolean
-  last: { ok: boolean; message: string; checkedAt: number } | null
+  /** `needsSignIn`: only signing in again can fix it. */
+  last: { ok: boolean; message: string; checkedAt: number; needsSignIn?: boolean } | null
   /** The last sign-in or account action's outcome. */
   notice: { ok: boolean; message: string; at: number } | null
 }
