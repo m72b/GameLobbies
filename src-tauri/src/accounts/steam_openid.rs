@@ -48,18 +48,20 @@ static CLAIMED_ID: LazyLock<Regex> = LazyLock::new(|| {
 pub enum ReturnMode {
     /// `http://localhost/gamelobby/steam-return?n=…`, realm `http://localhost/`. Nothing
     /// listens: the navigation is caught by the sign-in window's navigation guard.
+    /// Not used: Steam's edge network (Akamai) answers 403 Access Denied to a realm without a
+    /// port, `http://localhost/` (checked 2026-11-20). Kept, built and tested.
+    #[allow(dead_code)]
     Intercept,
     /// `http://127.0.0.1:<random port>/gamelobby/steam-return?n=…`, realm
     /// `http://127.0.0.1:<port>/`. The navigation is still caught by the guard; a listener on
     /// that one port and path takes the response as well, in case the window ever loads it.
-    // Chosen by changing `RETURN_MODE`; the code for it is built and tested either way.
-    #[allow(dead_code)]
     Loopback,
 }
 
-/// The mode this build uses. Whether Steam accepts the port-less `http://localhost/` realm is
-/// not verified yet; if it doesn't, switch to [`ReturnMode::Loopback`] (see the design notes).
-pub const RETURN_MODE: ReturnMode = ReturnMode::Intercept;
+/// The mode this build uses: [`ReturnMode::Loopback`], because Steam refuses the port-less
+/// `http://localhost/` realm of [`ReturnMode::Intercept`] (Akamai 403), while a realm with a
+/// port, `http://127.0.0.1:<port>/`, is accepted.
+pub const RETURN_MODE: ReturnMode = ReturnMode::Loopback;
 
 /// Why a sign-in ended without an account. Messages are fixed text.
 #[derive(Debug, Clone, PartialEq)]
