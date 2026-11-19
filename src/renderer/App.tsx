@@ -51,7 +51,7 @@ type MenuAction = 'Play' | 'Edit metadata' | 'Set custom cover' | 'Find cover on
 // scans and the native pickers, and a stale copy would be refused.
 const withoutRoutes = ({ routes: _routes, ...game }: Game): Omit<Game, 'routes'> => game
 const isInstalled = (game: Game) => game.routes.some(route => route.installed === true)
-const stores: StoreName[] = ['Steam', 'Epic Games', 'GOG', 'EA app', 'Battle.net', 'Xbox', 'Ubisoft', 'Emulator', 'itch.io', 'Amazon Games', 'Custom']
+const stores: StoreName[] = ['Steam', 'Epic Games', 'GOG', 'EA app', 'Battle.net', 'Xbox', 'Ubisoft', 'Emulator', 'itch.io', 'Amazon Games', 'Humble', 'Custom']
 
 export default function App() {
   const [games, setGames] = useState<Game[]>([])

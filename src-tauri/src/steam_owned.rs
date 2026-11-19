@@ -269,7 +269,7 @@ pub struct ImportState {
     #[serde(default)]
     pub pending_gone: Vec<String>,
     /// When `pending_gone` was first held back: the removal is only applied once it has stood
-    /// for [`PENDING_MIN_AGE_MS`].
+    /// for [`crate::accounts::apply::PENDING_MIN_AGE_MS`].
     #[serde(default)]
     pub pending_since: i64,
     /// When the last request was made (0 = never, or credentials changed since).
@@ -339,10 +339,6 @@ pub fn owned_game(app: &OwnedApp) -> Game {
     )
 }
 
-/// Smallest earlier list the mass-removal guard applies to.
-const MASS_REMOVAL_MIN: usize = 20;
-/// How long a held-back removal must stand before a later fetch may apply it.
-const PENDING_MIN_AGE_MS: i64 = 6 * 60 * 60 * 1000;
 const HELD_BACK_MESSAGE: &str =
     "Steam returned far fewer games than before; nothing was removed. It will be checked again later.";
 
@@ -397,25 +393,17 @@ pub fn apply(
                 .cloned()
                 .collect();
             // A response far smaller than the last one is more likely degraded than true:
-            // a removal is only applied when a later fetch, at least PENDING_MIN_AGE_MS after
-            // the first, reports (nearly) the same apps gone.
-            let suspicious = previous.len() >= MASS_REMOVAL_MIN && gone.len() * 2 > previous.len();
+            // a removal is only applied when a later fetch, at least six hours after the
+            // first, reports (nearly) the same apps gone (shared with the store accounts).
             let was_pending: HashSet<String> = state.pending_gone.iter().cloned().collect();
-            let (to_drop, held): (HashSet<String>, HashSet<String>) = if suspicious {
-                let agreed: HashSet<String> = gone.intersection(&was_pending).cloned().collect();
-                let old_enough = !was_pending.is_empty()
-                    && state.pending_since > 0
-                    && now >= state.pending_since
-                    && now - state.pending_since >= PENDING_MIN_AGE_MS;
-                if old_enough && agreed.len() * 10 >= was_pending.len() * 9 {
-                    let held = gone.difference(&agreed).cloned().collect();
-                    (agreed, held)
-                } else {
-                    (HashSet::new(), gone)
-                }
-            } else {
-                (gone, HashSet::new())
-            };
+            let plan = crate::accounts::apply::plan_removal(
+                &previous,
+                &gone,
+                &was_pending,
+                state.pending_since,
+                now,
+            );
+            let (to_drop, held) = (plan.to_drop, plan.held);
             db::drop_steam_owned(conn, &to_drop)?;
             let mut ids: HashSet<String> = previous
                 .iter()
@@ -431,14 +419,7 @@ pub fn apply(
             let mut ids: Vec<String> = ids.into_iter().collect();
             ids.sort();
             state.app_ids = ids;
-            // The clock starts when a removal is first held; a different held set restarts it.
-            state.pending_since = if held.is_empty() {
-                0
-            } else if !was_pending.is_empty() && state.pending_since > 0 && held == was_pending {
-                state.pending_since
-            } else {
-                now
-            };
+            state.pending_since = plan.pending_since;
             let mut pending: Vec<String> = held.into_iter().collect();
             pending.sort();
             state.pending_gone = pending;

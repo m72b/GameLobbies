@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub const STORES: [&str; 11] = [
+pub const STORES: [&str; 12] = [
     "Steam",
     "Epic Games",
     "GOG",
@@ -14,6 +14,7 @@ pub const STORES: [&str; 11] = [
     "Emulator",
     "itch.io",
     "Amazon Games",
+    "Humble",
     "Custom",
 ];
 

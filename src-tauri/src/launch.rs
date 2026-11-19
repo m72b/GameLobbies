@@ -29,6 +29,15 @@ const LAUNCH_SCHEMES: [&str; 9] = [
     "ms-xbox-gamepass",
 ];
 
+/// The launch target of a store-account route with nothing to launch (a Humble game, or a
+/// Battle.net game without a known launcher code): `owned-only:<store>:<id>`. Such a route
+/// shows that the game is owned; Play refuses it with a message.
+pub const OWNED_ONLY_PREFIX: &str = "owned-only:";
+
+pub fn is_owned_only(target: &str) -> bool {
+    target.starts_with(OWNED_ONLY_PREFIX)
+}
+
 /// At most this many tokens in an emulator argument template.
 pub const MAX_TEMPLATE_TOKENS: usize = 128;
 
@@ -955,6 +964,9 @@ pub async fn launch_game(
         return Ok(LaunchOutcome::Started);
     }
     let target = route.launch_target.as_str();
+    if is_owned_only(target) {
+        bail!("{} can't be started from Game Lobby: it is owned on {} but has no launcher link. Install and start it from the store's own app or website.", game.title, route.store);
+    }
     match store_launch(target)? {
         StoreLaunch::Link(uri) => shell_open(uri).await?,
         StoreLaunch::AppsFolder => {
@@ -984,6 +996,22 @@ pub async fn launch_game(
 pub(crate) mod tests {
     use super::*;
     use crate::localscan::tests::TempDir;
+
+    #[test]
+    fn owned_only_routes_never_launch() {
+        assert!(is_owned_only("owned-only:humble:some_game"));
+        assert!(!is_owned_only("steam://run/570"));
+        // Not a store link: it can never pass the link check either.
+        assert!(validate_launch_uri("owned-only:humble:some_game").is_err());
+        let source = include_str!("launch.rs");
+        let launch = &source[source
+            .find("let target = route.launch_target.as_str();")
+            .unwrap()..];
+        assert!(
+            launch.find("is_owned_only(target)").unwrap()
+                < launch.find("store_launch(target)").unwrap()
+        );
+    }
 
     #[test]
     fn launch_links_are_limited_to_store_schemes() {

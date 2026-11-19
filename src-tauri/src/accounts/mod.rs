@@ -9,6 +9,7 @@
 //! existing owned-games import ([`crate::steam_owned`]), which keeps working as before. The other
 //! stores are listed as coming later and refuse sign-in.
 
+pub mod apply;
 pub mod http;
 pub mod setup;
 pub mod signin;

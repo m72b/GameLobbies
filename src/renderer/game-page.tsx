@@ -273,7 +273,7 @@ export function GamePage({ game, index, settings, launchers, running, libraryVer
             {activityRows.map(row => {
               if (row.kind === 'steam') return <li key="steam-added" className="gp-steam-row" title={addedTooltip(row.entry)}>
                 <SteamAddedText entry={row.entry} />
-                <SteamTag />
+                <SteamTag source={row.entry.source} />
                 <span className="gp-dur" />
               </li>
               const session = row.session

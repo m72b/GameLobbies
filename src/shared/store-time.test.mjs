@@ -56,3 +56,9 @@ test('mergeActivity: Steam entries sit by their sync date, sessions keep their o
   assert.deepEqual(mergeActivity([], [entry('only', 1)]).map(r => r.kind), ['steam'])
   assert.deepEqual(mergeActivity(sessions, []).map(r => r.kind), ['session', 'session', 'session'])
 })
+
+test('GOG figures name GOG', () => {
+  assert.equal(addedLabel(2 * 3600, 'gog'), 'Added from GOG · 2 h')
+  assert.equal(addedTooltip({ storeSeconds: 7200, trackedSeconds: 3600, source: 'gog' }), 'GOG reports 2 h. Game Lobby recorded 1 h. The difference is added so playtime matches GOG.')
+  assert.equal(additionOf({ id: 'gog:1', title: 'W' }, { source: 'gog', seconds: 7200, trackedSeconds: 3600, effectiveSeconds: 7200, addedSeconds: 3600, syncedAt: 1 }).source, 'gog')
+})

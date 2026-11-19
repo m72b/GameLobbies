@@ -1,4 +1,4 @@
-export type Store = 'Steam' | 'Epic Games' | 'GOG' | 'EA app' | 'Battle.net' | 'Xbox' | 'Ubisoft' | 'Emulator' | 'itch.io' | 'Amazon Games' | 'Custom'
+export type Store = 'Steam' | 'Epic Games' | 'GOG' | 'EA app' | 'Battle.net' | 'Xbox' | 'Ubisoft' | 'Emulator' | 'itch.io' | 'Amazon Games' | 'Humble' | 'Custom'
 /**
  * One way to launch a game.
  * Local routes (from library folders, see `RootsAPI`):
@@ -446,7 +446,9 @@ export interface PlayStats { totalSeconds: number; lastTwoWeeksSeconds: number; 
  * - `lastPlayed`: the store's last-played time (ms); `effectiveLastPlayed`: the newer of that and the tracked one.
  * - `syncedAt`: ms of the last sync of the store's figures.
  */
-export interface StoreTime { source: 'steam'; seconds: number; trackedSeconds: number; effectiveSeconds: number; addedSeconds: number; lastPlayed?: number; effectiveLastPlayed?: number; syncedAt: number }
+/** Where a store-reported playtime figure comes from. */
+export type PlaytimeSource = 'steam' | 'gog'
+export interface StoreTime { source: PlaytimeSource; seconds: number; trackedSeconds: number; effectiveSeconds: number; addedSeconds: number; lastPlayed?: number; effectiveLastPlayed?: number; syncedAt: number }
 /**
  * Play tracking (needs `Settings.tracking`; see also `Settings.detectExternalLaunches`).
  * - status(): games currently launching or running. Empty when tracking is off.

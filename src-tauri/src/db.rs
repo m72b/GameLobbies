@@ -849,6 +849,16 @@ pub fn steam_app_ids_any(db: &Connection) -> Result<HashSet<String>> {
 /// owned mark dropped; otherwise the route goes, and a game left without routes is deleted.
 /// Installed games and every other route are left alone. Returns the number of games deleted.
 pub fn drop_steam_owned(db: &mut Connection, app_ids: &HashSet<String>) -> Result<usize> {
+    drop_owned(db, "steam", app_ids)
+}
+
+/// [`drop_steam_owned`] for any route source: the `source_id` routes with one of `app_ids` that
+/// are marked owned and not installed (store accounts use `<store>-account`).
+pub fn drop_owned(
+    db: &mut Connection,
+    source_id: &str,
+    app_ids: &HashSet<String>,
+) -> Result<usize> {
     if app_ids.is_empty() {
         return Ok(0);
     }
@@ -864,7 +874,7 @@ pub fn drop_steam_owned(db: &mut Connection, app_ids: &HashSet<String>) -> Resul
     let mut deleted = 0;
     for row in rows {
         let matches = |r: &GameRoute| {
-            r.source_id == "steam"
+            r.source_id == source_id
                 && r.owned == Some(true)
                 && r.installed != Some(true)
                 && non_empty(&r.app_id).is_some_and(|id| app_ids.contains(id))

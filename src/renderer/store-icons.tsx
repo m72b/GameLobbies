@@ -13,7 +13,7 @@ const brandPaths: Record<string, string> = {
   'itch.io': siItchdotio.path
 }
 
-const textMarks: Record<string, string> = { Xbox: 'X', 'Amazon Games': 'a' }
+const textMarks: Record<string, string> = { Xbox: 'X', 'Amazon Games': 'a', Humble: 'H' }
 
 const displayNames: Record<string, string> = {
   'Xbox / Microsoft Store': 'Xbox',

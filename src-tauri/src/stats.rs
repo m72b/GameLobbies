@@ -34,8 +34,20 @@ use tauri::State;
 
 type CmdResult<T> = Result<T, String>;
 
-/// The only store whose playtime is imported so far.
+/// Sources of store-reported playtime (`store_playtime.source`).
 pub const STEAM: &str = "steam";
+/// GOG playtime from a GOG account (Settings → Accounts), keyed by GOG product id.
+pub const GOG: &str = "gog";
+
+/// The playtime source a route's figure is stored under, by the route's source: Steam routes
+/// (installed or owned) and GOG routes (Galaxy's installed games and GOG account games).
+pub fn playtime_source(route_source: &str) -> Option<&'static str> {
+    match route_source {
+        "steam" => Some(STEAM),
+        "gog-galaxy" | "gog-account" => Some(GOG),
+        _ => None,
+    }
+}
 /// Rows in the top playtime list.
 pub const TOP_LIMIT: usize = 50;
 
@@ -186,6 +198,7 @@ fn percent(part: i64, whole: i64) -> f64 {
 fn store_label(source: &str) -> &'static str {
     match source {
         STEAM => "Steam",
+        GOG => "GOG",
         _ => "store",
     }
 }
@@ -220,31 +233,36 @@ fn app_playtime(conn: &Connection) -> Result<StoreRows> {
     Ok(rows)
 }
 
-/// What the store reports for a game: the largest figure across its Steam routes, the latest
-/// last-played time and the latest sync among those routes. `None` when no route has a figure.
-fn game_store_row(game: &Game, store: &StoreRows) -> Option<StoreRow> {
-    let rows: Vec<&StoreRow> = game
+/// What the stores report for a game: the largest figure across its Steam and GOG routes (with
+/// the source it came from), the latest last-played time and the latest sync among those
+/// routes. `None` when no route has a figure.
+fn game_store_row(game: &Game, store: &StoreRows) -> Option<(&'static str, StoreRow)> {
+    let rows: Vec<(&'static str, &StoreRow)> = game
         .routes
         .iter()
-        .filter(|r: &&GameRoute| r.source_id == STEAM)
-        .filter_map(|r| {
+        .filter_map(|r: &GameRoute| {
+            let source = playtime_source(&r.source_id)?;
             let id = r.app_id.as_deref().filter(|id| !id.is_empty())?;
             store
-                .get(&(STEAM.to_string(), id.to_string()))
+                .get(&(source.to_string(), id.to_string()))
                 .filter(|row| row.seconds > 0)
+                .map(|row| (source, row))
         })
         .collect();
-    let seconds = rows.iter().map(|r| r.seconds).max()?;
-    Some(StoreRow {
-        seconds,
-        last_played: rows.iter().filter_map(|r| r.last_played).max(),
-        updated_at: rows.iter().map(|r| r.updated_at).max().unwrap_or(0),
-    })
+    let (source, best) = rows.iter().max_by_key(|(_, r)| r.seconds)?;
+    Some((
+        source,
+        StoreRow {
+            seconds: best.seconds,
+            last_played: rows.iter().filter_map(|(_, r)| r.last_played).max(),
+            updated_at: rows.iter().map(|(_, r)| r.updated_at).max().unwrap_or(0),
+        },
+    ))
 }
 
 /// A game's largest store-reported time across its routes, with the store it came from.
 fn store_time(game: &Game, store: &StoreRows) -> Option<(i64, &'static str)> {
-    game_store_row(game, store).map(|row| (row.seconds, STEAM))
+    game_store_row(game, store).map(|(source, row)| (row.seconds, source))
 }
 
 /// How a game's playtime reads once the store's figure is counted. Delivered to the renderer
@@ -253,7 +271,7 @@ fn store_time(game: &Game, store: &StoreRows) -> Option<(i64, &'static str)> {
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct StoreTime {
-    /// `"steam"`.
+    /// `"steam"` or `"gog"`.
     pub source: String,
     /// The store's figure.
     pub seconds: i64,
@@ -274,8 +292,19 @@ pub struct StoreTime {
 }
 
 /// The pure rules: effective time is the larger figure, the added part never negative, last
-/// played the newer of the two.
+/// played the newer of the two (for a Steam figure).
+#[cfg(test)]
 pub fn combine(
+    tracked_seconds: i64,
+    tracked_last_played: Option<i64>,
+    row: &StoreRow,
+) -> StoreTime {
+    combine_for(STEAM, tracked_seconds, tracked_last_played, row)
+}
+
+/// [`combine`] for the figure of `source` (`"steam"`, `"gog"`).
+pub fn combine_for(
+    source: &str,
     tracked_seconds: i64,
     tracked_last_played: Option<i64>,
     row: &StoreRow,
@@ -283,7 +312,7 @@ pub fn combine(
     let tracked = tracked_seconds.max(0);
     let store = row.seconds.max(0);
     StoreTime {
-        source: STEAM.to_string(),
+        source: source.to_string(),
         seconds: store,
         tracked_seconds: tracked,
         effective_seconds: tracked.max(store),
@@ -306,8 +335,13 @@ pub fn tracked_seconds(game: &Game) -> i64 {
 }
 
 fn game_store_time(game: &Game, rows: &StoreRows) -> Option<StoreTime> {
-    let row = game_store_row(game, rows)?;
-    Some(combine(tracked_seconds(game), game.last_played, &row))
+    let (source, row) = game_store_row(game, rows)?;
+    Some(combine_for(
+        source,
+        tracked_seconds(game),
+        game.last_played,
+        &row,
+    ))
 }
 
 /// One game's playtime with the store's figure counted, or `None` when no store reports time
@@ -320,7 +354,7 @@ pub fn store_time_of(
 ) -> Result<Option<StoreTime>> {
     let rows = app_playtime(conn)?;
     Ok(game_store_row(game, &rows)
-        .map(|row| combine(tracked_seconds(game), tracked_last_played, &row)))
+        .map(|(source, row)| combine_for(source, tracked_seconds(game), tracked_last_played, &row)))
 }
 
 /// Every game that has a store figure, by game id.
@@ -587,6 +621,51 @@ pub async fn stats_summary(
     include_hidden: bool,
 ) -> CmdResult<StatsSummary> {
     summarize(&state.db.lock(), include_hidden).map_err(|e| format!("{e:#}"))
+}
+
+#[cfg(test)]
+mod gog_tests {
+    use super::*;
+    use crate::types::GameRoute;
+
+    #[test]
+    fn gog_playtime_counts_like_steam_and_names_its_source() {
+        let database = crate::db::Db::memory().unwrap();
+        let mut conn = database.lock();
+        let game = Game {
+            id: "gog:1207658924".into(),
+            title: "Witcher".into(),
+            store: "GOG".into(),
+            playtime_seconds: Some(3600),
+            routes: vec![GameRoute {
+                source_id: "gog-account".into(),
+                store: "GOG".into(),
+                app_id: Some("1207658924".into()),
+                launch_target: "goggalaxy://openGameView/1207658924".into(),
+                owned: Some(true),
+                installed: Some(false),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        crate::db::upsert_imported_games(&mut conn, &[game]).unwrap();
+        let seconds = HashMap::from([("1207658924".to_string(), 7200)]);
+        let last = HashMap::from([("1207658924".to_string(), 1_700_000_000_000)]);
+        replace_store_playtime(&mut conn, GOG, &seconds, &last, 5).unwrap();
+        let times = store_times(&conn).unwrap();
+        let t = &times["gog:1207658924"];
+        assert_eq!(
+            (t.source.as_str(), t.effective_seconds, t.added_seconds),
+            ("gog", 7200, 3600)
+        );
+        let added = additions(&conn, None).unwrap();
+        assert_eq!(added[0].source, "gog");
+        let summary = summarize(&conn, false).unwrap();
+        assert_eq!(summary.store_sources, ["GOG"]);
+        assert_eq!(summary.top[0].store_source.as_deref(), Some("GOG"));
+        assert_eq!(playtime_source("gog-galaxy"), Some(GOG));
+        assert_eq!(playtime_source("humble-account"), None);
+    }
 }
 
 #[cfg(test)]
