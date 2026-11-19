@@ -41,3 +41,7 @@ test('choices cover every store and never ask for a sign-in that is not offered'
   assert.deepEqual(choicesFor(stores, [], {}), { steam: 'skip', gog: 'skip', ea: 'skip' })
   assert.deepEqual(choicesFor(stores, ['steam'], { steam: 'installed' }), { steam: 'installed', gog: 'skip', ea: 'skip' })
 })
+
+test('a running Steam sign-in points to the browser', () => {
+  assert.equal(accountLine({ ...steam, signingIn: true }).label, 'Continue signing in to Steam in your browser')
+})

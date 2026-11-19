@@ -108,7 +108,7 @@ export function SetupView({ info, accounts, keys, say, onDone }: { info: SetupIn
           <p className="settings-description">Sign in through Steam so Game Lobby knows your Steam account, then add a free Steam Web API key. Together they list the games you own but haven't installed, with Steam's playtime.</p>
           <div className="settings-card">
             <h3>1. Sign in through Steam</h3>
-            {steam.signedIn && !steam.signingIn ? <p className="setup-ok" role="status"><Check size={14} /> Signed in to Steam.</p> : <p className="muted-text">A Steam window opens on steamcommunity.com. Sign in there; it closes by itself when Steam confirms.</p>}
+            {steam.signedIn && !steam.signingIn ? <p className="setup-ok" role="status"><Check size={14} /> Signed in to Steam.</p> : <p className="muted-text">Your web browser opens steamcommunity.com. Sign in there (approve with Steam Guard as usual); when Steam confirms, the tab says so and Game Lobby comes back to the front.</p>}
             {steam.notice && !steam.notice.ok && <p className="key-row-problem" role="status">✗ {steam.notice.message}</p>}
             <SteamSignIn accounts={accounts} status={steam} />
             <SignInNote />

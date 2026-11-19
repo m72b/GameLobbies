@@ -599,7 +599,7 @@ export interface AccountStatus {
   mode: AccountMode; signedIn: boolean
   /** Steam: the Web API key is saved (the owned-games list needs it). */
   keySet: boolean
-  /** A sign-in window for this store is open. */
+  /** A sign-in for this store is running (Steam: waiting for the browser). */
   signingIn: boolean
   last: { ok: boolean; message: string; checkedAt: number } | null
   /** The last sign-in or account action's outcome. */
@@ -607,8 +607,8 @@ export interface AccountStatus {
 }
 /**
  * Store accounts (`window.lobby.accounts`). The renderer names a store and a mode only; the
- * sign-in window, its URLs and every credential stay in Rust. `signIn` opens Game Lobby's
- * sign-in window and returns at once; the outcome arrives through `onChanged`.
+ * sign-in, its URLs and every credential stay in Rust. `signIn` starts it (Steam: in the
+ * default web browser) and returns at once; the outcome arrives through `onChanged`.
  */
 export interface AccountsAPI {
   status(): Promise<AccountStatus[]>

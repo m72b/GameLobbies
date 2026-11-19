@@ -8,7 +8,7 @@ export interface AccountLine { state: AccountState; label: string; pill: string 
 /** The one-line status of a store account. */
 export function accountLine(status: AccountStatus): AccountLine {
   if (!status.available) return { state: 'soon', label: 'Sign-in comes in a later version · installed games only', pill: 'Coming soon' }
-  if (status.signingIn) return { state: 'partial', label: 'A ' + status.name + ' sign-in window is open', pill: 'Signing in' }
+  if (status.signingIn) return { state: 'partial', label: 'Continue signing in to ' + status.name + ' in your browser', pill: 'Signing in' }
   if (!status.signedIn) return { state: 'off', label: 'Not signed in · installed games only', pill: 'Not signed in' }
   if (status.mode === 'installed') return { state: 'partial', label: 'Signed in · showing installed games only', pill: 'Installed only' }
   if (status.store === 'steam' && !status.keySet) return { state: 'partial', label: 'Signed in · add a Steam Web API key to list the games you own', pill: 'Key missing' }

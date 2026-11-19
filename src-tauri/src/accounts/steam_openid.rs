@@ -1,8 +1,13 @@
 //! Sign in through Steam (OpenID 2.0) to learn the account's SteamID64, without a password ever
-//! reaching Game Lobby: the user signs in on steamcommunity.com in a sign-in window, and Steam
-//! sends the window to our `return_to` address with a signed assertion. That navigation is
-//! intercepted (it never loads); the assertion is checked here and confirmed with Steam
-//! (`check_authentication`) before the SteamID64 is stored.
+//! reaching Game Lobby: the user signs in on steamcommunity.com in their own web browser, and
+//! Steam sends the browser to our `return_to` address on `127.0.0.1:<random port>` with a signed
+//! assertion. A listener on that one port and path ([`serve_return`]) takes it; the assertion
+//! is checked here and confirmed with Steam (`check_authentication`) before the SteamID64 is
+//! stored.
+//!
+//! Why the browser and a port: Steam's edge network (Akamai) answers 403 to a realm without a
+//! port (`http://localhost/`), and in an embedded InPrivate WebView2 window Steam Guard's phone
+//! approval never completed. Both were seen in the owner's test of the first build.
 //!
 //! Checks, all required: the `n` nonce in `return_to` belongs to the running sign-in; `mode` is
 //! `id_res`; `op_endpoint` is Steam's; `return_to` is byte-equal to the one sent; `claimed_id`
@@ -20,7 +25,7 @@ use url::Url;
 pub const OP_ENDPOINT: &str = "https://steamcommunity.com/openid/login";
 const NS: &str = "http://specs.openid.net/auth/2.0";
 const IDENTIFIER_SELECT: &str = "http://specs.openid.net/auth/2.0/identifier_select";
-/// The path of `return_to`. Never served in [`ReturnMode::Intercept`].
+/// The path of `return_to` (the only path the loopback listener answers).
 pub const RETURN_PATH: &str = "/gamelobby/steam-return";
 /// Fields `openid.signed` must list.
 const MUST_SIGN: [&str; 5] = [
@@ -42,26 +47,6 @@ const MAX_VALUE_CHARS: usize = 2048;
 static CLAIMED_ID: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^https://steamcommunity\.com/openid/id/(7656119\d{10})$").expect("valid regex")
 });
-
-/// Where Steam sends the window back to.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ReturnMode {
-    /// `http://localhost/gamelobby/steam-return?n=…`, realm `http://localhost/`. Nothing
-    /// listens: the navigation is caught by the sign-in window's navigation guard.
-    /// Not used: Steam's edge network (Akamai) answers 403 Access Denied to a realm without a
-    /// port, `http://localhost/` (checked 2026-11-20). Kept, built and tested.
-    #[allow(dead_code)]
-    Intercept,
-    /// `http://127.0.0.1:<random port>/gamelobby/steam-return?n=…`, realm
-    /// `http://127.0.0.1:<port>/`. The navigation is still caught by the guard; a listener on
-    /// that one port and path takes the response as well, in case the window ever loads it.
-    Loopback,
-}
-
-/// The mode this build uses: [`ReturnMode::Loopback`], because Steam refuses the port-less
-/// `http://localhost/` realm of [`ReturnMode::Intercept`] (Akamai 403), while a realm with a
-/// port, `http://127.0.0.1:<port>/`, is accepted.
-pub const RETURN_MODE: ReturnMode = ReturnMode::Loopback;
 
 /// Why a sign-in ended without an account. Messages are fixed text.
 #[derive(Debug, Clone, PartialEq)]
@@ -111,7 +96,7 @@ pub struct Expected {
 }
 
 impl Expected {
-    /// `base` is `http://localhost` or `http://127.0.0.1:<port>` (no trailing slash).
+    /// `base` is `http://127.0.0.1:<port>` (no trailing slash; Steam needs the port).
     pub fn new(base: &str, nonce: String) -> Self {
         Self {
             return_to: format!("{base}{RETURN_PATH}?n={nonce}"),
@@ -429,22 +414,68 @@ pub async fn verify(
 }
 
 // ---------------------------------------------------------------------------
-// Loopback return (ReturnMode::Loopback only)
+// Loopback return
 
 const MAX_REQUEST_HEAD: usize = 8 * 1024;
-const RETURN_PAGE: &str = "<!doctype html><meta charset=utf-8><title>Game Lobby</title><p>Signed in. You can close this window.</p>";
+/// How long one browser connection may take to send its request, and to take the reply.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Answers requests on the loopback listener: only `GET <RETURN_PATH>?…` is accepted (its URL
-/// is handed to `on_return`); everything else gets 404. Runs until the task is aborted.
-pub async fn serve_return<F>(listener: tokio::net::TcpListener, on_return: F)
+/// What the flight made of a return request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReturnReply {
+    /// Not this sign-in's answer (no, another or two nonces; or one is already being checked):
+    /// the listener keeps waiting.
+    Ignored,
+    /// The sign-in ended (`ok`: Steam confirmed it). The listener answers and stops.
+    Done { ok: bool },
+}
+
+/// The pages the listener sends. Fixed text: nothing from the request is ever echoed.
+pub const PAGE_OK: &str = "<!doctype html><html lang=en><meta charset=utf-8><title>Game Lobby</title><p>Signed in to Steam. You can close this tab and return to Game Lobby.</p></html>";
+pub const PAGE_FAILED: &str = "<!doctype html><html lang=en><meta charset=utf-8><title>Game Lobby</title><p>Steam sign-in did not complete. Return to Game Lobby for details and try again.</p></html>";
+pub const PAGE_IGNORED: &str = "<!doctype html><html lang=en><meta charset=utf-8><title>Game Lobby</title><p>This link is not for the sign-in Game Lobby is waiting for.</p></html>";
+pub const PAGE_NOT_FOUND: &str = "<!doctype html><html lang=en><meta charset=utf-8><title>Game Lobby</title><p>Not found.</p></html>";
+
+/// One complete HTTP response with a fixed page: no caching, no scripts, styles, frames or
+/// requests of any kind (`default-src 'none'`), no referrer.
+fn reply(status: &str, page: &str) -> String {
+    format!(
+        "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Security-Policy: default-src 'none'\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\nCache-Control: no-store\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{page}",
+        page.len()
+    )
+}
+
+/// Reads one request head (up to the blank line), or `None` when it is too large or the
+/// connection ends first.
+async fn read_head(socket: &mut tokio::net::TcpStream) -> Option<Vec<u8>> {
+    use tokio::io::AsyncReadExt;
+    let mut head = Vec::new();
+    let mut buf = [0u8; 2048];
+    while !head.windows(4).any(|w| w == b"\r\n\r\n") {
+        match socket.read(&mut buf).await {
+            Ok(0) | Err(_) => return None,
+            Ok(n) if head.len() + n > MAX_REQUEST_HEAD => return None,
+            Ok(n) => head.extend_from_slice(&buf[..n]),
+        }
+    }
+    Some(head)
+}
+
+/// The browser's side of the sign-in, on `127.0.0.1` only. Connections are taken one at a time
+/// from loopback peers; each gets [`REQUEST_TIMEOUT`] to send its head. Only `GET <RETURN_PATH>?…`
+/// is handed to `on_return`; any other method or path (a favicon, say) gets 404 and changes
+/// nothing. An [`ReturnReply::Ignored`] answer keeps the listener waiting; once a return ends
+/// the sign-in, the listener answers with a fixed page and stops. Cancelling the sign-in or its
+/// timeout aborts the task, which closes the port.
+pub async fn serve_return<F, Fut>(listener: tokio::net::TcpListener, on_return: F)
 where
-    F: Fn(Url) + Send + Sync + 'static,
+    F: Fn(Url) -> Fut + Send + Sync + 'static,
+    Fut: std::future::Future<Output = ReturnReply> + Send,
 {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::io::AsyncWriteExt;
     let Ok(local) = listener.local_addr() else {
         return;
     };
-    let on_return = std::sync::Arc::new(on_return);
     loop {
         let Ok((mut socket, peer)) = listener.accept().await else {
             return;
@@ -452,38 +483,26 @@ where
         if !peer.ip().is_loopback() {
             continue;
         }
-        let on_return = on_return.clone();
-        tokio::spawn(async move {
-            let mut head = Vec::new();
-            let mut buf = [0u8; 2048];
-            let read = tokio::time::timeout(Duration::from_secs(10), async {
-                while !head.windows(4).any(|w| w == b"\r\n\r\n") {
-                    match socket.read(&mut buf).await {
-                        Ok(0) | Err(_) => return false,
-                        Ok(n) if head.len() + n > MAX_REQUEST_HEAD => return false,
-                        Ok(n) => head.extend_from_slice(&buf[..n]),
-                    }
-                }
-                true
-            })
-            .await;
-            let url = (read == Ok(true))
-                .then(|| return_url(&head, local.port()))
-                .flatten();
-            let reply = match &url {
-                Some(_) => format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nCache-Control: no-store\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{RETURN_PAGE}",
-                    RETURN_PAGE.len()
-                ),
-                None => "HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
-                    .to_string(),
-            };
-            let _ = socket.write_all(reply.as_bytes()).await;
+        let Ok(Some(head)) = tokio::time::timeout(REQUEST_TIMEOUT, read_head(&mut socket)).await
+        else {
+            continue;
+        };
+        let (response, done) = match return_url(&head, local.port()) {
+            None => (reply("404 Not Found", PAGE_NOT_FOUND), false),
+            Some(url) => match on_return(url).await {
+                ReturnReply::Ignored => (reply("400 Bad Request", PAGE_IGNORED), false),
+                ReturnReply::Done { ok: true } => (reply("200 OK", PAGE_OK), true),
+                ReturnReply::Done { ok: false } => (reply("200 OK", PAGE_FAILED), true),
+            },
+        };
+        let _ = tokio::time::timeout(REQUEST_TIMEOUT, async {
+            let _ = socket.write_all(response.as_bytes()).await;
             let _ = socket.shutdown().await;
-            if let Some(url) = url {
-                on_return(url);
-            }
-        });
+        })
+        .await;
+        if done {
+            return;
+        }
     }
 }
 
@@ -954,39 +973,174 @@ mod tests {
         ));
     }
 
+    /// Sends one raw request to the listener and returns the whole response.
+    async fn ask(port: u16, request: String) -> String {
+        let mut s = tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .unwrap();
+        s.write_all(request.as_bytes()).await.unwrap();
+        let mut out = String::new();
+        let _ = s.read_to_string(&mut out).await;
+        out
+    }
+
+    fn get(target: &str) -> String {
+        format!("GET {target} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+    }
+
+    /// The listener wired the way the app wires it: the nonce gate, then full verification
+    /// against a local `check_authentication` server, once.
+    fn browser_flow(
+        base: String,
+        expected: Expected,
+        cache: Arc<Mutex<NonceCache>>,
+        results: Arc<Mutex<Vec<Result<String, SignInError>>>>,
+    ) -> impl Fn(Url) -> std::pin::Pin<Box<dyn std::future::Future<Output = ReturnReply> + Send>>
+           + Send
+           + Sync
+           + 'static {
+        let taken = Arc::new(Mutex::new(false));
+        move |url: Url| {
+            let (base, expected, cache, results, taken) = (
+                base.clone(),
+                expected.clone(),
+                cache.clone(),
+                results.clone(),
+                taken.clone(),
+            );
+            Box::pin(async move {
+                {
+                    let mut taken = taken.lock().unwrap();
+                    if *taken || !expected.carries_nonce(&url) {
+                        return ReturnReply::Ignored;
+                    }
+                    *taken = true;
+                }
+                let got = verify(&Endpoint::local(&base), &url, &expected, NOW, &cache).await;
+                let ok = got.is_ok();
+                results.lock().unwrap().push(got);
+                ReturnReply::Done { ok }
+            })
+        }
+    }
+
+    /// A positive assertion for a listener on `port`, as Steam would send it there.
+    fn browser_response(port: u16, nonce: &str) -> (Expected, String) {
+        let e = Expected::new(&format!("http://127.0.0.1:{port}"), nonce.to_string());
+        let claimed = format!("https://steamcommunity.com/openid/id/{STEAM_ID}");
+        let mut url = Url::parse(&e.return_to).unwrap();
+        url.query_pairs_mut()
+            .append_pair("openid.ns", NS)
+            .append_pair("openid.mode", "id_res")
+            .append_pair("openid.op_endpoint", OP_ENDPOINT)
+            .append_pair("openid.claimed_id", &claimed)
+            .append_pair("openid.identity", &claimed)
+            .append_pair("openid.return_to", &e.return_to)
+            .append_pair("openid.response_nonce", &format!("{}xyz", stamp(NOW)))
+            .append_pair("openid.assoc_handle", "1234567890")
+            .append_pair(
+                "openid.signed",
+                "signed,op_endpoint,claimed_id,identity,return_to,response_nonce,assoc_handle",
+            )
+            .append_pair("openid.sig", "c2lnbmF0dXJl");
+        let target = format!("{}?{}", url.path(), url.query().unwrap());
+        (e, target)
+    }
+
     #[tokio::test]
-    async fn the_loopback_listener_takes_only_the_return_path() {
+    async fn the_browser_return_is_verified_answered_with_a_fixed_page_and_ends_the_listener() {
+        let (base, seen) = serve(200, VALID).await;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
-        let got: Arc<Mutex<Vec<Url>>> = Arc::default();
-        let sink = got.clone();
-        let task = tokio::spawn(serve_return(listener, move |url| {
-            sink.lock().unwrap().push(url)
-        }));
-        let ask = |target: String| async move {
-            let mut s = tokio::net::TcpStream::connect(("127.0.0.1", port))
-                .await
-                .unwrap();
-            s.write_all(format!("GET {target} HTTP/1.1\r\nHost: x\r\n\r\n").as_bytes())
-                .await
-                .unwrap();
-            let mut out = String::new();
-            s.read_to_string(&mut out).await.unwrap();
-            out
-        };
-        assert!(ask(format!("{RETURN_PATH}?n=1&openid.mode=id_res"))
+        let nonce = "d".repeat(64);
+        let (expected, target) = browser_response(port, &nonce);
+        let results: Arc<Mutex<Vec<Result<String, SignInError>>>> = Arc::default();
+        let task = tokio::spawn(serve_return(
+            listener,
+            browser_flow(base, expected, Arc::default(), results.clone()),
+        ));
+        // Other paths, other methods, and returns without exactly this nonce change nothing.
+        let not_found = ask(port, get("/favicon.ico")).await;
+        assert!(not_found.starts_with("HTTP/1.1 404"), "{not_found}");
+        let post = format!("POST {target} HTTP/1.1\r\nHost: x\r\nContent-Length: 0\r\n\r\n");
+        assert!(ask(port, post).await.starts_with("HTTP/1.1 404"));
+        let wrong = target.replacen(&nonce, &"e".repeat(64), 1);
+        let missing = target.replacen(&format!("n={nonce}&"), "", 1);
+        let twice = target.replacen(&format!("n={nonce}"), &format!("n={nonce}&n={nonce}"), 1);
+        assert_ne!(missing, target);
+        for bad in [wrong, missing, twice] {
+            let out = ask(port, get(&bad)).await;
+            assert!(out.starts_with("HTTP/1.1 400"), "{out}");
+            assert!(out.ends_with(PAGE_IGNORED));
+        }
+        assert!(results.lock().unwrap().is_empty());
+        assert!(seen.lock().unwrap().is_empty(), "nothing reached Steam yet");
+        // The real answer: verified with Steam, answered with the fixed page, listener stops.
+        let out = ask(port, get(&target)).await;
+        assert!(out.starts_with("HTTP/1.1 200"), "{out}");
+        assert!(out.ends_with(PAGE_OK));
+        assert!(out.contains("Content-Security-Policy: default-src 'none'"));
+        assert!(out.contains("Cache-Control: no-store"));
+        assert_eq!(results.lock().unwrap().clone(), [Ok(STEAM_ID.to_string())]);
+        assert_eq!(seen.lock().unwrap().len(), 1);
+        tokio::time::timeout(Duration::from_secs(5), task)
             .await
-            .starts_with("HTTP/1.1 200"));
-        assert!(ask("/other?n=1".into()).await.starts_with("HTTP/1.1 404"));
-        assert!(ask(RETURN_PATH.into()).await.starts_with("HTTP/1.1 404"));
-        assert!(ask(format!("{RETURN_PATH}x?n=1"))
+            .expect("the listener stops after the sign-in ended")
+            .unwrap();
+        assert!(tokio::net::TcpStream::connect(("127.0.0.1", port))
             .await
-            .starts_with("HTTP/1.1 404"));
-        let urls = got.lock().unwrap().clone();
-        assert_eq!(urls.len(), 1);
-        assert_eq!(urls[0].port(), Some(port));
-        assert_eq!(urls[0].path(), RETURN_PATH);
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn a_return_steam_does_not_confirm_gets_the_failure_page() {
+        let (base, _) = serve(200, "is_valid:false\n").await;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (expected, target) = browser_response(port, &"f".repeat(64));
+        let results: Arc<Mutex<Vec<Result<String, SignInError>>>> = Arc::default();
+        let task = tokio::spawn(serve_return(
+            listener,
+            browser_flow(base, expected, Arc::default(), results.clone()),
+        ));
+        let out = ask(port, get(&target)).await;
+        assert!(out.ends_with(PAGE_FAILED), "{out}");
+        assert_eq!(
+            results.lock().unwrap().clone(),
+            [Err(SignInError::NotConfirmed)]
+        );
+        tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn pages_never_echo_the_request() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let task = tokio::spawn(serve_return(listener, |_| async { ReturnReply::Ignored }));
+        let evil = "%3Cscript%3Ealert(1)%3C%2Fscript%3E";
+        for target in [
+            format!("{RETURN_PATH}?n={evil}&openid.mode=<b>"),
+            format!("/{evil}"),
+        ] {
+            let out = ask(port, get(&target)).await;
+            let body = out.split("\r\n\r\n").nth(1).unwrap();
+            assert!([PAGE_IGNORED, PAGE_NOT_FOUND].contains(&body), "{out}");
+            assert!(!out.contains("script") && !out.contains("<b>"), "{out}");
+        }
+        for page in [PAGE_OK, PAGE_FAILED, PAGE_IGNORED, PAGE_NOT_FOUND] {
+            assert!(!page.contains("<script") && !page.contains("src=") && !page.contains("href="));
+        }
+        // Cancel and timeout abort the task: the port closes.
         task.abort();
+        let _ = task.await;
+        assert!(tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .is_err());
         assert!(return_url(b"POST /gamelobby/steam-return?n=1 HTTP/1.1\r\n\r\n", 1).is_none());
+        assert!(return_url(b"GET /gamelobby/steam-return HTTP/1.1\r\n\r\n", 1).is_none());
+        assert!(return_url(b"GET /gamelobby/steam-returnx?n=1 HTTP/1.1\r\n\r\n", 1).is_none());
     }
 }

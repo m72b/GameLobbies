@@ -1,5 +1,17 @@
-//! The sign-in window: Game Lobby's own window showing the store's real sign-in page, so the
-//! password goes only to the store. It is locked down before the page loads:
+//! Store sign-in. One sign-in runs at a time ([`Flight`]); it ends with its result, with
+//! `accounts_cancel_sign_in`, or after ten minutes, and the renderer only ever sees an
+//! [`AccountStatus`](super::AccountStatus).
+//!
+//! **Steam signs in in the user's default web browser** (RFC 8252 style): Rust builds the
+//! OpenID start URL and opens exactly that https URL with the system browser; Steam returns the
+//! browser to a listener on `127.0.0.1:<random port>` ([`steam_openid::serve_return`]), which
+//! checks the answer, shows a fixed page, stops listening and brings Game Lobby forward. The
+//! embedded window below was dropped for Steam: Steam Guard's phone approval never completed
+//! in it.
+//!
+//! **The sign-in window** (kept for later stores): Game Lobby's own window showing the store's
+//! real sign-in page, so the password goes only to the store. It is locked down before the page
+//! loads:
 //!
 //! - label `signin-<store>`, parented to `main`; no capability names it, so it can call no
 //!   command, and the local protocols answer it with 403 (`lib.rs`);
@@ -16,7 +28,7 @@
 //!   `accounts_cancel_sign_in` or after ten minutes. Rust always closes the window, and the
 //!   renderer only ever sees an [`AccountStatus`](super::AccountStatus).
 
-use super::steam_openid::{self, Expected, ReturnMode, SignInError};
+use super::steam_openid::{self, Expected, ReturnReply, SignInError};
 use super::{lock, notify, AccountStore};
 use crate::state::AppState;
 use crate::types::now_ms;
@@ -36,7 +48,7 @@ pub struct Flight {
     pub id: u64,
     pub store: AccountStore,
     /// Steam OpenID: the nonce and `return_to` this sign-in expects back.
-    pub expected: Expected,
+    pub expected: Option<Expected>,
     /// The answer was caught and is being checked; closing the window no longer cancels, and
     /// the timeout leaves it to finish.
     pub verifying: bool,
@@ -44,7 +56,7 @@ pub struct Flight {
     pub loaded: bool,
     /// [`super::AccountsState::steam_generation`] when the sign-in started.
     pub generation: u64,
-    /// The loopback listener ([`ReturnMode::Loopback`] only).
+    /// The loopback listener (browser sign-in). Aborted when the flight ends early.
     listener: Option<tauri::async_runtime::JoinHandle<()>>,
 }
 
@@ -70,12 +82,36 @@ pub fn login_hosts(store: AccountStore) -> &'static [&'static str] {
     }
 }
 
-/// The first page of the store's sign-in.
-fn start_url(store: AccountStore, expected: &Expected) -> Option<Url> {
+/// How a store's sign-in happens.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Method {
+    /// In the user's default web browser, back to a loopback listener (Steam).
+    Browser,
+    /// In Game Lobby's locked-down sign-in window (stores of later versions).
+    Window,
+}
+
+fn method(store: AccountStore) -> Method {
     match store {
-        AccountStore::Steam => Some(expected.start_url()),
-        _ => None,
+        AccountStore::Steam => Method::Browser,
+        _ => Method::Window,
     }
+}
+
+/// The first page of a store's sign-in window. No store uses the window in this version.
+fn window_start_url(_store: AccountStore) -> Option<Url> {
+    None
+}
+
+/// The only URL the browser sign-in may hand to the system browser: Steam's OpenID endpoint
+/// over https, built by Rust.
+fn browser_url_ok(url: &Url) -> bool {
+    url.scheme() == "https"
+        && url.host_str() == Some("steamcommunity.com")
+        && url.port().is_none()
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.path() == "/openid/login"
 }
 
 /// Whether `host` (already lowercase ASCII, as `url` returns it) is one of `hosts` or a
@@ -111,8 +147,7 @@ pub fn navigation_allowed(url: &Url, hosts: &[&str]) -> bool {
 /// The decision of the native WebView2 navigation handler, which sees every top-level navigation
 /// even when Tauri's own handler lets one through unchecked (it allows URIs that `url` cannot
 /// parse). Allowed: `about:blank` before the store page was requested, and pages
-/// [`navigation_allowed`] accepts. Everything else, including Steam's return address (caught by
-/// [`guard`]), is cancelled.
+/// [`navigation_allowed`] accepts. Everything else is cancelled.
 pub fn native_nav_ok(uri: &str, hosts: &[&str], blank_ok: bool) -> bool {
     let Ok(url) = Url::parse(uri) else {
         return false;
@@ -136,6 +171,18 @@ fn times_out(flight: Option<&Flight>, id: u64) -> bool {
     flight.is_some_and(|f| f.id == id && !f.verifying)
 }
 
+/// Takes flight `id`'s answer once: only while nothing is being checked, and only when it
+/// carries exactly this sign-in's nonce. Marks the flight as verifying and takes its listener
+/// handle (the listener answers and stops on its own, so it must not be aborted). `None`: ignore
+/// the request and keep waiting.
+fn take_return(slot: &mut Option<Flight>, id: u64, url: &Url) -> Option<Expected> {
+    let flight = slot.as_mut().filter(|f| f.id == id && !f.verifying)?;
+    let expected = flight.expected.clone().filter(|e| e.carries_nonce(url))?;
+    flight.verifying = true;
+    flight.listener.take();
+    Some(expected)
+}
+
 /// What a blocked navigation is logged as: scheme and host only (never a path or query).
 fn describe(url: &Url) -> String {
     format!("{}://{}", url.scheme(), url.host_str().unwrap_or("-"))
@@ -145,11 +192,11 @@ fn title(store: AccountStore, host: &str) -> String {
     format!("Sign in to {} – {host}", store.name())
 }
 
-/// Opens the store's sign-in window (or brings the running one forward).
+/// Starts the store's sign-in (or, when it is already running, brings it forward).
 pub async fn start(app: &AppHandle, store: AccountStore) -> Result<(), String> {
     let state = app.state::<AppState>();
-    // One flight: a second request for the same store shows its window; another store waits.
-    // The lock is released before any window call.
+    // One flight: a second request for the same store keeps the running one; another store
+    // waits. The lock is released before any window or browser call.
     let running = lock(&state.accounts.flight).as_ref().map(|f| f.store);
     if let Some(running) = running {
         if running == store {
@@ -164,52 +211,39 @@ pub async fn start(app: &AppHandle, store: AccountStore) -> Result<(), String> {
             running.name()
         ));
     }
-    let (base, listener) = match steam_openid::RETURN_MODE {
-        ReturnMode::Intercept => ("http://localhost".to_string(), None),
-        ReturnMode::Loopback => {
-            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-                .await
-                .map_err(|_| "Could not prepare the sign-in (no local port).".to_string())?;
-            let port = listener.local_addr().map_err(|e| e.to_string())?.port();
-            (format!("http://127.0.0.1:{port}"), Some(listener))
-        }
-    };
-    let expected = Expected::new(&base, steam_openid::new_nonce());
-    let start = start_url(store, &expected).ok_or_else(|| store.unavailable())?;
+    match method(store) {
+        Method::Browser => start_browser(app, store).await,
+        Method::Window => start_window(app, store).await,
+    }
+}
+
+/// Reserves the one flight slot; the new flight's id.
+fn reserve(
+    state: &AppState,
+    store: AccountStore,
+    expected: Option<Expected>,
+    loaded: bool,
+) -> Result<u64, String> {
     let id = state.accounts.next_flight.fetch_add(1, Ordering::Relaxed) + 1;
     let generation = state.accounts.steam_generation.load(Ordering::SeqCst);
-    {
-        let mut flight = lock(&state.accounts.flight);
-        if flight.is_some() {
-            return Err("Another sign-in is open.".into());
-        }
-        *flight = Some(Flight {
-            id,
-            store,
-            expected,
-            verifying: false,
-            loaded: false,
-            generation,
-            listener: None,
-        });
+    let mut flight = lock(&state.accounts.flight);
+    if flight.is_some() {
+        return Err("Another sign-in is open.".into());
     }
-    let window = match open_window(app, store, id).await {
-        Ok(window) => window,
-        Err(e) => {
-            finish(app, id, Err(e.clone()));
-            return Err(e.message());
-        }
-    };
-    if let Some(listener) = listener {
-        let handle = app.clone();
-        let task = tauri::async_runtime::spawn(steam_openid::serve_return(listener, move |url| {
-            caught_return(&handle, id, url)
-        }));
-        match lock(&state.accounts.flight).as_mut() {
-            Some(flight) if flight.id == id => flight.listener = Some(task),
-            _ => task.abort(),
-        }
-    }
+    *flight = Some(Flight {
+        id,
+        store,
+        expected,
+        verifying: false,
+        loaded,
+        generation,
+        listener: None,
+    });
+    Ok(id)
+}
+
+/// Ends flight `id` after [`FLIGHT_TIMEOUT`], unless its answer is being checked.
+fn spawn_timeout(app: &AppHandle, id: u64) {
     let handle = app.clone();
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(FLIGHT_TIMEOUT).await;
@@ -221,6 +255,95 @@ pub async fn start(app: &AppHandle, store: AccountStore) -> Result<(), String> {
             finish(&handle, id, Err(SignInError::TimedOut));
         }
     });
+}
+
+/// Steam: listens on `127.0.0.1:<random port>`, then opens the Rust-built OpenID URL in the
+/// default web browser. The URL is never logged (it carries the nonce).
+async fn start_browser(app: &AppHandle, store: AccountStore) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .map_err(|_| "Could not prepare the sign-in (no local port).".to_string())?;
+    let port = listener
+        .local_addr()
+        .map_err(|_| "Could not prepare the sign-in (no local port).".to_string())?
+        .port();
+    let expected = Expected::new(
+        &format!("http://127.0.0.1:{port}"),
+        steam_openid::new_nonce(),
+    );
+    let start = expected.start_url();
+    if !browser_url_ok(&start) {
+        return Err(SignInError::Window("the sign-in address is not Steam's.").message());
+    }
+    let id = reserve(&state, store, Some(expected), true)?;
+    let handle = app.clone();
+    let task = tauri::async_runtime::spawn(steam_openid::serve_return(listener, move |url| {
+        let app = handle.clone();
+        async move { browser_return(&app, id, url).await }
+    }));
+    match lock(&state.accounts.flight).as_mut() {
+        Some(flight) if flight.id == id => flight.listener = Some(task),
+        _ => task.abort(),
+    }
+    spawn_timeout(app, id);
+    if crate::platform::shell_open(start.to_string())
+        .await
+        .is_err()
+    {
+        let e = SignInError::Window("Windows could not open your web browser.");
+        finish(app, id, Err(e.clone()));
+        return Err(e.message());
+    }
+    log::info!(
+        "{} sign-in opened in the web browser; waiting on a local port.",
+        store.name()
+    );
+    notify(app);
+    Ok(())
+}
+
+/// The browser came back to the listener: takes the answer once, checks it with Steam, ends
+/// the flight and brings Game Lobby forward. What the listener shows depends on the result.
+async fn browser_return(app: &AppHandle, id: u64, url: Url) -> ReturnReply {
+    let state = app.state::<AppState>();
+    let taken = take_return(&mut lock(&state.accounts.flight), id, &url);
+    let Some(expected) = taken else {
+        log::info!("Steam sign-in: ignored a request that is not this sign-in's answer.");
+        return ReturnReply::Ignored;
+    };
+    notify(app);
+    let result = steam_openid::verify(
+        &steam_openid::Endpoint::production(),
+        &url,
+        &expected,
+        now_ms(),
+        &state.accounts.seen_nonces,
+    )
+    .await;
+    let ok = result.is_ok();
+    finish(app, id, result);
+    if let Err(e) = crate::windows::focus_main(app) {
+        log::warn!("Could not bring Game Lobby forward: {e}");
+    }
+    ReturnReply::Done { ok }
+}
+
+/// Opens the store's sign-in window. Unused in this version (no store signs in in a window).
+async fn start_window(app: &AppHandle, store: AccountStore) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let Some(start) = window_start_url(store) else {
+        return Err(store.unavailable());
+    };
+    let id = reserve(&state, store, None, false)?;
+    let window = match open_window(app, store, id).await {
+        Ok(window) => window,
+        Err(e) => {
+            finish(app, id, Err(e.clone()));
+            return Err(e.message());
+        }
+    };
+    spawn_timeout(app, id);
     if let Some(flight) = lock(&state.accounts.flight).as_mut().filter(|f| f.id == id) {
         flight.loaded = true;
     }
@@ -295,14 +418,6 @@ fn guard(app: &AppHandle, id: u64, store: AccountStore, url: &Url) -> bool {
     if url.as_str() == "about:blank" {
         return blank_ok(app, id);
     }
-    let is_return = lock(&app.state::<AppState>().accounts.flight)
-        .as_ref()
-        .is_some_and(|f| f.id == id && f.expected.is_return(url));
-    if is_return {
-        // Steam's answer: checked in Rust, never loaded.
-        caught_return(app, id, url.clone());
-        return false;
-    }
     if navigation_allowed(url, login_hosts(store)) {
         return true;
     }
@@ -312,49 +427,6 @@ fn guard(app: &AppHandle, id: u64, store: AccountStore, url: &Url) -> bool {
         describe(url)
     );
     false
-}
-
-/// Takes the answer of flight `id` once: closes the window and checks it in the background. A
-/// return without exactly this sign-in's nonce is ignored (its navigation stays cancelled), so
-/// it can't use up the sign-in.
-fn caught_return(app: &AppHandle, id: u64, url: Url) {
-    let state = app.state::<AppState>();
-    let (store, expected) = {
-        let mut flight = lock(&state.accounts.flight);
-        match flight.as_mut() {
-            Some(f) if f.id == id && !f.verifying && !f.expected.carries_nonce(&url) => {
-                log::info!(
-                    "{} sign-in: ignored an answer for another sign-in.",
-                    f.store.name()
-                );
-                return;
-            }
-            Some(f) if f.id == id && !f.verifying => {
-                f.verifying = true;
-                (f.store, f.expected.clone())
-            }
-            _ => return,
-        }
-    };
-    let app = app.clone();
-    tauri::async_runtime::spawn(async move {
-        if let Some(window) = app.get_webview_window(&label(store)) {
-            let _ = window.destroy();
-        }
-        notify(&app);
-        let result = {
-            let state = app.state::<AppState>();
-            steam_openid::verify(
-                &steam_openid::Endpoint::production(),
-                &url,
-                &expected,
-                now_ms(),
-                &state.accounts.seen_nonces,
-            )
-            .await
-        };
-        finish(&app, id, result);
-    });
 }
 
 /// The window is gone (closed by the user, or by [`finish`]). Runs off the UI thread: `finish`
@@ -732,7 +804,7 @@ mod tests {
     }
 
     #[test]
-    fn the_steam_return_address_is_caught_not_allowed() {
+    fn the_steam_return_address_is_never_a_page_the_window_shows() {
         let e = Expected::new("http://localhost", "f".repeat(64));
         let back = Url::parse(&format!("{}&openid.mode=id_res", e.return_to)).unwrap();
         assert!(e.is_return(&back));
@@ -780,7 +852,7 @@ mod tests {
         assert!(!build.contains("initialization_script"));
         assert!(!build.contains("data_directory"));
         // The store page loads only after the webview was hardened.
-        let start = &source[source.find("pub async fn start").unwrap()..];
+        let start = &source[source.find("async fn start_window").unwrap()..];
         assert!(
             start.find("open_window(app, store, id)").unwrap()
                 < start.find("window.navigate(start)").unwrap()
@@ -830,6 +902,97 @@ mod tests {
     }
 
     #[test]
+    fn steam_signs_in_in_the_browser_with_a_rust_built_url() {
+        assert_eq!(method(AccountStore::Steam), Method::Browser);
+        for store in AccountStore::ALL
+            .iter()
+            .filter(|s| **s != AccountStore::Steam)
+        {
+            assert_eq!(method(*store), Method::Window);
+            assert!(window_start_url(*store).is_none());
+        }
+        let e = Expected::new("http://127.0.0.1:50123", "a".repeat(64));
+        let url = e.start_url();
+        assert!(browser_url_ok(&url));
+        let q: std::collections::HashMap<_, _> = url.query_pairs().into_owned().collect();
+        assert_eq!(q["openid.realm"], "http://127.0.0.1:50123/");
+        assert_eq!(
+            q["openid.return_to"],
+            format!(
+                "http://127.0.0.1:50123/gamelobby/steam-return?n={}",
+                "a".repeat(64)
+            )
+        );
+        for bad in [
+            "http://steamcommunity.com/openid/login",
+            "https://steamcommunity.com.evil.example/openid/login",
+            "https://steamcommunity.com:444/openid/login",
+            "https://steamcommunity.com/login/home",
+            "file:///C:/Windows/notepad.exe",
+        ] {
+            assert!(!browser_url_ok(&Url::parse(bad).unwrap()), "{bad}");
+        }
+        // The browser gets only the URL built here, opened by Rust (never by the renderer):
+        // bound to 127.0.0.1, built from Expected, checked, then shell_open.
+        let source = include_str!("signin.rs");
+        let browser = &source[source.find("async fn start_browser").unwrap()..];
+        let browser = &browser[..browser.find("\n}\n").unwrap_or(browser.len())];
+        let at = |needle: &str| browser.find(needle).unwrap_or_else(|| panic!("{needle}"));
+        assert!(at("TcpListener::bind(\"127.0.0.1:0\")") < at("Expected::new("));
+        assert!(at("let start = expected.start_url();") < at("browser_url_ok(&start)"));
+        assert!(
+            at("browser_url_ok(&start)") < at("crate::platform::shell_open(start.to_string())")
+        );
+        let code = &source[..source.find("#[cfg(test)]").unwrap()];
+        assert_eq!(code.matches("platform::shell_open(").count(), 1);
+        assert!(!browser.contains("log::info!(\"{start}") && !browser.contains("{start}"));
+        // Cancel and timeout end the flight through `finish`, which aborts the listener.
+        let finish = &source[source.find("fn finish(").unwrap()..];
+        assert!(finish.find("listener.abort()").is_some());
+        let timeout = &source[source.find("fn spawn_timeout").unwrap()..];
+        assert!(timeout
+            .find("finish(&handle, id, Err(SignInError::TimedOut))")
+            .is_some());
+    }
+
+    #[test]
+    fn only_this_sign_ins_answer_is_taken_and_only_once() {
+        let id = 5;
+        let url = |n: &str| {
+            Url::parse(&format!(
+                "http://127.0.0.1:50000/gamelobby/steam-return?n={n}&openid.mode=id_res"
+            ))
+            .unwrap()
+        };
+        let nonce = "a".repeat(64);
+        let mut slot = Some(flight(id, false));
+        // Wrong, missing or doubled nonce, or another flight: ignored, flight unchanged.
+        for bad in [
+            url(&"b".repeat(64)),
+            Url::parse("http://127.0.0.1:50000/gamelobby/steam-return?openid.mode=id_res").unwrap(),
+            Url::parse(&format!(
+                "http://127.0.0.1:50000/gamelobby/steam-return?n={nonce}&n={nonce}"
+            ))
+            .unwrap(),
+        ] {
+            assert!(take_return(&mut slot, id, &bad).is_none());
+            assert!(!slot.as_ref().unwrap().verifying);
+        }
+        assert!(take_return(&mut slot, id + 1, &url(&nonce)).is_none());
+        // The right answer is taken once.
+        assert!(take_return(&mut slot, id, &url(&nonce)).is_some());
+        assert!(slot.as_ref().unwrap().verifying);
+        assert!(take_return(&mut slot, id, &url(&nonce)).is_none());
+        assert!(take_return(&mut None, id, &url(&nonce)).is_none());
+        // A window flight (no OpenID) never takes one.
+        let mut window = Some(Flight {
+            expected: None,
+            ..flight(id, false)
+        });
+        assert!(take_return(&mut window, id, &url(&nonce)).is_none());
+    }
+
+    #[test]
     fn the_native_navigation_check_refuses_what_url_cannot_parse() {
         let hosts = login_hosts(AccountStore::Steam);
         for bad in [
@@ -857,7 +1020,7 @@ mod tests {
         Flight {
             id,
             store: AccountStore::Steam,
-            expected: Expected::new("http://localhost", "a".repeat(64)),
+            expected: Some(Expected::new("http://127.0.0.1:50000", "a".repeat(64))),
             verifying,
             loaded: true,
             generation: 0,

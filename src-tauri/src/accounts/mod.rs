@@ -1,4 +1,4 @@
-//! Store accounts: sign-in windows, store web requests and first-time setup (see
+//! Store accounts: sign-in (Steam in the browser), store web requests and first-time setup (see
 //! docs/design/store-accounts.md).
 //!
 //! The renderer only names a store ([`AccountStore`]) and a mode ([`AccountMode`]); URLs, hosts,
@@ -228,7 +228,7 @@ pub struct AccountStatus {
     pub signed_in: bool,
     /// Steam: whether the Web API key is saved (the owned-games list needs it).
     pub key_set: bool,
-    /// A sign-in window for this store is open.
+    /// A sign-in for this store is running (Steam: waiting for the browser).
     pub signing_in: bool,
     pub last: Option<SyncStatus>,
     pub notice: Option<Notice>,
@@ -296,7 +296,8 @@ pub async fn accounts_status(
     statuses(&state).map_err(err)
 }
 
-/// Opens the store's sign-in window. The outcome arrives later as `accounts:changed`.
+/// Starts the store's sign-in (Steam: in the default web browser). The outcome arrives later as
+/// `accounts:changed`.
 #[tauri::command]
 pub async fn accounts_sign_in(
     app: AppHandle,
@@ -311,7 +312,7 @@ pub async fn accounts_sign_in(
     statuses(&app.state::<AppState>()).map_err(err)
 }
 
-/// Closes the running sign-in window, if any.
+/// Stops the running sign-in, if any (closes its window or stops its loopback listener).
 #[tauri::command]
 pub async fn accounts_cancel_sign_in(
     app: AppHandle,

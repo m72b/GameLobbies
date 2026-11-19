@@ -44,7 +44,7 @@ export function useAccounts(say: (text: string) => void, onChanged: () => void) 
   return {
     statuses, busy,
     get: (store: AccountStore) => statuses.find(status => status.store === store),
-    signIn: (store: AccountStore) => run(store, () => window.lobby.accounts.signIn(store), 'Could not open the sign-in window'),
+    signIn: (store: AccountStore) => run(store, () => window.lobby.accounts.signIn(store), 'Could not start the sign-in'),
     cancel: (store: AccountStore) => run(store, () => window.lobby.accounts.cancelSignIn(), 'Could not cancel the sign-in'),
     signOut: (store: AccountStore) => run(store, () => window.lobby.accounts.signOut(store), 'Could not sign out'),
     setMode: (store: AccountStore, mode: AccountMode) => run(store, () => window.lobby.accounts.setMode(store, mode), 'Could not change the mode'),
@@ -55,13 +55,13 @@ export type Accounts = ReturnType<typeof useAccounts>
 
 /** The note every sign-in place shows: whose window it is and where the password goes. */
 export function SignInNote() {
-  return <p className="account-note"><ShieldCheck size={14} aria-hidden="true" /><span>The sign-in window is Game Lobby's own window showing the store's real sign-in page. Your password goes only to the store; Game Lobby never sees or stores it. Nothing from the window is kept after it closes.</span></p>
+  return <p className="account-note"><ShieldCheck size={14} aria-hidden="true" /><span>Steam sign-in happens in your own web browser, on steamcommunity.com. Your password and Steam Guard approval go only to Steam; Game Lobby only receives your SteamID64 back, after Steam confirms it. You can close the browser tab afterwards.</span></p>
 }
 
 /** Steam sign-in with its states (used by Settings → Accounts and the first-time setup). */
 export function SteamSignIn({ accounts, status }: { accounts: Accounts; status: AccountStatus }) {
   const busy = accounts.busy === 'steam'
-  if (status.signingIn) return <div className="account-actions"><span className="account-waiting" role="status">Finish signing in in the Steam window…</span><button type="button" className="secondary-button" disabled={busy} onClick={() => void accounts.cancel('steam')}>Cancel sign-in</button></div>
+  if (status.signingIn) return <div className="account-actions"><span className="account-waiting" role="status">Continue in your browser…</span><button type="button" className="secondary-button" disabled={busy} onClick={() => void accounts.cancel('steam')}>Cancel sign-in</button></div>
   return <div className="account-actions"><button type="button" className={status.signedIn ? 'secondary-button' : 'primary-button'} disabled={busy} onClick={() => void accounts.signIn('steam')}><LogIn size={14} /> {status.signedIn ? 'Sign in again' : 'Sign in through Steam'}</button></div>
 }
 
