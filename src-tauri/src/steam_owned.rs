@@ -36,10 +36,7 @@ const API_URL: &str = "https://api.steampowered.com/IPlayerService/GetOwnedGames
 pub const HOST: &str = "api.steampowered.com";
 const TIMEOUT: Duration = Duration::from_secs(20);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-/// A large library is about 150 bytes per game; this allows far more than any real account.
-const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_GAMES: usize = 50_000;
-const MAX_NAME_CHARS: usize = 200;
 /// 2000-01-01 in unix seconds: an earlier `rtime_last_played` is not a play time.
 const MIN_LAST_PLAYED_SECONDS: u64 = 946_684_800;
 /// A larger `playtime_forever` is not believable (about 19 years) and is capped.
@@ -64,36 +61,19 @@ fn err(e: impl Into<anyhow::Error>) -> String {
 // ---------------------------------------------------------------------------
 // Fetching
 
-/// Why a fetch failed. Messages are fixed text: never the key, the SteamID or a URL.
-#[derive(Debug, Clone, PartialEq)]
-pub enum FetchError {
-    /// HTTP 401/403: a wrong or revoked key.
-    Rejected,
-    /// No `games` list, or an empty one: the profile's game details are private.
-    Private,
-    RateLimited,
-    Network(&'static str),
-    Status(u16),
-    Invalid(&'static str),
-}
+pub use crate::accounts::http::FetchError;
+use crate::accounts::http::{clean_name, network_error, read_capped};
 
+/// Steam's wording for the shared [`FetchError`]: a rejected key and private game details get
+/// their own sentences; everything else is the shared text for "Steam". Messages are fixed text:
+/// never the key, the SteamID or a URL.
 impl FetchError {
     pub fn message(&self) -> String {
         match self {
             Self::Rejected => REJECTED_MESSAGE.into(),
             Self::Private => PRIVATE_MESSAGE.into(),
-            Self::RateLimited => "Steam is limiting requests. Game Lobby tries again later.".into(),
-            Self::Network(what) => format!("Could not reach Steam: {what}"),
-            Self::Status(code) => {
-                format!("Steam returned an error (HTTP {code}). Game Lobby tries again later.")
-            }
-            Self::Invalid(what) => format!("Steam returned an unreadable response: {what}"),
+            other => other.message_for("Steam"),
         }
-    }
-
-    /// Whether only new credentials can fix it (no automatic retry).
-    pub fn needs_new_credentials(&self) -> bool {
-        matches!(self, Self::Rejected)
     }
 }
 
@@ -144,34 +124,6 @@ impl Endpoint {
     }
 }
 
-fn network_error(e: &reqwest::Error) -> FetchError {
-    // The error text is never used: it can carry the request URL (with the key).
-    FetchError::Network(if e.is_timeout() {
-        "the request timed out."
-    } else if e.is_connect() {
-        "no connection. Check that this PC is online."
-    } else {
-        "the connection failed."
-    })
-}
-
-async fn read_capped(mut response: reqwest::Response) -> Result<Vec<u8>, FetchError> {
-    if response
-        .content_length()
-        .is_some_and(|len| len as usize > MAX_RESPONSE_BYTES)
-    {
-        return Err(FetchError::Invalid("the response is too large."));
-    }
-    let mut body = Vec::new();
-    while let Some(chunk) = response.chunk().await.map_err(|e| network_error(&e))? {
-        if body.len() + chunk.len() > MAX_RESPONSE_BYTES {
-            return Err(FetchError::Invalid("the response is too large."));
-        }
-        body.extend_from_slice(&chunk);
-    }
-    Ok(body)
-}
-
 #[derive(Deserialize)]
 struct Body {
     response: Option<OwnedGames>,
@@ -191,14 +143,6 @@ struct OwnedItem {
     /// Unix seconds. Anything but a whole number after 2000 is ignored.
     #[serde(default)]
     rtime_last_played: Option<serde_json::Value>,
-}
-
-/// Plain one-line text: control and bidi characters dropped, whitespace collapsed, capped.
-fn clean_name(raw: &str) -> Option<String> {
-    let text = crate::validation::plain_text(raw);
-    let text: String = text.chars().take(MAX_NAME_CHARS).collect();
-    let text = text.trim().to_string();
-    (!text.is_empty()).then_some(text)
 }
 
 /// Parses a `GetOwnedGames` response. Apps without a name still count as owned (`ids`); app id 0
@@ -681,6 +625,7 @@ pub async fn steam_owned_remove(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::accounts::http::{MAX_NAME_CHARS, MAX_RESPONSE_BYTES};
     use std::sync::{Arc, Mutex};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 

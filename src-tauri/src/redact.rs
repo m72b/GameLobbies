@@ -3,10 +3,11 @@
 //!
 //! No code path is meant to format a secret into a log line; this is the second line of
 //! defence. It removes `key=value` / `key: value` pairs whose name looks like a credential,
-//! `key=` / `steamid=` URL query values (the Steam Web API key), SteamID64s,
-//! bearer tokens, long hex strings and long mixed letter/digit strings (API keys, access
-//! tokens, base64 blobs such as DPAPI data), and replaces the user's profile folder with
-//! `%USERPROFILE%`.
+//! `key=` / `steamid=` URL query values (the Steam Web API key), sign-in query values (`code`,
+//! `authorization_code`, `gamekeys`, every `openid.*` field), `Cookie` / `Set-Cookie` header
+//! values, JSON Web Tokens, SteamID64s, bearer tokens, long hex strings and long mixed
+//! letter/digit strings (API keys, access tokens, base64 blobs such as DPAPI data), and replaces
+//! the user's profile folder with `%USERPROFILE%`.
 
 use regex::{Captures, Regex};
 use std::sync::OnceLock;
@@ -33,6 +34,31 @@ fn named_secret() -> &'static Regex {
 fn query_key() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     regex(&CELL, r#"(?i)([?&;](?:key|steamid)=)[^\s&#"'<>]+"#)
+}
+
+/// Sign-in values in a URL query: an OAuth `code` / `authorization_code`, Humble `gamekeys`,
+/// and every field of a Steam OpenID response (`openid.sig`, `openid.claimed_id`, ...).
+fn query_signin() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    regex(
+        &CELL,
+        r#"(?i)([?&;#](?:code|authorization_code|gamekeys|openid\.[a-z0-9_.]+)=)[^\s&#"'<>]+"#,
+    )
+}
+
+/// A `Cookie:` or `Set-Cookie:` header: everything after the colon to the end of the line.
+fn cookie_header() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    regex(&CELL, r"(?i)\b((?:set-)?cookie\s*:\s*)[^\r\n]+")
+}
+
+/// A JSON Web Token: base64url header starting `eyJ`, a payload and an optional signature.
+fn jwt() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    regex(
+        &CELL,
+        r"\beyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}(?:\.[A-Za-z0-9_-]*)?",
+    )
 }
 
 /// A SteamID64 of an individual account (17 digits starting with 7656119).
@@ -87,7 +113,10 @@ fn redact_paths(text: &str, profile: Option<&str>) -> String {
 pub fn redact_with(text: &str, profile: Option<&str>) -> String {
     let text =
         named_secret().replace_all(text, |c: &Captures| format!("{}{}{REDACTED}", &c[1], &c[2]));
+    let text = cookie_header().replace_all(&text, |c: &Captures| format!("{}{REDACTED}", &c[1]));
     let text = query_key().replace_all(&text, |c: &Captures| format!("{}{REDACTED}", &c[1]));
+    let text = query_signin().replace_all(&text, |c: &Captures| format!("{}{REDACTED}", &c[1]));
+    let text = jwt().replace_all(&text, REDACTED);
     let text = steam_id64().replace_all(&text, REDACTED);
     let text = bearer().replace_all(&text, |c: &Captures| format!("{} {REDACTED}", &c[1]));
     let text = long_hex().replace_all(&text, REDACTED);
@@ -176,6 +205,69 @@ mod tests {
             "Steam app 570 and 12345678901234567",
             "press any key=continue",
             "monkey=1",
+        ] {
+            assert_eq!(clean(text), text);
+        }
+    }
+
+    #[test]
+    fn steam_openid_responses_lose_every_openid_field() {
+        let steam_id = "76561197960287930";
+        let url = format!(
+            "http://localhost/gamelobby/steam-return?n=0123&openid.ns=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0&openid.mode=id_res&openid.claimed_id=https%3A%2F%2Fsteamcommunity.com%2Fopenid%2Fid%2F{steam_id}&openid.response_nonce=2026-11-19T10%3A00%3A00Zabc&openid.assoc_handle=1234567890&openid.signed=signed%2Cop_endpoint&openid.sig=W0nderfulSig%2Bvalue%3D"
+        );
+        let out = clean(&url);
+        for secret in [steam_id, "W0nderfulSig", "1234567890", "Zabc", "id_res"] {
+            assert!(!out.contains(secret), "{out}");
+        }
+        assert!(out.contains(&format!("openid.sig={REDACTED}")), "{out}");
+        assert!(out.starts_with("http://localhost/gamelobby/steam-return?"));
+    }
+
+    #[test]
+    fn oauth_codes_cookies_and_jwts_are_removed() {
+        let jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhYmMifQ.c2lnbmF0dXJl";
+        for (line, secret) in [
+            (
+                "https://login.live.com/oauth20_desktop.srf?code=M.C105_BAY.2.abc&state=x",
+                "M.C105_BAY.2.abc",
+            ),
+            (
+                "redirect ?authorization_code=plainCODEvalue then",
+                "plainCODEvalue",
+            ),
+            (
+                "GET /api/v1/orders?all_tpkds=true&gamekeys=abcDEF&gamekeys=ghiJKL",
+                "abcDEF",
+            ),
+            (
+                "Cookie: sessionid=abc; steamLoginSecure=secretvalue",
+                "secretvalue",
+            ),
+            (
+                "set-cookie: gog-al=tokenvalue; Path=/; Secure",
+                "tokenvalue",
+            ),
+            (
+                "token eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhYmMifQ.c2lnbmF0dXJl end",
+                jwt,
+            ),
+            ("{\"authorizationCode\":\"onetimecode\"}", "onetimecode"),
+        ] {
+            let out = clean(line);
+            assert!(!out.contains(secret), "{out}");
+            assert!(out.contains(REDACTED), "{out}");
+        }
+        assert_eq!(
+            clean("a\nCookie: x=y\nnext line"),
+            format!("a\nCookie: {REDACTED}\nnext line")
+        );
+        // Ordinary words stay.
+        for text in [
+            "exit code=3",
+            "zip code is unknown",
+            "barcode=12",
+            "the cookie jar",
         ] {
             assert_eq!(clean(text), text);
         }

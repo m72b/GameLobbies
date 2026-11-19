@@ -1,5 +1,6 @@
 //! Game Lobby — a unified local game library and launcher (Tauri backend).
 
+mod accounts;
 mod applog;
 mod art;
 mod catalog;
