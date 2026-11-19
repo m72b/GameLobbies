@@ -201,6 +201,8 @@ pub fn run() {
                 ),
             }
             let hours = db::get_settings(&database.lock())?.scan_interval_hours;
+            // Decided before any scan can add games: the first-time setup shows only then.
+            let fresh_install = accounts::setup::is_fresh(&database.lock())?;
             app.manage(AppState {
                 db: database,
                 data_dir,
@@ -214,6 +216,7 @@ pub fn run() {
                 igdb: Default::default(),
                 picks: Default::default(),
                 pending_launches: Default::default(),
+                accounts: accounts::AccountsState::new(fresh_install),
             });
             scan::configure_schedule(app.handle(), hours);
             tracker::start(app.handle());
@@ -379,6 +382,14 @@ pub fn run() {
             updater::updates_auto_check,
             updater::updates_last,
             updater::updates_install,
+            accounts::accounts_status,
+            accounts::accounts_sign_in,
+            accounts::accounts_cancel_sign_in,
+            accounts::accounts_sign_out,
+            accounts::accounts_set_mode,
+            accounts::accounts_sync,
+            accounts::setup::setup_get,
+            accounts::setup::setup_save,
         ]))
         .run(tauri::generate_context!())
         .expect("error while running Game Lobby");

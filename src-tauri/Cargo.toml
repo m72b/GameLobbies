@@ -22,7 +22,8 @@ rusqlite = { version = "0.32", features = ["bundled", "backup"] }
 regex = "1"
 url = "2"
 anyhow = "1"
-tokio = { version = "1", features = ["time", "sync", "process", "macros"] }
+# net + io-util: the optional loopback return of the Steam sign-in (accounts/steam_openid.rs).
+tokio = { version = "1", features = ["time", "sync", "process", "macros", "net", "io-util"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "native-tls"] }
 uuid = { version = "1", features = ["v4"] }
 base64 = "0.22"
@@ -41,6 +42,10 @@ log = "0.4"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"
+# Sign-in windows (accounts/signin.rs): InPrivate check and cancelling external app links on the
+# WebView2 instance. Same versions as wry 0.57 uses, so the COM types match.
+webview2-com = "0.39"
+windows-core = "0.62"
 windows-sys = { version = "0.59", features = [
   "Win32_Foundation",
   "Win32_Graphics_Dwm",

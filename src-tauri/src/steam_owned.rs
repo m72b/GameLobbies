@@ -504,7 +504,11 @@ async fn fetch_if_due(
 ) -> Result<Option<Result<OwnedList, FetchError>>> {
     {
         let conn = state.db.lock();
-        if !steam_enabled(&conn)? || (!force && !is_due(&load_import_state(&conn)?, now_ms())) {
+        // "Installed files only" in Settings → Accounts pauses the import, even when forced.
+        if !steam_enabled(&conn)?
+            || crate::accounts::steam_import_paused(&conn)?
+            || (!force && !is_due(&load_import_state(&conn)?, now_ms()))
+        {
             return Ok(None);
         }
     }
@@ -585,26 +589,38 @@ pub async fn steam_owned_save(
 ) -> CmdResult<SteamOwnedStatus> {
     crate::secrets::set_steam_owned_credentials(&state, &key, &steam_id).map_err(err)?;
     {
-        // New credentials: forget the throttle and any "key rejected" pause.
+        // New credentials: forget the throttle and any "key rejected" pause, and saving them
+        // means the import should run (it may have been set to installed files only).
         let conn = state.db.lock();
         let mut import = load_import_state(&conn).map_err(err)?;
         import.attempted_at = 0;
         import.status = None;
         save_import_state(&conn, &import).map_err(err)?;
+        crate::accounts::resume_steam_import(&conn).map_err(err)?;
     }
-    // Waits for a running library scan, so the two never write the library at once.
-    let _guard = state.scan_lock.lock().await;
-    if let Some(outcome) = fetch_if_due(&state, true).await.map_err(err)? {
-        let status = apply_in_background(&app, outcome).await.map_err(err)?;
-        if status.ok {
-            log::info!("Steam owned games: {}", status.message);
-            library_changed(&app);
-            crate::covercache::spawn_pass(&app, Duration::ZERO);
-        } else {
-            log::warn!("Steam owned games: {}", status.message);
-        }
-    }
+    sync_now(&app).await.map_err(err)?;
+    crate::accounts::notify(&app);
     status_of(&state).map_err(err)
+}
+
+/// Imports the owned games now, ignoring the scan throttle (not while the import is paused or
+/// Steam is off). Waits for a running library scan, so the two never write the library at once.
+/// `None` when no request was made (no credentials, paused, Steam off).
+pub async fn sync_now(app: &AppHandle) -> Result<Option<ImportStatus>> {
+    let state = app.state::<AppState>();
+    let _guard = state.scan_lock.lock().await;
+    let Some(outcome) = fetch_if_due(&state, true).await? else {
+        return Ok(None);
+    };
+    let status = apply_in_background(app, outcome).await?;
+    if status.ok {
+        log::info!("Steam owned games: {}", status.message);
+        library_changed(app);
+        crate::covercache::spawn_pass(app, Duration::ZERO);
+    } else {
+        log::warn!("Steam owned games: {}", status.message);
+    }
+    Ok(Some(status))
 }
 
 /// Removes the key and the SteamID, and the not-installed games the import added (games you
@@ -614,12 +630,26 @@ pub async fn steam_owned_remove(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CmdResult<SteamOwnedStatus> {
-    crate::secrets::clear_steam_owned_credentials(&state).map_err(err)?;
-    let _guard = state.scan_lock.lock().await;
-    let deleted = undo(&mut state.db.lock()).map_err(err)?;
-    log::info!("Steam owned games import removed ({deleted} games removed from the library)");
-    library_changed(&app);
+    remove_all(&app).await.map_err(err)?;
+    crate::accounts::notify(&app);
     status_of(&state).map_err(err)
+}
+
+/// Forgets the key and the SteamID and removes what the import added (also Steam's "Sign out"
+/// in Settings → Accounts).
+pub async fn remove_all(app: &AppHandle) -> Result<usize> {
+    let state = app.state::<AppState>();
+    crate::secrets::clear_steam_owned_credentials(&state)?;
+    let _guard = state.scan_lock.lock().await;
+    let deleted = {
+        let mut conn = state.db.lock();
+        let deleted = undo(&mut conn)?;
+        crate::accounts::forget_mode(&conn, crate::accounts::AccountStore::Steam)?;
+        deleted
+    };
+    log::info!("Steam owned games import removed ({deleted} games removed from the library)");
+    library_changed(app);
+    Ok(deleted)
 }
 
 #[cfg(test)]

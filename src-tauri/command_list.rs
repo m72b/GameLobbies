@@ -143,4 +143,12 @@ pub const COMMANDS: &[&str] = &[
     "updates_auto_check",
     "updates_last",
     "updates_install",
+    "accounts_status",
+    "accounts_sign_in",
+    "accounts_cancel_sign_in",
+    "accounts_sign_out",
+    "accounts_set_mode",
+    "accounts_sync",
+    "setup_get",
+    "setup_save",
 ];

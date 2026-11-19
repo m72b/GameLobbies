@@ -13,6 +13,17 @@ pub fn is_main_label(label: &str) -> bool {
     label == MAIN
 }
 
+/// Refuses a command that was not called from the main window. The command ACL (capabilities)
+/// already keeps other webviews out; this is the second check, used by every accounts and setup
+/// command and, through the invoke handler in `lib.rs`, by every other command.
+pub fn require_main<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) -> Result<(), String> {
+    if is_main_label(window.label()) {
+        Ok(())
+    } else {
+        Err(NOT_MAIN.into())
+    }
+}
+
 /// The error for a command called from another webview.
 pub const NOT_MAIN: &str = "This window may not use Game Lobby's commands.";
 

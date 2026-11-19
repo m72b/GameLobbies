@@ -149,6 +149,14 @@
     "allow-updates-check",
     "allow-updates-auto-check",
     "allow-updates-last",
-    "allow-updates-install"
+    "allow-updates-install",
+    "allow-accounts-status",
+    "allow-accounts-sign-in",
+    "allow-accounts-cancel-sign-in",
+    "allow-accounts-sign-out",
+    "allow-accounts-set-mode",
+    "allow-accounts-sync",
+    "allow-setup-get",
+    "allow-setup-save"
   ]
 }

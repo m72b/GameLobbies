@@ -1174,7 +1174,9 @@ dependencies = [
  "tokio",
  "url",
  "uuid",
+ "webview2-com",
  "windows 0.61.3",
+ "windows-core 0.62.2",
  "windows-sys 0.59.0",
  "winreg 0.55.0",
 ]

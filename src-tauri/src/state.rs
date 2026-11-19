@@ -24,6 +24,8 @@ pub struct AppState {
     pub picks: crate::picks::PickedPaths,
     /// Launches waiting for a custom launcher to open (see `pending_launch`).
     pub pending_launches: crate::pending_launch::PendingLaunches,
+    /// Store sign-in windows and first-time setup (see `accounts`).
+    pub accounts: crate::accounts::AccountsState,
 }
 
 impl AppState {
