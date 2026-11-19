@@ -2,7 +2,7 @@
 
 All notable changes to Game Lobby are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.6.0] — 2026-11-19
 
 ### Interface
 - Settings now opens inside the main window instead of a separate window: the gear, **Ctrl+,** and every "open settings" link switch the library to Settings with its own section list; **Back** or **Esc** returns to the library where you were. Changes show in the library immediately.

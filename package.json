@@ -1,6 +1,6 @@
 {
   "name": "game-lobby",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "license": "GPL-3.0-only",
   "private": true,
   "description": "A unified local game library and launcher",
