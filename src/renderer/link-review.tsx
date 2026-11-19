@@ -3,6 +3,7 @@ import { X } from 'lucide-react'
 import { coverUrl } from './lobby-api'
 import { formatTotal } from './format'
 import { withRouteName } from '../shared/routes'
+import { FadeImg } from './loading-image'
 import type { Game, LinkChoices, LinkPreview, LinkPreviewGame } from '../shared/types'
 
 const errorText = (error: unknown, fallback: string) => error instanceof Error ? error.message : typeof error === 'string' ? error : fallback
@@ -79,7 +80,7 @@ export function LinkReview({ gameIds, reviewId, onClose, onLinked }: { gameIds: 
 
       {preview.conflicts.cover
         ? <fieldset className="review-choices"><legend>Cover</legend>
-          <div className="link-covers">{games.map(game => <label key={game.id} className={'link-cover' + (choices.coverFrom === game.id ? ' chosen' : '')}><input type="radio" name="link-cover" checked={choices.coverFrom === game.id} onChange={() => set({ coverFrom: game.id })} />{game.cover ? <img src={coverUrl(game.cover)} alt="" /> : <span className="link-cover-none">No cover</span>}<small>{game.title}{game.customCover ? ' · yours' : ''}</small></label>)}</div>
+          <div className="link-covers">{games.map(game => <label key={game.id} className={'link-cover' + (choices.coverFrom === game.id ? ' chosen' : '')}><input type="radio" name="link-cover" checked={choices.coverFrom === game.id} onChange={() => set({ coverFrom: game.id })} />{game.cover ? <FadeImg src={coverUrl(game.cover)} alt="" /> : <span className="link-cover-none">No cover</span>}<small>{game.title}{game.customCover ? ' · yours' : ''}</small></label>)}</div>
         </fieldset>
         : <p className="muted-text">Cover: {byId(choices.coverFrom)?.title ?? 'the kept entry'}’s.</p>}
       {withHero.length > 1 && <ChoiceGroup legend="Game page art (hero and logo)" name="link-hero" games={withHero} value={choices.heroFrom} onChange={pick('heroFrom')} describe={game => game.title} />}

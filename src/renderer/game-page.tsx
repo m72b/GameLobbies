@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { ArrowLeft, ChevronDown, FolderOpen, Heart, MoreHorizontal, Pencil, Play, SlidersHorizontal, Unlink } from 'lucide-react'
 import { LauncherIcon, RouteIcon } from './launcher-icon'
 import { CustomizePanel, useLogoLayout } from './customize-page'
@@ -6,6 +6,8 @@ import { coverUrl } from './lobby-api'
 import { defaultGamePageCustom } from '../shared/defaults'
 import { coverLayerStyle, coverStyle } from './cover'
 import { CoverLayer, useCover } from './poster'
+import { FadeImg } from './loading-image'
+import { zoomIn, type ZoomOrigin } from './zoom'
 import { GenreBlock, IgdbAbout, IgdbPicker, IgdbRatings, useIgdb } from './igdb-details'
 import { argsSupport, argsText, isEmulatorRoute, routeLabel, routeTitle, withRouteName } from '../shared/routes'
 import { launcherOfRoute, playLauncher } from '../shared/launchers'
@@ -50,7 +52,11 @@ export interface GamePageActions {
 
 const emptyArt: GamePageArt = { hero: [], logo: [], custom: defaultGamePageCustom }
 
-export function GamePage({ game, index, settings, launchers, running, libraryVersion, actions }: { game: Game; index: number; settings: Settings; launchers: CustomLauncher[]; running?: RunningGame; libraryVersion: number; actions: GamePageActions }) {
+export function GamePage({ game, index, settings, launchers, running, libraryVersion, actions, origin }: { origin?: ZoomOrigin | null; game: Game; index: number; settings: Settings; launchers: CustomLauncher[]; running?: RunningGame; libraryVersion: number; actions: GamePageActions }) {
+  const pageRef = useRef<HTMLDivElement>(null)
+  // Opening animation (zoom from the clicked poster); runs once, when the page first appears.
+  const openedFrom = useRef(origin ?? null)
+  useLayoutEffect(() => (pageRef.current ? zoomIn(pageRef.current, openedFrom.current) : undefined), [])
   const [art, setArt] = useState<GamePageArt>(emptyArt)
   const [heroIdx, setHeroIdx] = useState(0)
   const [logoIdx, setLogoIdx] = useState(0)
@@ -173,17 +179,17 @@ export function GamePage({ game, index, settings, launchers, running, libraryVer
     ['Remove from library', () => actions.remove(game)]
   ]
 
-  return <div className="game-page">
+  return <div className="game-page" ref={pageRef}>
     <div className="gp-hero">
       {heroSrc
-        ? <img key={heroSrc} className="gp-hero-img" src={heroSrc} alt="" onError={() => setHeroIdx(value => value + 1)} />
+        ? <FadeImg key={heroSrc} className="gp-hero-img" src={heroSrc} alt="" onError={() => setHeroIdx(value => value + 1)} />
         : <div className="gp-hero-fallback" style={cover.src && cover.status === 'loaded' ? coverLayerStyle(cover.src) : coverStyle(game, index)} />}
       <div className="gp-hero-fade" />
       <button className="gp-back" onClick={actions.back}><ArrowLeft size={15} /> Library</button>
       <button className="gp-customize" onClick={() => setCustomizing(true)} aria-haspopup="dialog" title="Customize hero, logo and layout"><Pencil size={13} /> Customize</button>
       <div className={'gp-logo-wrap pos-' + layout.position} style={{ '--logo-scale': layout.scale } as React.CSSProperties}>
         {logoSrc
-          ? <img key={logoSrc} className="gp-logo" src={logoSrc} alt={game.title} onError={() => setLogoIdx(value => value + 1)} />
+          ? <FadeImg key={logoSrc} className="gp-logo" src={logoSrc} alt={game.title} onError={() => setLogoIdx(value => value + 1)} />
           : <h1 className="gp-title">{game.title}</h1>}
       </div>
     </div>

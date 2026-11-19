@@ -4,9 +4,9 @@ import type { Game, RecentGame } from '../shared/types'
 import { coverStyle } from './cover'
 import { CoverLayer, useCover } from './poster'
 
-function ShelfCard({ game, index, onOpen, onDismiss }: { game: Game; index: number; onOpen: () => void; onDismiss: () => void }) {
+function ShelfCard({ game, index, onOpen, onDismiss }: { game: Game; index: number; onOpen: (from: Element) => void; onDismiss: () => void }) {
   const { src, status } = useCover(game)
-  return <article className="recent-card" onClick={onOpen}>
+  return <article className="recent-card" onClick={event => onOpen(event.currentTarget)}>
     <div className={'poster cover-' + status} style={{ ...coverStyle(game, index), aspectRatio: '2 / 3' }}>
       <CoverLayer src={src} status={status} />
       <div className="poster-vignette" />
@@ -18,7 +18,7 @@ function ShelfCard({ game, index, onOpen, onDismiss }: { game: Game; index: numb
 }
 
 /** Games first discovered in the last two weeks, newest first, each dismissible. Renders nothing when the shelf is empty. */
-export function RecentShelf({ games, libraryVersion, onOpen }: { games: Game[]; libraryVersion: number; onOpen: (game: Game) => void }) {
+export function RecentShelf({ games, libraryVersion, onOpen }: { games: Game[]; libraryVersion: number; onOpen: (game: Game, from?: Element) => void }) {
   const [recent, setRecent] = useState<RecentGame[]>([])
   useEffect(() => {
     let alive = true
@@ -33,6 +33,6 @@ export function RecentShelf({ games, libraryVersion, onOpen }: { games: Game[]; 
   if (!shown.length) return null
   return <section className="recent-shelf" aria-label="Recently added">
     <div className="recent-head"><h2>Recently added</h2><span className="recent-count">{shown.length}</span><span className="meta-spacer" /><button className="recent-clear" onClick={() => dismiss()}>Dismiss all</button></div>
-    <div className="recent-row">{shown.map((game, index) => <ShelfCard key={game.id} game={game} index={index} onOpen={() => onOpen(game)} onDismiss={() => dismiss(game.id)} />)}</div>
+    <div className="recent-row">{shown.map((game, index) => <ShelfCard key={game.id} game={game} index={index} onOpen={from => onOpen(game, from)} onDismiss={() => dismiss(game.id)} />)}</div>
   </section>
 }

@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from 'react'
 import { previewKind } from '../shared/preview'
+import { Spinner } from './loading-image'
 import type { SteamGridDbCover, SteamGridDbCoverPage } from '../shared/types'
 
 export type SgdbPickerKind = 'grid' | 'hero' | 'logo'
@@ -100,7 +101,7 @@ function CoverTile({ cover, kind, disabled, onApply }: { cover: SteamGridDbCover
   const ready = () => setState('ready')
   const failed = () => setState('failed')
   return <button type="button" className={'sgdb-tile ' + state} disabled={disabled} onClick={() => onApply(cover)} aria-label={label} title={cover.author ? 'By ' + cover.author : undefined}>
-    {state === 'loading' && <span className="sgdb-skeleton" aria-hidden="true" />}
+    {state === 'loading' && <span className="sgdb-skeleton" aria-hidden="true"><Spinner /></span>}
     {state === 'failed' && <span className="sgdb-tile-note" aria-hidden="true">Preview unavailable</span>}
     {kind === 'video'
       ? <video

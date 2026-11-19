@@ -195,7 +195,7 @@ pub fn run() {
             });
             scan::configure_schedule(app.handle(), hours);
             tracker::start(app.handle());
-            windows::create(app.handle(), false)?;
+            windows::create(app.handle())?;
             if let Some(notice) = repair {
                 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
                 app.dialog()

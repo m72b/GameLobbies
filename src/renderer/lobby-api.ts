@@ -65,7 +65,7 @@ const api: LobbyAPI = {
     save: settings => call('settings_save', { settings }),
     onChanged: callback => subscribe<Settings>('settings:changed', callback),
     open: section => call('settings_open', { section: section ?? null }),
-    onSection: callback => subscribe<SettingsSection>('settings:section', callback)
+    onOpen: callback => subscribe<SettingsSection | null>('settings:open', callback)
   },
   theme: {
     load: url => call('theme_load', { url }),

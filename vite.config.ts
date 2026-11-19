@@ -16,6 +16,6 @@ export default defineConfig({
     outDir: resolve('out/renderer'),
     emptyOutDir: true,
     target: 'chrome120',
-    rollupOptions: { input: { main: resolve('src/renderer/index.html'), settings: resolve('src/renderer/settings.html') } }
+    rollupOptions: { input: { main: resolve('src/renderer/index.html') } }
   }
 })

@@ -57,8 +57,12 @@ export interface Settings { scanIntervalHours: number; posterWidth: number; show
   autoCheckUpdates: boolean
   /** Minimize Game Lobby when a game is started from it. */
   minimizeOnLaunch: boolean
+  /** Motion in the interface: follow Windows, short fades only, or no animation at all. Default "system". */
+  motion: MotionPreference
   /** Stores that library scans skip (distinct `StoreId`s). Default []. */
   disabledStores: StoreId[] }
+/** `Settings.motion`: "system" follows the Windows setting, "reduced" keeps only short fades, "off" turns every animation off. */
+export type MotionPreference = 'system' | 'reduced' | 'off'
 /** Grid styles accepted by `Settings.steamGridDbStyles` (the backend rejects anything else). */
 export const steamGridDbStyles = ['alternate', 'blurred', 'white_logo', 'material', 'no_logo'] as const
 export type SteamGridDbStyle = typeof steamGridDbStyles[number]
@@ -513,7 +517,7 @@ export interface UpdateInfo { available: boolean; currentVersion: string; versio
 /** `updates.onProgress`: bytes downloaded so far; `total` when the server sent a size. Throttled. */
 export interface UpdateProgress { downloaded: number; total?: number }
 /** Settings pages `settings.open(section)` can show. */
-export type SettingsSection = 'updates' | 'cover-art' | 'metadata'
+export type SettingsSection = 'updates' | 'cover-art' | 'metadata' | 'api-keys'
 /**
  * Signed updates (all work happens in the backend; one check or install at a time, a concurrent
  * call rejects).
@@ -639,10 +643,10 @@ export interface LobbyAPI {
      */
     addLocalGame(): Promise<AddedLocalGame | null> }
   settings: { get(): Promise<Settings>; save(settings: Partial<Settings>): Promise<Settings>; onChanged(callback: (settings: Settings) => void): () => void
-    /** Opens or focuses the settings window, optionally on a given section. */
+    /** Shows Settings (inside the main window), optionally on a given section. */
     open(section?: SettingsSection): Promise<void>
-    /** Settings window only: the main window asked to show a section. */
-    onSection(callback: (section: SettingsSection) => void): () => void }
+    /** Rust asked the main window to show Settings (`section` is null for the page last shown). */
+    onOpen(callback: (section: SettingsSection | null) => void): () => void }
   theme: { load(url: string): Promise<Settings>; reset(): Promise<Settings> }
   emulators: EmulatorsAPI
   launchers: LaunchersAPI

@@ -7,6 +7,8 @@ import { ChevronLeft, ChevronRight, X } from 'lucide-react'
 import '@fontsource/quantico/400.css'
 import '@fontsource/quantico/700.css'
 import type { Game, IgdbMetadataView, IgdbRating, IgdbSearchResult, IgdbTimeToBeat } from '../shared/types'
+import { Spinner } from './loading-image'
+import { useKeysUi } from './api-keys'
 import { coverSrc, useCoverStatus } from './cover'
 
 const emptyView: IgdbMetadataView = { configured: false, pending: false, checked: false }
@@ -62,7 +64,7 @@ export function Lightbox({ images, index, onIndex, onClose }: { images: Lightbox
   if (!image) return null
   return <div className="modal-scrim gp-lightbox" role="dialog" aria-label="Picture viewer" onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}>
     <div className="gp-lightbox-frame">
-      {status === 'loading' && <div className="cover-shimmer" aria-hidden="true" />}
+      {status === 'loading' && <div className="cover-shimmer" aria-hidden="true"><Spinner /></div>}
       {src && <img key={src} src={src} alt={image.alt} className={status === 'loaded' ? 'loaded' : ''} />}
       {status === 'error' && <div className="gp-lightbox-error">This picture could not be loaded.</div>}
     </div>
@@ -178,6 +180,7 @@ export function GenreBlock({ game, view }: { game: Game; view: IgdbMetadataView 
 
 /** "Wrong game? Search IGDB": search by title or free text and pick the right entry. */
 export function IgdbPicker({ game, view, onClose, onChosen }: { game: Game; view: IgdbMetadataView; onClose(): void; onChosen(view: IgdbMetadataView): void }) {
+  const { openSheet } = useKeysUi()
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<IgdbSearchResult[] | null>(null)
   const [busy, setBusy] = useState(false)
@@ -216,7 +219,7 @@ export function IgdbPicker({ game, view, onClose, onChosen }: { game: Game; view
     <div className="modal link-modal" role="dialog" aria-label={'Find ' + game.title + ' on IGDB'}>
       <div className="modal-head"><h2>Find on IGDB</h2><button type="button" aria-label="Close" onClick={onClose}><X size={17} /></button></div>
       {!view.configured
-        ? <div className="empty-inline">Add your IGDB (Twitch) Client ID and Client Secret in settings to search IGDB.<br /><button className="secondary-button" onClick={() => void window.lobby.settings.open('metadata')}>Open settings</button></div>
+        ? <div className="empty-inline">Add your IGDB (Twitch) Client ID and Client Secret to search IGDB.<br /><button className="secondary-button" onClick={() => openSheet('igdb')}>Add API key</button></div>
         : <>
           <p>Choose the IGDB entry for <b>{game.title}</b>. Your choice is kept for this game. <IgdbAttribution /></p>
           <form onSubmit={event => { event.preventDefault(); void run(query) }}>

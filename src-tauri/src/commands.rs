@@ -483,8 +483,7 @@ pub async fn settings_save(
     Ok(notify_settings(&app, saved))
 }
 
-// Must be async: creating a window from a synchronous (main-thread) command deadlocks on Windows.
-/// `section`: optional page to show (only the ids in `windows::SETTINGS_SECTIONS`).
+/// Shows Settings in the main window. `section`: optional page to show (only the ids in `windows::SETTINGS_SECTIONS`).
 #[tauri::command]
 pub async fn settings_open(app: AppHandle, section: Option<String>) -> CmdResult<()> {
     let section = match section.as_deref() {

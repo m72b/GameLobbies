@@ -6,8 +6,7 @@ use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use url::Url;
 
 pub const MAIN: &str = "main";
-pub const SETTINGS: &str = "settings";
-const PAGES: [&str; 3] = ["/", "/index.html", "/settings.html"];
+const PAGES: [&str; 2] = ["/", "/index.html"];
 const EXTERNAL_HOSTS: [&str; 11] = [
     "playnite.link",
     // Steam Web API key page, privacy settings and account page (owned-games setup).
@@ -63,39 +62,14 @@ fn open_if_allowed_external(url: &Url) {
     }
 }
 
-/// Settings pages that `settings_open` may jump to (`settings.html?section=<id>`).
-pub const SETTINGS_SECTIONS: [&str; 3] = ["updates", "cover-art", "metadata"];
+/// Settings pages that `settings_open` may jump to (the `settings:open` event's payload).
+pub const SETTINGS_SECTIONS: [&str; 4] = ["updates", "cover-art", "metadata", "api-keys"];
 
-pub fn create(app: &AppHandle, settings: bool) -> tauri::Result<()> {
-    create_page(app, settings, None)
-}
-
-fn create_page(app: &AppHandle, settings: bool, section: Option<&str>) -> tauri::Result<()> {
-    let (label, page, title, size, min) = if settings {
-        (
-            SETTINGS,
-            "settings.html",
-            "Game Lobby Settings",
-            (760.0, 820.0),
-            (640.0, 600.0),
-        )
-    } else {
-        (
-            MAIN,
-            "index.html",
-            "Game Lobby",
-            (1440.0, 900.0),
-            (800.0, 600.0),
-        )
-    };
-    let page = match section {
-        Some(section) => format!("{page}?section={section}"),
-        None => page.to_string(),
-    };
-    WebviewWindowBuilder::new(app, label, WebviewUrl::App(page.into()))
-        .title(title)
-        .inner_size(size.0, size.1)
-        .min_inner_size(min.0, min.1)
+pub fn create(app: &AppHandle) -> tauri::Result<()> {
+    WebviewWindowBuilder::new(app, MAIN, WebviewUrl::App("index.html".into()))
+        .title("Game Lobby")
+        .inner_size(1440.0, 900.0)
+        .min_inner_size(800.0, 600.0)
         .decorations(false)
         .background_color(Color(16, 17, 19, 255))
         .on_navigation(|url| {
@@ -109,19 +83,17 @@ fn create_page(app: &AppHandle, settings: bool, section: Option<&str>) -> tauri:
     Ok(())
 }
 
-/// Opens (or focuses) the settings window, optionally on one of [`SETTINGS_SECTIONS`]. An open
-/// window is told to switch with a `settings:section` event.
+/// Shows Settings, which lives inside the main window: brings that window to the front and
+/// tells it with a `settings:open` event (payload: one of [`SETTINGS_SECTIONS`], or null for the
+/// page last shown). Does nothing when the main window is gone; the request comes from it.
 pub fn open_settings_at(app: &AppHandle, section: Option<&str>) -> tauri::Result<()> {
-    match app.get_webview_window(SETTINGS) {
-        Some(window) => {
-            let _ = window.unminimize();
-            if let Some(section) = section {
-                let _ = app.emit_to(SETTINGS, "settings:section", section);
-            }
-            window.set_focus()
-        }
-        None => create_page(app, true, section),
-    }
+    let Some(window) = app.get_webview_window(MAIN) else {
+        return Ok(());
+    };
+    let _ = window.show();
+    let _ = window.unminimize();
+    window.set_focus()?;
+    app.emit_to(MAIN, "settings:open", section)
 }
 
 /// Brings the main window to the front: shown, unminimized and focused. Used when a second
@@ -135,13 +107,29 @@ pub fn focus_main(app: &AppHandle) -> tauri::Result<()> {
             }
             window.set_focus()
         }
-        None => create(app, false),
+        None => create(app),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_main_page_is_an_app_page() {
+        let page = |u: &str| is_app_page(&Url::parse(u).unwrap());
+        assert!(page("http://tauri.localhost/index.html"));
+        assert!(page("http://tauri.localhost/"));
+        // Settings is part of the main window now; its old page no longer exists.
+        assert!(!page("http://tauri.localhost/settings.html"));
+        assert!(!page("https://example.com/index.html"));
+    }
+
+    #[test]
+    fn settings_sections_include_the_api_keys_tab() {
+        assert!(SETTINGS_SECTIONS.contains(&"api-keys"));
+        assert!(!SETTINGS_SECTIONS.contains(&"libraries"));
+    }
 
     #[test]
     fn only_the_user_guide_opens_on_github() {

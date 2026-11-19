@@ -5,6 +5,8 @@ import { LoadMore, useSgdbPages } from './cover-picker'
 import { defaultGamePageCustom } from '../shared/defaults'
 import { artPreview } from '../shared/preview'
 import { logoPositions, logoScaleRange } from '../shared/types'
+import { FadeImg } from './loading-image'
+import { useKeysUi } from './api-keys'
 import type { GamePageCustom, LogoPosition, SteamGridDbCover } from '../shared/types'
 
 export interface LogoLayout { position: LogoPosition; scale: number }
@@ -62,12 +64,13 @@ function ArtTile({ item, label, animated, disabled, onApply }: { item: SteamGrid
       ? <span className="cz-tile-note" aria-hidden="true">Preview unavailable</span>
       : preview.kind === 'video'
         ? <video src={preview.src} muted loop autoPlay playsInline preload="auto" disablePictureInPicture aria-hidden="true" ref={video => { if (video) video.muted = true }} onError={() => setFailed(true)} />
-        : <img src={coverUrl(preview.src)} loading="lazy" alt="" onError={() => setFailed(true)} />}
+        : <FadeImg src={coverUrl(preview.src)} loading="lazy" alt="" onError={() => setFailed(true)} />}
   </button>
 }
 
 function ArtSection({ kind, gameId, title, currentSrc, hasCustom, settingsKey, animated }: { kind: 'hero' | 'logo'; gameId: string; title: string; currentSrc?: string; hasCustom: boolean; settingsKey: string; animated: boolean }) {
   const pages = useSgdbPages(kind, gameId, settingsKey)
+  const { openSheet } = useKeysUi()
   const { state, covers: items, reset: resetPages } = pages
   const [actionError, setActionError] = useState('')
   const error = actionError || pages.error
@@ -107,7 +110,7 @@ function ArtSection({ kind, gameId, title, currentSrc, hasCustom, settingsKey, a
     </div>
     <div className="cz-status" role="status" aria-live="polite">{error ? <span className="cz-error">{error}</span> : notice}</div>
     {state === 'loading' && <div className="cz-empty">Searching SteamGridDB…</div>}
-    {state === 'nokey' && <div className="cz-empty">Add a free SteamGridDB API key in settings to browse {noun}s. Choosing a file and resetting still work.<button type="button" className="secondary-button" onClick={() => void window.lobby.settings.open('cover-art')}>Open settings</button></div>}
+    {state === 'nokey' && <div className="cz-empty">Add a free SteamGridDB API key to browse {noun}s. Choosing a file and resetting still work.<button type="button" className="secondary-button" onClick={() => openSheet('steamgriddb')}>Add API key</button></div>}
     {state === 'error' && <div className="cz-empty">{error || 'Could not search SteamGridDB'}<button type="button" className="secondary-button" onClick={() => void openPicker()}>Try again</button></div>}
     {state === 'ready' && items.length === 0 && !pages.hasMore && <div className="cz-empty">No {noun}s found on SteamGridDB for this game</div>}
     {state === 'ready' && items.length > 0 && <div className={'cz-grid ' + kind + (busy ? ' busy' : '')} aria-label={title + ' options'}>

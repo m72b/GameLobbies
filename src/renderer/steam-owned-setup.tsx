@@ -1,12 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import type { SteamOwnedStatus } from '../shared/types'
 import { cleanPaste } from './igdb-setup'
+import { steamSummary } from '../shared/api-keys'
 
 const API_KEY_URL = 'https://steamcommunity.com/dev/apikey'
 const PRIVACY_URL = 'https://steamcommunity.com/my/edit/settings'
 const ACCOUNT_URL = 'https://store.steampowered.com/account/'
-
-const errorText = (error: unknown, fallback: string) => error instanceof Error ? error.message : typeof error === 'string' ? error : fallback
 
 /** A hint for input that the backend will reject, or null. The backend checks again. */
 export function steamKeyHint(value: string): string | null {
@@ -24,40 +23,28 @@ export function steamIdHint(value: string): string | null {
 }
 
 /**
- * Optional Steam Web API import of owned games that aren't installed, shown under the Steam row
- * in Settings → Libraries. The key and SteamID are write-only: only whether each is saved is shown.
+ * The form for the optional Steam Web API import of owned games that aren't installed (shown in
+ * the API keys sheet). The key and SteamID are write-only: only whether each is saved is shown.
+ * Saving and removing are done by the caller (`useApiKeys`), so every screen shows one state.
  */
-export function SteamOwnedSetup({ say }: { say(text: string): void }) {
-  const [status, setStatus] = useState<SteamOwnedStatus>({ keySet: false, steamIdSet: false, last: null })
+export function SteamOwnedSetup({ status, busy, error, onSave, onRemove }: {
+  status: SteamOwnedStatus
+  busy: boolean
+  error: string
+  /** Resolves true when saved, so the fields can be cleared. */
+  onSave(key: string, steamId: string): Promise<boolean>
+  onRemove(): Promise<void>
+}) {
   const [key, setKey] = useState('')
   const [steamId, setSteamId] = useState('')
-  const [busy, setBusy] = useState(false)
   const [confirming, setConfirming] = useState(false)
-  const [error, setError] = useState('')
-  useEffect(() => { window.lobby.steamOwned.status().then(setStatus).catch(() => undefined) }, [])
-  const configured = status.keySet && status.steamIdSet
   const keyHint = steamKeyHint(key)
   const idHint = steamIdHint(steamId)
   const empty = !cleanPaste(key) && !cleanPaste(steamId)
-  const save = async () => {
-    setBusy(true); setError('')
-    try {
-      const next = await window.lobby.steamOwned.save(cleanPaste(key), cleanPaste(steamId))
-      setStatus(next); setKey(''); setSteamId('')
-      say(next.keySet && next.steamIdSet ? (next.last?.message ?? 'Steam key saved') : 'Saved. Enter both the API key and the SteamID64.')
-    } catch (caught) { setError(errorText(caught, 'Could not save the Steam key')) }
-    finally { setBusy(false) }
-  }
-  const remove = async () => {
-    setBusy(true); setError(''); setConfirming(false)
-    try { setStatus(await window.lobby.steamOwned.remove()); say('Steam key removed') }
-    catch (caught) { setError(errorText(caught, 'Could not remove the Steam key')) }
-    finally { setBusy(false) }
-  }
-  const state = configured ? 'Key and SteamID saved' : status.keySet ? 'SteamID missing' : status.steamIdSet ? 'API key missing' : 'Not set up · installed games only'
-  return <details className="collapsible steam-owned" open={configured || undefined}>
-    <summary>Show games you own but haven't installed</summary>
-    <p className="muted-text">Optional. With a free Steam Web API key and your SteamID64, Game Lobby asks Steam for the games you own and adds the ones that aren't installed, so they show under All. Without a key only installed games are listed. The key and SteamID are encrypted by Windows and are not shown again.</p>
+  const save = async () => { if (await onSave(cleanPaste(key), cleanPaste(steamId))) { setKey(''); setSteamId('') } }
+  const remove = async () => { setConfirming(false); await onRemove() }
+  return <div className="steam-owned">
+    <p className="muted-text">With a free Steam Web API key and your SteamID64, Game Lobby asks Steam for the games you own and adds the ones that aren't installed, so they show under All. Without a key only installed games are listed. The key and SteamID are encrypted by Windows and are not shown again.</p>
     <ol className="igdb-steps">
       <li>Get a key at <a className="external-link" href={API_KEY_URL}>steamcommunity.com/dev/apikey</a>. Any domain name works, for example “localhost”.</li>
       <li>Find your SteamID64: on your <a className="external-link" href={ACCOUNT_URL}>Steam account page</a> it is shown as “Steam ID” under your account name. It is 17 digits and starts with 7656119.</li>
@@ -81,8 +68,8 @@ export function SteamOwnedSetup({ say }: { say(text: string): void }) {
       </div>
     </form>
     <div className="sgdb-status-row" role="status">
-      <span className="sgdb-status">{state}</span>
+      <span className="sgdb-status">{steamSummary(status).label}</span>
       {status.last && <span className={'sgdb-test ' + (status.last.ok ? 'ok' : 'fail')}>{status.last.ok ? '✓' : '✗'} {status.last.message}{status.last.checkedAt ? ' · ' + new Date(status.last.checkedAt).toLocaleString() : ''}</span>}
     </div>
-  </details>
+  </div>
 }

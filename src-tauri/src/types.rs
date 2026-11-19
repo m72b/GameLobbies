@@ -276,6 +276,17 @@ pub struct Settings {
     /// Minimize Game Lobby when a game is started from it. Stored settings without it default to on.
     #[serde(default = "default_true")]
     pub minimize_on_launch: bool,
+    /// Motion in the interface: "system" (follow Windows' animation setting), "reduced" (short
+    /// fades only) or "off" (no animation). Stored settings without it follow Windows.
+    #[serde(default = "default_motion")]
+    pub motion: String,
+}
+
+/// Values `Settings.motion` may have.
+pub const MOTION_CHOICES: &[&str] = &["system", "reduced", "off"];
+
+fn default_motion() -> String {
+    "system".to_string()
 }
 
 /// Grid styles accepted by the SteamGridDB API (`styles=` on `/grids`).
@@ -308,6 +319,7 @@ impl Default for Settings {
             auto_check_updates: true,
             disabled_stores: Vec::new(),
             minimize_on_launch: true,
+            motion: default_motion(),
         }
     }
 }

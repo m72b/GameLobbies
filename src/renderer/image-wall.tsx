@@ -6,6 +6,7 @@ import type { Game, IgdbMetadataView, Screenshot } from '../shared/types'
 import { isSteamGame } from '../shared/routes'
 import { layoutWall, visualOrder, wallColumns, type Placement } from '../shared/wall'
 import { coverSrc, useCoverStatus } from './cover'
+import { Spinner } from './loading-image'
 import { IgdbAttribution, Lightbox, type LightboxImage } from './igdb-details'
 
 /** Tiles shown before "Show all". */
@@ -39,7 +40,7 @@ function Tile({ image, place, onOpen, onAspect, onFailed, onMenu }: { image: Wal
   const style = { gridColumn: place.col + ' / span ' + place.cols, gridRow: place.row + ' / span ' + place.rows }
   return <div className="wall-tile" style={style} onContextMenu={onMenu ? event => { event.preventDefault(); onMenu(event.clientX, event.clientY) } : undefined}>
     <button type="button" className="wall-open" onClick={onOpen} aria-label={'Open ' + image.alt}>
-      {status !== 'loaded' && <div className="cover-shimmer" aria-hidden="true" />}
+      {status !== 'loaded' && <div className="cover-shimmer" aria-hidden="true"><Spinner /></div>}
       <img src={src} alt="" draggable={false} className={status === 'loaded' ? 'loaded' : ''}
         onLoad={event => { const img = event.currentTarget; if (img.naturalWidth && img.naturalHeight) onAspect(image.key, img.naturalWidth / img.naturalHeight) }} />
     </button>

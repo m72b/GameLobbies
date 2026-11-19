@@ -7,12 +7,18 @@ import { GlMark } from './gl-mark'
 import type { CustomLauncher, Game, LauncherTargetKind, RunningGame, Settings, Store as StoreName, SteamGridDbCover, UpdateInfo } from '../shared/types'
 import { defaultSettings } from '../shared/defaults'
 import { applyTheme } from './theme'
-import { coverStyle } from './cover'
+import { coverSrc, coverStyle } from './cover'
 import { CoverLayer, useCover } from './poster'
 import { CoverTiles, LoadMore, pickerCovers, useSgdbPages } from './cover-picker'
 import { StorageView } from './storage-view'
 import { RecentShelf } from './recent-shelf'
 import { GamePage, type GamePageActions } from './game-page'
+import { SettingsView, anchorFor, defaultPage, sectionFor, type SettingsPage } from './settings-view'
+import { ApiKeysSheet, KeysUiContext, useApiKeys } from './api-keys'
+import type { KeyId } from '../shared/api-keys'
+import { applyMotion, currentMotion, durationFor, play } from './motion'
+import { fadeIn, originOf, zoomOut, type ZoomOrigin } from './zoom'
+import { gridKey, isRectVisible, rectOf, type Rect } from '../shared/motion'
 import { LinkReview } from './link-review'
 import { routeRef } from '../shared/routes'
 import { SessionHistory } from './session-history'
@@ -86,6 +92,16 @@ export default function App() {
   const [gridWidth, setGridWidth] = useState(1200)
   const [focusedId, setFocusedId] = useState<string | null>(null)
   const [historyOpen, setHistoryOpen] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [settingsPage, setSettingsPage] = useState<SettingsPage>(defaultPage)
+  const [settingsAnchor, setSettingsAnchor] = useState<string | undefined>()
+  const [sheet, setSheet] = useState<{ open: boolean; focus?: KeyId }>({ open: false })
+  // Where the game page zooms from, and what it zooms back to; read once, when the page opens or closes.
+  const zoomRef = useRef<ZoomOrigin | null>(null)
+  const closingRef = useRef<{ id: string; rect: Rect; src?: string } | null>(null)
+  const mainRef = useRef<HTMLElement>(null)
+  const virtualRef = useRef<HTMLDivElement>(null)
+  const openSettingsRef = useRef<(id?: string | null) => void>(() => {})
   const scrollRef = useRef<HTMLDivElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
   const filteredRef = useRef<Game[]>([])
@@ -116,12 +132,36 @@ export default function App() {
       notice(error instanceof Error ? error.message : 'Could not launch game')
     }
   }
-  const openGame = (game: Game) => {
-    savedScroll.current = scrollRef.current?.scrollTop ?? savedScroll.current
+  const keys = useApiKeys(notice)
+  /** `from`: the clicked card or shelf item; the page zooms out of its poster. */
+  const openGame = (game: Game, from?: Element | null) => {
+    if (!settingsOpen && !openId) savedScroll.current = scrollRef.current?.scrollTop ?? savedScroll.current
+    zoomRef.current = originOf(from, coverSrc(game.cover))
+    setSettingsOpen(false)
     setOpenId(game.id)
     setMenu(null)
   }
-  const closeGame = () => setOpenId(null)
+  const closeGame = () => {
+    const current = openId ? games.find(game => game.id === openId) : undefined
+    const hero = document.querySelector('.gp-hero')
+    const heroImage = document.querySelector<HTMLImageElement>('.gp-hero-img.ready')
+    closingRef.current = current && hero ? { id: current.id, rect: rectOf(hero.getBoundingClientRect()), src: heroImage?.currentSrc || coverSrc(current.cover) } : null
+    zoomRef.current = null
+    setOpenId(null)
+  }
+  /** Shows Settings in place of the library, optionally on the page for a `settings.open` section id. */
+  const openSettings = (id?: string | null) => {
+    const page = sectionFor(id ?? null)
+    if (!settingsOpen && !openId) savedScroll.current = scrollRef.current?.scrollTop ?? savedScroll.current
+    setOpenId(null)
+    setStorageOpen(false)
+    if (page) { setSettingsPage(page); setSettingsAnchor(anchorFor(id ?? null)) }
+    setSettingsOpen(true)
+  }
+  openSettingsRef.current = openSettings
+  const closeSettings = () => setSettingsOpen(false)
+  const openSheet = (focus?: KeyId) => setSheet({ open: true, focus })
+  const closeSheet = () => setSheet(current => ({ ...current, open: false }))
   const beginEdit = (game: Game) => {
     setEditingGame(game)
     setEditTitle(game.title)
@@ -285,6 +325,7 @@ export default function App() {
     void window.lobby.tracking.status().then(setRunning).catch(() => {})
     const offTracking = window.lobby.tracking.onChanged(setRunning)
     const offSettings = window.lobby.settings.onChanged(setSettings)
+    const offOpen = window.lobby.settings.onOpen(id => openSettingsRef.current(id))
     const offSgdb = window.lobby.steamGridDb.onFetched(summary => { if (summary.updated > 0) notice('SteamGridDB added ' + summary.updated + ' cover' + (summary.updated === 1 ? '' : 's')) })
     const resize = () => setGridWidth(scrollRef.current?.clientWidth || window.innerWidth - 90)
     const observer = new ResizeObserver(resize)
@@ -298,8 +339,20 @@ export default function App() {
         searchRef.current?.focus()
         return
       }
+      if ((event.ctrlKey || event.metaKey) && event.key === ',') {
+        event.preventDefault()
+        openSettings()
+        return
+      }
       if (event.key === 'Escape') {
-        if (!menu && !adding && !editingGame && !sgdbGame && !linkingGame && !linkReview && !launcherLinkId) setOpenId(null)
+        if (sheet.open) return
+        const dialogOpen = !!(menu || adding || editingGame || sgdbGame || linkingGame || linkReview || launcherLinkId || document.querySelector('.modal-scrim'))
+        if (settingsOpen && !dialogOpen) {
+          // A focused field gives up focus first; a second Escape leaves Settings.
+          if (typing) target.blur(); else closeSettings()
+          return
+        }
+        if (!dialogOpen && openId) closeGame()
         setMenu(null)
         setLauncherLinkId(null)
         setAdding(false)
@@ -326,7 +379,7 @@ export default function App() {
         const game = filteredRef.current.find(item => item.id === focusedIdRef.current)
         if (game && !openId && !menu && !adding && !editingGame && !target.closest('button')) {
           event.preventDefault()
-          openGame(game)
+          openGame(game, scrollRef.current?.querySelector('[data-game-id="' + CSS.escape(game.id) + '"]'))
         }
       }
     }
@@ -335,13 +388,14 @@ export default function App() {
       offLibrary()
       offTracking()
       offSettings()
+      offOpen()
       offSgdb()
       observer.disconnect()
       window.removeEventListener('keydown', key)
     }
-  }, [openId, menu, adding, editingGame, sgdbGame, linkingGame, linkReview, launcherLinkId])
+  }, [openId, menu, adding, editingGame, sgdbGame, linkingGame, linkReview, launcherLinkId, settingsOpen, sheet.open])
 
-  useEffect(() => { applyTheme(settings.theme, settings) }, [settings])
+  useEffect(() => { applyTheme(settings.theme, settings); return applyMotion(settings.motion, settings.animations) }, [settings])
   useEffect(() => {
     // Startup update check (the backend skips it when turned off or done in the last 24 h).
     const timer = window.setTimeout(() => {
@@ -350,16 +404,34 @@ export default function App() {
     return () => window.clearTimeout(timer)
   }, [])
   const openGameData = openId ? games.find(game => game.id === openId) : undefined
-  const pageOpen = !!openGameData
-  const wasPageOpen = useRef(false)
+  const pageOpen = !!openGameData && !settingsOpen
+  // The library is out of view while a game page or Settings is showing.
+  const awayFromLibrary = pageOpen || settingsOpen
+  const wasAway = useRef(false)
   useLayoutEffect(() => {
-    if (wasPageOpen.current && !pageOpen && scrollRef.current) {
+    if (wasAway.current && !awayFromLibrary && scrollRef.current) {
       const top = savedScroll.current
       scrollRef.current.scrollTop = top
       requestAnimationFrame(() => { if (scrollRef.current) scrollRef.current.scrollTop = top })
+      // Closing a game page: its art shrinks back onto the poster when that is still on screen.
+      const closing = closingRef.current
+      closingRef.current = null
+      if (closing) {
+        if (mainRef.current) fadeIn(Array.from(mainRef.current.children))
+        const find = () => {
+          const poster = scrollRef.current?.querySelector('[data-game-id="' + CSS.escape(closing.id) + '"] .poster')
+          const grid = scrollRef.current?.getBoundingClientRect()
+          const box = poster?.getBoundingClientRect()
+          if (!poster || !grid || !box || !isRectVisible(rectOf(box), rectOf(grid))) return null
+          return { rect: rectOf(box), radius: Number.parseFloat(getComputedStyle(poster).borderTopLeftRadius) || 10 }
+        }
+        requestAnimationFrame(() => requestAnimationFrame(() => zoomOut(closing.rect, closing.src, find())))
+      } else if (mainRef.current && !pageOpen) {
+        fadeIn(Array.from(mainRef.current.children), 160)
+      }
     }
-    wasPageOpen.current = pageOpen
-  }, [pageOpen])
+    wasAway.current = awayFromLibrary
+  }, [awayFromLibrary, pageOpen])
   useEffect(() => {
     const resize = () => setGridWidth(scrollRef.current?.clientWidth || window.innerWidth - 90)
     if (!scrollRef.current) return
@@ -367,7 +439,7 @@ export default function App() {
     observer.observe(scrollRef.current)
     resize()
     return () => observer.disconnect()
-  }, [pageOpen])
+  }, [awayFromLibrary])
   const runningById = useMemo(() => new Map(running.map(item => [item.gameId, item])), [running])
   const nowPlaying = useMemo(() => {
     const item = running.find(entry => entry.state === 'running') || running[0]
@@ -405,13 +477,42 @@ export default function App() {
           sortBy === 'library' ? name(a).localeCompare(name(b)) || a.title.localeCompare(b.title) : a.title.localeCompare(b.title)
     )
   }, [filtered, query, sortBy, launchers])
+  // Launcher, store, view or Installed/All changes: the old grid fades out, then the new games fade in.
+  // Library updates and typing in search do not animate.
+  const filterKey = gridKey(view, store, onlyInstalled)
+  const [shownKey, setShownKey] = useState(filterKey)
+  const shownGames = useRef<Game[]>([])
+  const swapping = shownKey !== filterKey
+  if (!swapping) shownGames.current = ordered
+  const gridGames = swapping ? shownGames.current : ordered
   const cols = Math.max(2, Math.floor(gridWidth / (settings.posterWidth + Number.parseInt(settings.theme.gap || '9'))))
   filteredRef.current = ordered
   focusedIdRef.current = focusedId
   colsRef.current = cols
-  const rows = useMemo(() => Array.from({ length: Math.ceil(ordered.length / cols) }, (_, index) => ordered.slice(index * cols, (index + 1) * cols)), [ordered, cols])
+  const rows = useMemo(() => Array.from({ length: Math.ceil(gridGames.length / cols) }, (_, index) => gridGames.slice(index * cols, (index + 1) * cols)), [gridGames, cols])
   const virtual = useVirtualizer({ count: rows.length, getScrollElement: () => scrollRef.current, estimateSize: () => settings.posterWidth * 1.5 + 62, overscan: 3 })
   scrollToRowRef.current = row => virtual.scrollToIndex(row, { align: 'auto' })
+  useEffect(() => {
+    if (shownKey === filterKey) return
+    const target = virtualRef.current
+    const ms = durationFor(140, currentMotion())
+    const swap = () => { if (scrollRef.current) scrollRef.current.scrollTop = 0; setShownKey(filterKey) }
+    const fade = target && ms > 0 ? play(target, [{ opacity: 1 }, { opacity: 0 }], ms, { fill: 'forwards' }) : null
+    if (!fade) { swap(); return }
+    let live = true
+    fade.finished.then(() => { if (live) swap() }, () => { if (live) swap() })
+    return () => { live = false }
+  }, [filterKey, shownKey])
+  const lastShown = useRef(shownKey)
+  useLayoutEffect(() => {
+    if (lastShown.current === shownKey) return
+    lastShown.current = shownKey
+    const target = virtualRef.current
+    if (!target) return
+    target.getAnimations().forEach(animation => animation.cancel())
+    const level = currentMotion()
+    play(target, level === 'full' ? [{ opacity: 0, transform: 'translateY(6px)' }, { opacity: 1, transform: 'none' }] : [{ opacity: 0 }, { opacity: 1 }], durationFor(200, level), { fill: 'backwards' })
+  }, [shownKey])
   const visibleRowsKey = virtual.getVirtualItems().map(row => row.index).join(',')
   useEffect(() => {
     if (!focusedId) return
@@ -463,7 +564,7 @@ export default function App() {
     }
   }
 
-  return <div className="app-shell">
+  return <KeysUiContext.Provider value={{ keys, openSheet, openTab: () => openSettings('api-keys') }}><div className="app-shell">
     <header className="titlebar">
       <div className="brand"><GlMark size={12} className="gl-mark" />Game Lobby</div>{nowPlaying && !(pageOpen && openId === nowPlaying.game.id) && <NowPlaying game={nowPlaying.game} entry={nowPlaying.item} onOpen={() => openGame(nowPlaying.game)} />}<div className="drag-space" data-tauri-drag-region />
       <button className="title-action" onClick={() => window.lobby.window.minimize()} aria-label="Minimize">—</button>
@@ -474,30 +575,31 @@ export default function App() {
       <button className="rail-button" onClick={() => setCollapsed(!collapsed)} title="Menu"><GlMark size={16} className="gl-mark" /></button>
       <button className="rail-button search-button" onClick={() => searchRef.current?.focus()} title="Search"><Search /></button>
       <div className="rail-sep" />
-      <button className={'rail-button ' + (view === 'All Games' ? 'active' : '')} onClick={() => { setStorageOpen(false); setView('All Games'); setStore('All Games') }} title="All games"><Library /></button>
-      <button className={'rail-button ' + (view === 'Favorites' ? 'active' : '')} onClick={() => { setStorageOpen(false); setView('Favorites') }} title="Favorites"><Heart /></button>
-      <button className={'rail-button ' + (view === 'Recently Played' ? 'active' : '')} onClick={() => { setStorageOpen(false); setView('Recently Played') }} title="Recently played"><Clock3 /></button>
-      <button className={'rail-button ' + (view === 'Hidden' ? 'active' : '')} onClick={() => { setStorageOpen(false); setView('Hidden') }} title="Hidden games"><EyeOff /></button>
-      <button className={'rail-button ' + (storageOpen ? 'active' : '')} onClick={() => { setOpenId(null); setStorageOpen(!storageOpen) }} title="Storage"><HardDrive /></button>
+      <button className={'rail-button ' + (view === 'All Games' ? 'active' : '')} onClick={() => { setStorageOpen(false); setSettingsOpen(false); setView('All Games'); setStore('All Games') }} title="All games"><Library /></button>
+      <button className={'rail-button ' + (view === 'Favorites' ? 'active' : '')} onClick={() => { setStorageOpen(false); setSettingsOpen(false); setView('Favorites') }} title="Favorites"><Heart /></button>
+      <button className={'rail-button ' + (view === 'Recently Played' ? 'active' : '')} onClick={() => { setStorageOpen(false); setSettingsOpen(false); setView('Recently Played') }} title="Recently played"><Clock3 /></button>
+      <button className={'rail-button ' + (view === 'Hidden' ? 'active' : '')} onClick={() => { setStorageOpen(false); setSettingsOpen(false); setView('Hidden') }} title="Hidden games"><EyeOff /></button>
+      <button className={'rail-button ' + (storageOpen ? 'active' : '')} onClick={() => { setOpenId(null); setSettingsOpen(false); setStorageOpen(!storageOpen) }} title="Storage"><HardDrive /></button>
       <button className={'rail-button ' + (historyOpen ? 'active' : '')} onClick={() => setHistoryOpen(true)} title="Play history (all games)"><History /></button>
       <div className="rail-sep" />
       <div className="rail-stores">{railStores.map(item =>
-        <button key={item} className={'rail-button mini ' + (store === item ? 'active' : '')} title={item} onClick={() => { setStore(store === item ? 'All Games' : item); setView('All Games') }}><StoreIcon store={item} size={16} /></button>
+        <button key={item} className={'rail-button mini ' + (store === item ? 'active' : '')} title={item} onClick={() => { setSettingsOpen(false); setStore(store === item ? 'All Games' : item); setView('All Games') }}><StoreIcon store={item} size={16} /></button>
       )}{launchers.map(item => {
         const filter = launcherFilter(item.id)
-        return <button key={filter} className={'rail-button mini ' + (store === filter ? 'active' : '')} title={item.name} aria-label={item.name} onClick={() => { setStore(store === filter ? 'All Games' : filter); setView('All Games') }}><LauncherIcon launcher={item} size={16} /></button>
-      })}<button className="rail-button mini" title="Add source" onClick={() => window.lobby.settings.open()}><Plus /></button></div>
+        return <button key={filter} className={'rail-button mini ' + (store === filter ? 'active' : '')} title={item.name} aria-label={item.name} onClick={() => { setSettingsOpen(false); setStore(store === filter ? 'All Games' : filter); setView('All Games') }}><LauncherIcon launcher={item} size={16} /></button>
+      })}<button className="rail-button mini" title="Add source" onClick={() => openSettings()}><Plus /></button></div>
       <div className="rail-bottom">
         <button className="rail-button" title="Export library" onClick={() => void window.lobby.backup.export()}><CloudDownload /></button>
         <button className={'rail-button ' + (editMode ? 'active' : '')} title="Edit mode" onClick={() => setEditMode(!editMode)}><Pencil /></button>
-        <button className="rail-button" title="Settings" onClick={() => window.lobby.settings.open()}><Settings2 /></button>
+        <button className={'rail-button ' + (settingsOpen ? 'active' : '')} title="Settings (Ctrl+,)" onClick={() => openSettings()}><Settings2 /></button>
         <button className="rail-button" title="Quit" onClick={() => window.lobby.app.quit()}><X /></button>
       </div>
     </aside>
-    <main className={'main' + (pageOpen ? ' page-open' : '')}>
-      {openGameData && <GamePage game={openGameData} index={Math.max(0, games.findIndex(game => game.id === openGameData.id))} settings={settings} launchers={launchers} running={runningById.get(openGameData.id)} libraryVersion={libraryVersion} actions={pageActions} />}
-      {!pageOpen && storageOpen && <StorageView notice={notice} onClose={() => setStorageOpen(false)} onOpen={id => { const game = games.find(item => item.id === id); if (game) { setStorageOpen(false); openGame(game) } }} />}
-      {!pageOpen && !storageOpen && <>
+    <main ref={mainRef} className={'main' + (pageOpen ? ' page-open' : '') + (settingsOpen ? ' settings-open' : '')}>
+      {settingsOpen && <SettingsView settings={settings} onSettings={setSettings} say={notice} keys={keys} page={settingsPage} onPage={setSettingsPage} anchor={settingsAnchor} onAnchorDone={() => setSettingsAnchor(undefined)} onClose={closeSettings} />}
+      {pageOpen && openGameData && <GamePage origin={zoomRef.current} game={openGameData} index={Math.max(0, games.findIndex(game => game.id === openGameData.id))} settings={settings} launchers={launchers} running={runningById.get(openGameData.id)} libraryVersion={libraryVersion} actions={pageActions} />}
+      {!pageOpen && !settingsOpen && storageOpen && <StorageView notice={notice} onClose={() => setStorageOpen(false)} onOpen={id => { const game = games.find(item => item.id === id); if (game) { setStorageOpen(false); openGame(game) } }} />}
+      {!pageOpen && !settingsOpen && !storageOpen && <>
       <div className="toolbar">
         <div><div className="eyebrow">YOUR COLLECTION</div><h1>{view === 'All Games' ? (store === 'All Games' ? 'All games' : activeLauncher ? activeLauncher.name : store) : view}</h1></div>
         <div className="toolbar-actions">
@@ -520,7 +622,7 @@ export default function App() {
       </div>
       {view === 'All Games' && store === 'All Games' && !query && <RecentShelf games={games} libraryVersion={libraryVersion} onOpen={openGame} />}
       <section className="grid-scroll" ref={scrollRef} onContextMenu={event => { if (!(event.target as HTMLElement).closest('.game-card')) event.preventDefault() }}>
-        <div className="virtual-content" style={{ height: virtual.getTotalSize() }}>
+        <div className="virtual-content" ref={virtualRef} style={{ height: virtual.getTotalSize() }}>
           {virtual.getVirtualItems().map(row => {
             const gamesInRow = rows[row.index]
             return <div className="game-row" key={row.key} ref={virtual.measureElement} data-index={row.index} style={{ transform: 'translateY(' + row.start + 'px)', gridTemplateColumns: 'repeat(' + cols + ',minmax(0,1fr))' }}>
@@ -530,7 +632,7 @@ export default function App() {
                 tabIndex={focusedId === game.id ? 0 : -1}
                 className="game-card"
                 onFocus={() => setFocusedId(game.id)}
-                onClick={() => openGame(game)}
+                onClick={event => openGame(game, event.currentTarget)}
                 onContextMenu={event => { event.preventDefault(); setMenu({ x: event.clientX, y: event.clientY, game }) }}
               >
                 <CardPoster game={game} index={row.index * cols + index}>
@@ -545,7 +647,7 @@ export default function App() {
             </div>
           })}
         </div>
-        {!filtered.length && onlyInstalled && !query && games.some(game => (view === 'Hidden' ? game.hidden : !game.hidden) && gameMatchesFilter(game, store) && (view !== 'Favorites' || game.favorite) && (view !== 'Recently Played' || !!game.lastPlayed)) ? <div className="empty"><Gamepad2 size={30} /><h3>No installed games here</h3><p>Uninstalled games are hidden. Show all to see games you own but haven't installed.</p><button className="primary-button" onClick={() => void setInstalledFilter(false)}>Show all games</button></div> : !filtered.length && <div className="empty"><Gamepad2 size={30} /><h3>{query ? 'No matching games' : view === 'Hidden' ? 'No hidden games' : 'Your library is empty'}</h3><p>{view === 'Hidden' ? 'Games you hide will appear here.' : 'Scan your stores or add a game manually.'}</p><button className="primary-button" onClick={() => void scan()}><CloudDownload size={15} /> Scan libraries</button></div>}
+        {!swapping && !filtered.length && onlyInstalled && !query && games.some(game => (view === 'Hidden' ? game.hidden : !game.hidden) && gameMatchesFilter(game, store) && (view !== 'Favorites' || game.favorite) && (view !== 'Recently Played' || !!game.lastPlayed)) ? <div className="empty"><Gamepad2 size={30} /><h3>No installed games here</h3><p>Uninstalled games are hidden. Show all to see games you own but haven't installed.</p><button className="primary-button" onClick={() => void setInstalledFilter(false)}>Show all games</button></div> : !swapping && !filtered.length && <div className="empty"><Gamepad2 size={30} /><h3>{query ? 'No matching games' : view === 'Hidden' ? 'No hidden games' : 'Your library is empty'}</h3><p>{view === 'Hidden' ? 'Games you hide will appear here.' : 'Scan your stores or add a game manually.'}</p><button className="primary-button" onClick={() => void scan()}><CloudDownload size={15} /> Scan libraries</button></div>}
       </section>
       </>}
     </main>
@@ -609,7 +711,7 @@ export default function App() {
     {sgdbGame && <div className="modal-scrim"><div className="modal sgdb-modal" role="dialog" aria-label={'Find cover for ' + sgdbGame.title}>
       <div className="modal-head"><h2>{sgdbGame.title}</h2><button type="button" aria-label="Close" onClick={closeFindCover}><X size={17} /></button></div>
       {sgdbPages.state === 'loading' && <div className="empty-inline">Searching SteamGridDB…</div>}
-      {sgdbPages.state === 'nokey' && <div className="empty-inline">Add a free SteamGridDB API key in settings to search for covers.<br /><button className="secondary-button" onClick={() => void window.lobby.settings.open('cover-art')}>Open settings</button></div>}
+      {sgdbPages.state === 'nokey' && <div className="empty-inline">Add a free SteamGridDB API key to search for covers.<br /><button className="secondary-button" onClick={() => openSheet('steamgriddb')}>Add API key</button></div>}
       {sgdbPages.state === 'error' && <div className="empty-inline">{sgdbPages.error}</div>}
       {sgdbPages.state === 'ready' && sgdbCovers.length === 0 && !sgdbPages.hasMore && <div className="empty-inline">No covers found on SteamGridDB for this game</div>}
       {sgdbPages.state === 'ready' && sgdbCovers.length > 0 && <CoverTiles covers={sgdbCovers} animated={settings.steamGridDbAnimated} applying={sgdbApplying} onApply={cover => void applySgdbCover(cover)} />}
@@ -624,10 +726,11 @@ export default function App() {
     {updateNotice && <div className="update-notice" role="status">
       <CloudDownload size={16} />
       <span>Game Lobby {updateNotice.version} is available</span>
-      <button type="button" className="primary-button" onClick={() => { setUpdateNotice(null); void window.lobby.settings.open('updates') }}>View update</button>
+      <button type="button" className="primary-button" onClick={() => { setUpdateNotice(null); openSettings('updates') }}>View update</button>
       <button type="button" className="update-notice-close" title="Dismiss" aria-label="Dismiss update notice" onClick={() => setUpdateNotice(null)}><X size={14} /></button>
     </div>}
-  </div>
+    <ApiKeysSheet open={sheet.open} focus={sheet.focus} keys={keys} onClose={closeSheet} />
+  </div></KeysUiContext.Provider>
 }
 
 /** A card's store badge: the launcher's icon for Custom games run by a custom launcher. */

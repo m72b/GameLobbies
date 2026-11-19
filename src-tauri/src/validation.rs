@@ -85,6 +85,7 @@ const SETTINGS_KEYS: &[&str] = &[
     "autoCheckUpdates",
     "disabledStores",
     "minimizeOnLaunch",
+    "motion",
 ];
 /// Settings keys of older versions that are dropped (not rejected) when a backup is imported.
 const RETIRED_SETTINGS_KEYS: &[&str] = &["steamId", "steamApiKey", "legendaryPath"];
@@ -695,6 +696,14 @@ pub fn settings_patch(value: &Value) -> Result<Map<String, Value>> {
         "minimizeOnLaunch",
     ] {
         bool_field(&map, key)?;
+    }
+    if let Some(v) = map.get("motion") {
+        if !v
+            .as_str()
+            .is_some_and(|m| crate::types::MOTION_CHOICES.contains(&m))
+        {
+            bail!("motion must be \"system\", \"reduced\" or \"off\".");
+        }
     }
     if let Some(v) = map.get("steamGridDbStyles") {
         grid_styles(v)?;
@@ -1470,6 +1479,23 @@ mod tests {
             false
         );
         assert!(settings_patch(&json!({ "minimizeOnLaunch": "yes" })).is_err());
+        for ok in ["system", "reduced", "off"] {
+            assert_eq!(
+                settings_patch(&json!({ "motion": ok })).unwrap()["motion"],
+                ok
+            );
+        }
+        for bad in [json!("fast"), json!(""), json!(true), json!("OFF")] {
+            assert!(settings_patch(&json!({ "motion": bad })).is_err(), "{bad}");
+        }
+        // Stored settings without it follow Windows.
+        assert_eq!(crate::types::Settings::default().motion, "system");
+        let old: crate::types::Settings = serde_json::from_value(json!({
+            "scanIntervalHours": 0, "posterWidth": 172, "showBadges": true, "animations": true,
+            "tracking": true, "theme": serde_json::to_value(crate::types::ThemeTokens::default()).unwrap()
+        }))
+        .unwrap();
+        assert_eq!(old.motion, "system");
         // Stored settings from before this option keep minimizing (the default is on).
         assert!(crate::types::Settings::default().minimize_on_launch);
         for bad in [
