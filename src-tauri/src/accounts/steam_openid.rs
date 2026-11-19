@@ -68,7 +68,7 @@ impl SignInError {
     pub fn message(&self) -> String {
         match self {
             Self::Cancelled => "Sign-in cancelled.".into(),
-            Self::TimedOut => "Sign-in timed out after 10 minutes. Try again.".into(),
+            Self::TimedOut => "Sign-in timed out after 10 minutes. Try again, or choose Installed files only for this store if its sign-in page doesn't finish.".into(),
             Self::Invalid(why) => format!("Steam's sign-in answer was refused: {why}"),
             Self::Replayed => "Steam's sign-in answer was already used. Try again.".into(),
             Self::NotConfirmed => "Steam did not confirm the sign-in. Try again.".into(),

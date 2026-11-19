@@ -83,10 +83,12 @@ impl SetupStore {
     fn note(self) -> &'static str {
         match self {
             Self::Steam => "Sign in through Steam, then add a free Steam Web API key to list the games you own.",
-            Self::Epic | Self::Gog | Self::Xbox | Self::Battlenet => {
+            Self::Gog => "Sign in to GOG to list the games you own, with GOG's playtime. Installed games are found on this PC either way.",
+            Self::Battlenet => "Sign in to Battle.net to list the games on your account. Installed games are found on this PC either way.",
+            Self::Humble => "Sign in to Humble to list the Windows games and Steam keys of your orders (owned only: Humble has no launcher).",
+            Self::Epic | Self::Xbox => {
                 "Sign-in is coming in a later version. Installed games are found on this PC."
             }
-            Self::Humble => "Sign-in is coming in a later version. Humble has no installed-games scan.",
             Self::Ea | Self::Ubisoft | Self::Itch => "Installed games are found on this PC.",
         }
     }
@@ -302,16 +304,7 @@ mod tests {
         assert_eq!(state.version, VERSION);
         assert_eq!(state.choices[&SetupStore::Steam], SetupChoice::Signin);
         assert_eq!(state.completed_at, None);
-        for store in [
-            "gog",
-            "epic",
-            "xbox",
-            "battlenet",
-            "humble",
-            "ea",
-            "ubisoft",
-            "itch",
-        ] {
+        for store in ["epic", "xbox", "ea", "ubisoft", "itch"] {
             let p = patch(&format!(r#"{{"choices":{{"{store}":"signin"}}}}"#)).unwrap();
             assert!(apply_patch(Some(state.clone()), p, 6).is_err(), "{store}");
         }
@@ -376,11 +369,17 @@ mod tests {
         )
         .unwrap();
         assert!(!is_fresh(&conn).unwrap());
-        // Only Steam offers sign-in; every store has a note.
+        // Steam, GOG, Battle.net and Humble offer sign-in; every store has a note.
         let stores = info(None, true).stores;
         assert_eq!(stores.len(), SetupStore::ALL.len());
+        let signs_in = [
+            SetupStore::Steam,
+            SetupStore::Gog,
+            SetupStore::Battlenet,
+            SetupStore::Humble,
+        ];
         assert!(stores
             .iter()
-            .all(|s| s.sign_in == (s.id == SetupStore::Steam) && !s.note.is_empty()));
+            .all(|s| s.sign_in == signs_in.contains(&s.id) && !s.note.is_empty()));
     }
 }

@@ -5,15 +5,22 @@
 //! window labels and every credential stay in Rust, and the renderer only ever receives
 //! [`AccountStatus`] values. Every command here checks that it was called from the main window.
 //!
-//! This version signs in to Steam only (OpenID, [`steam_openid`]); the SteamID64 goes into the
-//! existing owned-games import ([`crate::steam_owned`]), which keeps working as before. The other
-//! stores are listed as coming later and refuse sign-in.
+//! Steam signs in through OpenID in the browser ([`steam_openid`]); the SteamID64 goes into the
+//! existing owned-games import ([`crate::steam_owned`]). GOG, Battle.net and Humble sign in in
+//! Game Lobby's locked-down window and are then read from Rust with the store's cookies
+//! ([`stores`]). Xbox and Epic are listed as coming later and refuse sign-in.
 
 pub mod apply;
+pub mod battlenet;
+pub mod cookies;
+pub mod gog;
 pub mod http;
+pub mod humble;
+pub mod session;
 pub mod setup;
 pub mod signin;
 pub mod steam_openid;
+pub mod stores;
 
 use crate::state::AppState;
 use crate::types::now_ms;
@@ -79,7 +86,10 @@ impl AccountStore {
 
     /// Whether this build can sign in to the store.
     pub fn available(self) -> bool {
-        matches!(self, Self::Steam)
+        matches!(
+            self,
+            Self::Steam | Self::Gog | Self::Battlenet | Self::Humble
+        )
     }
 
     fn unavailable(self) -> String {
@@ -104,13 +114,18 @@ pub enum AccountMode {
     Installed,
 }
 
-#[derive(Serialize, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
-struct StoredAccount {
-    mode: Option<AccountMode>,
+/// A store's account settings: its mode and (cookie stores) what the import did so far.
+#[derive(Serialize, Deserialize, Default, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct StoredAccount {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<AccountMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sync: Option<apply::SyncState>,
 }
 
-fn stored_mode(conn: &Connection, store: AccountStore) -> Result<Option<AccountMode>> {
+/// The stored settings; a missing or damaged row reads as the default.
+pub(crate) fn load_account(conn: &Connection, store: AccountStore) -> Result<StoredAccount> {
     let stored: Option<String> = conn
         .query_row(
             "SELECT value FROM library_connections WHERE key=?",
@@ -120,17 +135,37 @@ fn stored_mode(conn: &Connection, store: AccountStore) -> Result<Option<AccountM
         .optional()?;
     Ok(stored
         .and_then(|s| serde_json::from_str::<StoredAccount>(&s).ok())
-        .and_then(|a| a.mode))
+        .unwrap_or_default())
+}
+
+pub(crate) fn save_account(
+    conn: &Connection,
+    store: AccountStore,
+    account: &StoredAccount,
+) -> Result<()> {
+    conn.execute(
+        "INSERT INTO library_connections(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        [store.state_key(), serde_json::to_string(account)?],
+    )?;
+    Ok(())
+}
+
+fn stored_mode(conn: &Connection, store: AccountStore) -> Result<Option<AccountMode>> {
+    Ok(load_account(conn, store)?.mode)
 }
 
 fn save_mode(conn: &Connection, store: AccountStore, mode: AccountMode) -> Result<()> {
-    conn.execute(
-        "INSERT INTO library_connections(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-        [
-            store.state_key(),
-            serde_json::to_string(&StoredAccount { mode: Some(mode) })?,
-        ],
-    )?;
+    let mut account = load_account(conn, store)?;
+    account.mode = Some(mode);
+    save_account(conn, store, &account)
+}
+
+/// Lifts "Installed files only" (the import state stays).
+pub(crate) fn clear_mode(conn: &Connection, store: AccountStore) -> Result<()> {
+    let mut account = load_account(conn, store)?;
+    if account.mode.take().is_some() {
+        save_account(conn, store, &account)?;
+    }
     Ok(())
 }
 
@@ -177,6 +212,8 @@ pub struct AccountsState {
     /// Bumped (under the scan lock) every time the Steam account is forgotten. A sign-in that
     /// started before a sign-out saves nothing.
     pub(crate) steam_generation: AtomicU64,
+    /// The same for the other stores.
+    generations: Mutex<HashMap<AccountStore, u64>>,
     /// Steam `response_nonce` values already accepted (replay protection).
     pub(crate) seen_nonces: Mutex<steam_openid::NonceCache>,
     notices: Mutex<HashMap<AccountStore, Notice>>,
@@ -189,6 +226,27 @@ impl AccountsState {
         Self {
             fresh_install: AtomicBool::new(fresh_install),
             ..Default::default()
+        }
+    }
+
+    /// The store's sign-out generation (see [`Self::steam_generation`]).
+    pub(crate) fn generation_of(&self, store: AccountStore) -> u64 {
+        match store {
+            AccountStore::Steam => self
+                .steam_generation
+                .load(std::sync::atomic::Ordering::SeqCst),
+            _ => lock(&self.generations).get(&store).copied().unwrap_or(0),
+        }
+    }
+
+    /// A sign-out happened (the caller holds the scan lock).
+    pub(crate) fn bump_generation(&self, store: AccountStore) {
+        match store {
+            AccountStore::Steam => {
+                self.steam_generation
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+            _ => *lock(&self.generations).entry(store).or_insert(0) += 1,
         }
     }
 
@@ -209,12 +267,15 @@ pub(crate) fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 }
 
 /// The last sync of a store's account.
-#[derive(Serialize, Clone, Debug, PartialEq)]
-#[serde(rename_all = "camelCase")]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SyncStatus {
     pub ok: bool,
     pub message: String,
     pub checked_at: i64,
+    /// Only signing in again can fix it (no automatic retry).
+    #[serde(default)]
+    pub needs_sign_in: bool,
 }
 
 /// What the renderer learns about one store account. Never a credential: only flags.
@@ -243,6 +304,7 @@ pub fn statuses(state: &AppState) -> Result<Vec<AccountStatus>> {
     let steam_last = crate::steam_owned::load_import_state(&conn)?.status;
     let mut list = Vec::new();
     for store in AccountStore::ALL {
+        let account = load_account(&conn, store)?;
         let (signed_in, key_set, last) = match store {
             AccountStore::Steam => (
                 flags.steam_owned_steam_id,
@@ -251,11 +313,17 @@ pub fn statuses(state: &AppState) -> Result<Vec<AccountStatus>> {
                     ok: s.ok,
                     message: s.message.clone(),
                     checked_at: s.checked_at,
+                    needs_sign_in: s.needs_new_credentials,
                 }),
+            ),
+            store if stores::is_cookie_store(store) => (
+                session::exists(&conn, store)?,
+                true,
+                account.sync.as_ref().and_then(|s| s.status.clone()),
             ),
             _ => (false, false, None),
         };
-        let paused = stored_mode(&conn, store)? == Some(AccountMode::Installed);
+        let paused = account.mode == Some(AccountMode::Installed);
         list.push(AccountStatus {
             store,
             name: store.name(),
@@ -338,7 +406,11 @@ pub async fn accounts_sign_out(
     }
     signin::cancel_store(&app, store);
     let state = app.state::<AppState>();
-    let deleted = crate::steam_owned::remove_all(&app).await.map_err(err)?;
+    let deleted = if store == AccountStore::Steam {
+        crate::steam_owned::remove_all(&app).await.map_err(err)?
+    } else {
+        stores::sign_out(&app, store).await.map_err(err)?
+    };
     state.accounts.set_notice(
         store,
         true,
@@ -367,6 +439,27 @@ pub async fn accounts_set_mode(
         return Err(store.unavailable());
     }
     let state = app.state::<AppState>();
+    if stores::is_cookie_store(store) {
+        match mode {
+            AccountMode::Installed => {
+                let deleted = stores::set_installed(&app, store).await.map_err(err)?;
+                log::info!(
+                    "{} set to installed games only ({deleted} not-installed games removed)",
+                    store.name()
+                );
+                state.accounts.set_notice(
+                    store,
+                    true,
+                    format!("{} shows installed games only.", store.name()),
+                );
+            }
+            AccountMode::Account => {
+                stores::set_account(&app, store).await.map_err(err)?;
+            }
+        }
+        notify(&app);
+        return statuses(&state).map_err(err);
+    }
     match mode {
         AccountMode::Installed => {
             let _guard = state.scan_lock.lock().await;
@@ -424,7 +517,9 @@ pub async fn accounts_sync(
             store.name()
         ));
     }
-    if crate::steam_owned::sync_now(&app)
+    if stores::is_cookie_store(store) {
+        stores::sync_now(&app, store).await.map_err(err)?;
+    } else if crate::steam_owned::sync_now(&app)
         .await
         .map_err(err)?
         .is_none()
@@ -459,9 +554,17 @@ mod tests {
         }
         assert!(serde_json::from_value::<AccountMode>("account".into()).is_ok());
         assert!(serde_json::from_value::<AccountMode>("skip".into()).is_err());
-        // Only Steam signs in in this version.
+        // Steam, GOG, Battle.net and Humble sign in in this version; Xbox and Epic don't.
         let available: Vec<_> = AccountStore::ALL.iter().filter(|s| s.available()).collect();
-        assert_eq!(available, [&AccountStore::Steam]);
+        assert_eq!(
+            available,
+            [
+                &AccountStore::Steam,
+                &AccountStore::Gog,
+                &AccountStore::Battlenet,
+                &AccountStore::Humble
+            ]
+        );
     }
 
     #[test]

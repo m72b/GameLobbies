@@ -283,6 +283,9 @@ async fn perform_stores(app: &AppHandle) -> Result<LibraryStats> {
             errors.push(format!("Steam owned games: {e:#}"));
         }
     }
+    // Signed-in GOG, Battle.net and Humble accounts (throttled; after the installed scans, so
+    // installed games are known and keep their entries).
+    errors.extend(crate::accounts::stores::run_for_scan(app).await);
     let total = db::game_count(&state.db.lock())?;
     state.tracker.library_changed();
     let _ = app.emit("library:changed", ());

@@ -100,10 +100,13 @@ fn method(store: AccountStore) -> Method {
     }
 }
 
-/// The first page of a store's sign-in window. No store uses the window in this version.
-fn window_start_url(_store: AccountStore) -> Option<Url> {
-    None
+/// The first page of a store's sign-in window (GOG, Battle.net, Humble).
+fn window_start_url(store: AccountStore) -> Option<Url> {
+    super::stores::start_url(store)
 }
+
+/// How often a sign-in window is checked for the store's signed-in page.
+const CAPTURE_EVERY: Duration = Duration::from_secs(2);
 
 /// The only URL the browser sign-in may hand to the system browser: Steam's OpenID endpoint
 /// over https, built by Rust.
@@ -238,7 +241,7 @@ fn reserve(
     loaded: bool,
 ) -> Result<u64, String> {
     let id = state.accounts.next_flight.fetch_add(1, Ordering::Relaxed) + 1;
-    let generation = state.accounts.steam_generation.load(Ordering::SeqCst);
+    let generation = state.accounts.generation_of(store);
     let mut flight = lock(&state.accounts.flight);
     if flight.is_some() {
         return Err("Another sign-in is open.".into());
@@ -390,8 +393,324 @@ async fn start_window(app: &AppHandle, store: AccountStore) -> Result<(), String
         return Err(SignInError::Window("the page did not load.").message());
     }
     log::info!("{} sign-in window opened.", store.name());
+    let handle = app.clone();
+    tauri::async_runtime::spawn(async move { watch_window(&handle, store, id).await });
     notify(app);
     Ok(())
+}
+
+/// Waits for the store's signed-in page in flight `id`'s window, then takes the store's cookies
+/// and checks them with the store ([`super::stores::probe`]). A session the store doesn't accept
+/// yet (the sign-in is still going on) is tried again only when the cookies changed. Ends when
+/// the sign-in is saved, or with the flight (closed, cancelled, timed out).
+async fn watch_window(app: &AppHandle, store: AccountStore, id: u64) {
+    let mut last_tried: Option<u64> = None;
+    loop {
+        tokio::time::sleep(CAPTURE_EVERY).await;
+        let state = app.state::<AppState>();
+        let (alive, busy) = match lock(&state.accounts.flight).as_ref() {
+            Some(f) if f.id == id => (true, f.verifying),
+            _ => (false, false),
+        };
+        if !alive {
+            return;
+        }
+        let Some(window) = app.get_webview_window(&label(store)) else {
+            continue;
+        };
+        let on_page = window
+            .url()
+            .is_ok_and(|url| super::stores::signed_in_page(store, &url));
+        if busy || !on_page {
+            continue;
+        }
+        let Ok((cookies, user_agent)) = export_cookies(&window, store).await else {
+            continue;
+        };
+        let jar = super::cookies::CookieJar::new(super::stores::cookie_domains(store), cookies);
+        let fingerprint = jar_fingerprint(&jar);
+        if last_tried == Some(fingerprint) || jar.cookies().is_empty() {
+            continue;
+        }
+        last_tried = Some(fingerprint);
+        let http =
+            match super::http::StoreHttp::new(super::stores::api_hosts(store), jar, &user_agent) {
+                Ok(http) => http,
+                Err(_) => continue,
+            };
+        match super::stores::probe(store, &http).await {
+            Ok(account) => {
+                let Some(flight) = end_flight(app, id) else {
+                    return;
+                };
+                let saved =
+                    save_cookie_sign_in(app, store, flight.generation, &http, account).await;
+                if saved == Saved::Yes {
+                    let handle = app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        if let Err(e) = super::stores::sync_now(&handle, store).await {
+                            log::warn!("{} account: {e:#}", store.name());
+                        }
+                        notify(&handle);
+                    });
+                }
+                if let Err(e) = crate::windows::focus_main(app) {
+                    log::warn!("Could not bring Game Lobby forward: {e}");
+                }
+                return;
+            }
+            // Not signed in yet: keep waiting for the next change.
+            Err(super::http::FetchError::Rejected) => {}
+            Err(e) => log::info!(
+                "{} sign-in: the store could not be checked yet ({}).",
+                store.name(),
+                e.message_for(store.name())
+            ),
+        }
+    }
+}
+
+/// A short fingerprint of a jar (to try a session again only when it changed). Never logged.
+fn jar_fingerprint(jar: &super::cookies::CookieJar) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for cookie in jar.cookies() {
+        (&cookie.name, &cookie.domain, &cookie.path, &cookie.value).hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+/// Saves a cookie sign-in under the scan lock, unless the store was signed out since the
+/// sign-in started: seals the session, lifts "Installed files only" and resets the sync state.
+async fn save_cookie_sign_in(
+    app: &AppHandle,
+    store: AccountStore,
+    generation: u64,
+    http: &super::http::StoreHttp,
+    account: Option<String>,
+) -> Saved {
+    let state = app.state::<AppState>();
+    let saved = {
+        let _guard = state.scan_lock.lock().await;
+        if still_wanted(generation, state.accounts.generation_of(store)) {
+            let conn = state.db.lock();
+            let session = super::session::Session::cookies(
+                &http.cookies(),
+                http.user_agent(),
+                account.clone(),
+                now_ms(),
+            );
+            Some(
+                super::session::save(&conn, store, &session)
+                    .and_then(|_| super::clear_mode(&conn, store))
+                    .and_then(|_| reset_sync(&conn, store)),
+            )
+        } else {
+            None
+        }
+    };
+    let outcome = match saved {
+        None => {
+            state.accounts.set_notice(
+                store,
+                false,
+                "You signed out while the sign-in was being checked; nothing was saved.".into(),
+            );
+            Saved::SignedOut
+        }
+        Some(Ok(())) => {
+            log::info!("{} sign-in finished.", store.name());
+            state.accounts.set_notice(
+                store,
+                true,
+                match &account {
+                    Some(name) => format!("Signed in to {} as {name}.", store.name()),
+                    None => format!("Signed in to {}.", store.name()),
+                },
+            );
+            Saved::Yes
+        }
+        Some(Err(e)) => {
+            log::error!("Could not save the {} sign-in: {e:#}", store.name());
+            state.accounts.set_notice(
+                store,
+                false,
+                "The sign-in worked but could not be saved (Windows secure storage).".into(),
+            );
+            Saved::Failed
+        }
+    };
+    notify(app);
+    outcome
+}
+
+/// A new sign-in: the next scan or "Sync now" asks the store at once.
+fn reset_sync(conn: &rusqlite::Connection, store: AccountStore) -> anyhow::Result<()> {
+    let mut account = super::load_account(conn, store)?;
+    if let Some(sync) = account.sync.as_mut() {
+        sync.attempted_at = 0;
+        sync.next_at = 0;
+        sync.failures = 0;
+        sync.status = None;
+    }
+    super::save_account(conn, store, &account)
+}
+
+/// The store's cookies for its API hosts and the window's user agent (Windows WebView2).
+#[cfg(windows)]
+async fn export_cookies(
+    window: &WebviewWindow,
+    store: AccountStore,
+) -> Result<(Vec<super::cookies::StoredCookie>, String), SignInError> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let hosts = super::stores::api_hosts(store);
+    let allowed = super::stores::cookie_domains(store);
+    window
+        .with_webview(move |webview| read_webview_cookies(&webview, hosts, allowed, tx))
+        .map_err(|_| SignInError::Window("its web view is not ready."))?;
+    rx.await
+        .map_err(|_| SignInError::Window("its web view is not ready."))?
+}
+
+#[cfg(not(windows))]
+async fn export_cookies(
+    _window: &WebviewWindow,
+    _store: AccountStore,
+) -> Result<(Vec<super::cookies::StoredCookie>, String), SignInError> {
+    Err(SignInError::Window("sign-in windows need Windows."))
+}
+
+type CookieReply = Result<(Vec<super::cookies::StoredCookie>, String), SignInError>;
+
+/// Asks WebView2 for the cookies it would send to each `https://<host>/`, keeps those of the
+/// store's domains and sends them with the user agent once every host answered.
+#[cfg(windows)]
+fn read_webview_cookies(
+    webview: &tauri::webview::PlatformWebview,
+    hosts: &'static [&'static str],
+    allowed: &'static [&'static str],
+    tx: tokio::sync::oneshot::Sender<CookieReply>,
+) {
+    use std::sync::{Arc, Mutex};
+    use webview2_com::Microsoft::Web::WebView2::Win32::{
+        ICoreWebView2CookieList, ICoreWebView2Settings2, ICoreWebView2_2,
+    };
+    use webview2_com::{take_pwstr, GetCookiesCompletedHandler};
+    use windows_core::{Interface, HSTRING, PWSTR};
+    const FAILED: SignInError = SignInError::Window("its cookies could not be read.");
+    // SAFETY: COM calls on this window's live WebView2, on the UI thread (`with_webview`).
+    let start = unsafe {
+        (|| -> windows_core::Result<(ICoreWebView2_2, String)> {
+            let core = webview.controller().CoreWebView2()?;
+            let mut agent = PWSTR::null();
+            core.Settings()?
+                .cast::<ICoreWebView2Settings2>()?
+                .UserAgent(&mut agent)?;
+            Ok((core.cast::<ICoreWebView2_2>()?, take_pwstr(agent)))
+        })()
+    };
+    let Ok((core, user_agent)) = start else {
+        let _ = tx.send(Err(FAILED));
+        return;
+    };
+    let Ok(manager) = (unsafe { core.CookieManager() }) else {
+        let _ = tx.send(Err(FAILED));
+        return;
+    };
+    struct Pending {
+        left: usize,
+        cookies: Vec<super::cookies::StoredCookie>,
+        failed: bool,
+        tx: Option<tokio::sync::oneshot::Sender<CookieReply>>,
+        user_agent: String,
+    }
+    let pending = Arc::new(Mutex::new(Pending {
+        left: hosts.len(),
+        cookies: Vec::new(),
+        failed: false,
+        tx: Some(tx),
+        user_agent,
+    }));
+    let read_list = |list: &ICoreWebView2CookieList| -> windows_core::Result<Vec<super::cookies::StoredCookie>> {
+        let mut out = Vec::new();
+        // SAFETY: as above.
+        unsafe {
+            let mut count = 0u32;
+            list.Count(&mut count)?;
+            for i in 0..count.min(super::cookies::MAX_COOKIES as u32) {
+                let c = list.GetValueAtIndex(i)?;
+                let text = |get: &dyn Fn(*mut PWSTR) -> windows_core::Result<()>| -> windows_core::Result<String> {
+                    let mut value = PWSTR::null();
+                    get(&mut value)?;
+                    Ok(take_pwstr(value))
+                };
+                let name = text(&|p| c.Name(p))?;
+                let value = text(&|p| c.Value(p))?;
+                let domain = text(&|p| c.Domain(p))?;
+                let path = text(&|p| c.Path(p))?;
+                let mut secure = windows_core::BOOL::default();
+                let mut http_only = windows_core::BOOL::default();
+                let mut session = windows_core::BOOL::default();
+                let mut expires = 0f64;
+                c.IsSecure(&mut secure)?;
+                c.IsHttpOnly(&mut http_only)?;
+                c.IsSession(&mut session)?;
+                c.Expires(&mut expires)?;
+                let expires = (!session.as_bool() && expires.is_finite() && expires > 0.0)
+                    .then_some(expires as i64);
+                if let Some(cookie) = super::cookies::StoredCookie::from_webview(
+                    &name,
+                    &value,
+                    &domain,
+                    &path,
+                    secure.as_bool(),
+                    http_only.as_bool(),
+                    expires,
+                    allowed,
+                ) {
+                    out.push(cookie);
+                }
+            }
+        }
+        Ok(out)
+    };
+    for host in hosts {
+        let shared = pending.clone();
+        let uri = HSTRING::from(format!("https://{host}/"));
+        let handler = GetCookiesCompletedHandler::create(Box::new(move |result, list| {
+            let mut p = super::lock(&shared);
+            match (result, list) {
+                (Ok(()), Some(list)) => match read_list(&list) {
+                    Ok(found) => p.cookies.extend(found),
+                    Err(_) => p.failed = true,
+                },
+                _ => p.failed = true,
+            }
+            p.left -= 1;
+            if p.left == 0 {
+                if let Some(tx) = p.tx.take() {
+                    let reply = if p.failed {
+                        Err(FAILED)
+                    } else {
+                        Ok((std::mem::take(&mut p.cookies), p.user_agent.clone()))
+                    };
+                    let _ = tx.send(reply);
+                }
+            }
+            Ok(())
+        }));
+        // SAFETY: as above.
+        if unsafe { manager.GetCookies(&uri, &handler) }.is_err() {
+            let mut p = super::lock(&pending);
+            p.failed = true;
+            p.left -= 1;
+            if p.left == 0 {
+                if let Some(tx) = p.tx.take() {
+                    let _ = tx.send(Err(FAILED));
+                }
+            }
+        }
+    }
 }
 
 /// Builds the window on `about:blank`, then locks the webview down; the caller loads the store
@@ -979,7 +1298,11 @@ mod tests {
             .filter(|s| **s != AccountStore::Steam)
         {
             assert_eq!(method(*store), Method::Window);
-            assert!(window_start_url(*store).is_none());
+            // GOG, Battle.net and Humble open a window; Xbox and Epic have none yet.
+            assert_eq!(
+                window_start_url(*store).is_some(),
+                super::super::stores::is_cookie_store(*store)
+            );
         }
         let e = Expected::new("http://127.0.0.1:50123", "a".repeat(64));
         let url = e.start_url();

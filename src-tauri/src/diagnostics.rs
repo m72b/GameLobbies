@@ -205,6 +205,14 @@ pub fn render(
         yes_no(flags.steam_owned_key),
         yes_no(flags.steam_owned_steam_id)
     ));
+    // Store sign-ins: yes/no only, never a cookie.
+    for store in crate::accounts::stores::COOKIE_STORES {
+        line(format!(
+            "{} signed in: {}",
+            store.name(),
+            yes_no(crate::accounts::session::exists(conn, store).unwrap_or(false))
+        ));
+    }
     line(String::new());
     line(format!("--- Last {} log lines ---", log_lines.len()));
     for l in log_lines {
