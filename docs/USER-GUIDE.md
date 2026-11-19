@@ -36,13 +36,11 @@ A library that already has games shows an **Add store accounts** banner above th
 
 ### Signing in through Steam
 
-**Sign in through Steam** opens a small Game Lobby window titled *Sign in to Steam – steamcommunity.com* with Steam's own sign-in page. Sign in there as usual (with Steam Guard if you use it); when Steam confirms, the window closes by itself and Settings shows **Signed in**. Game Lobby then knows your SteamID64, so you don't have to look it up; add a free Steam Web API key to list the games you own.
+**Sign in through Steam** opens Steam's sign-in page (steamcommunity.com) in your default web browser. Sign in there as usual and approve with Steam Guard if you use it. When Steam confirms, the browser tab says *Signed in to Steam. You can close this tab and return to Game Lobby.*, Game Lobby comes to the front and Settings shows **Signed in**. Game Lobby then knows your SteamID64, so you don't have to look it up; add a free Steam Web API key to list the games you own. While it waits, Game Lobby shows **Continue in your browser…** with **Cancel sign-in**.
 
-- The window is Game Lobby's own window showing the store's real page. Your password goes only to Steam: Game Lobby never sees, reads or stores it. All Game Lobby keeps is the SteamID64 that Steam confirms, encrypted for your Windows user like the API keys.
-- The window is private (InPrivate): no cookies, cache or history are kept after it closes, so you sign in again each time. It only shows pages of steamcommunity.com over https (its title always shows the current site), opens no popups or downloads, asks for no permissions (camera, location, notifications) and does not start other apps; it has no right-click menu or browser shortcuts (copy and paste still work). Game Lobby adds no scripts of its own to the page; the app framework's built-in scripts are present but cannot use any Game Lobby feature from this window. Sign-in buttons for other services are blocked; use your Steam account name and password.
-- Only one sign-in runs at a time. Closing the window or **Cancel sign-in** stops it; after 10 minutes it is closed automatically.
-- Game Lobby checks Steam's answer before using it (it must come from Steam, for this sign-in, recently, and only once) and asks Steam to confirm it.
-- If the window says the WebView2 Runtime is too old for a private window, update the Microsoft Edge WebView2 Runtime and try again.
+- You sign in on Steam's own site in your own browser, so the password and the Steam Guard approval go only to Steam: Game Lobby never sees, reads or stores them. All Game Lobby keeps is the SteamID64 that Steam confirms, encrypted for your Windows user like the API keys. If you are already signed in to Steam in that browser, Steam may only ask you to confirm.
+- Steam sends the browser back to Game Lobby on this PC only (`127.0.0.1` with a random port that is open just for this sign-in). Game Lobby checks Steam's answer (it must come from Steam, for this sign-in, recently, and only once) and asks Steam to confirm it, then stops listening. The browser's history keeps that one-time address; it can't be used again.
+- Only one sign-in runs at a time. **Cancel sign-in** stops it; after 10 minutes it stops by itself. If the tab says the link is not for the sign-in Game Lobby is waiting for, start the sign-in again from Game Lobby.
 
 ## Store libraries
 
