@@ -33,6 +33,7 @@ mod screenshots;
 mod secrets;
 mod sessions;
 mod state;
+mod stats;
 mod steam_owned;
 mod steamgriddb;
 mod storage;
@@ -351,6 +352,7 @@ pub fn run() {
             storage::storage_uninstall,
             storage::recent_list,
             storage::recent_dismiss,
+            stats::stats_summary,
             updater::updates_check,
             updater::updates_auto_check,
             updater::updates_last,
