@@ -4,6 +4,7 @@ Detailed reference for Game Lobby's features. For an overview, installation and 
 
 ## Contents
 
+- [First-time setup](#first-time-setup)
 - [Store libraries](#store-libraries)
 - [Emulators and ROM library](#emulators-and-rom-library)
 - [Custom launchers](#custom-launchers)
@@ -14,6 +15,34 @@ Detailed reference for Game Lobby's features. For an overview, installation and 
 - [Themes](#themes)
 - [Extensions](#extensions)
 - [Local data](#local-data)
+
+## First-time setup
+
+When Game Lobby starts with an empty library (no games and no library folders), it opens a short setup in the main window. Every step has **Skip this step**, and **Skip setup** at the top leaves it at once; everything can be changed later.
+
+1. **Welcome**: what Game Lobby does without any account.
+2. **Your stores**: pick the stores you use.
+3. **How to use each store**: for Steam, **Sign in through Steam**, **Installed files only** or **Skip**. GOG, Battle.net, Xbox, Epic Games and Humble are marked *sign-in coming soon* and can be set to installed files only (Humble has no installed-games scan); EA app, Ubisoft Connect and itch.io are installed files only. Amazon Games, emulators and other launchers need no setup.
+4. **Steam account** (only when you chose to sign in): sign in through Steam, then add a free Steam Web API key in the same form as under **Settings → API keys** (see [Steam games you own](#steam-games-you-own-but-havent-installed)).
+5. **Library folders**: add folders with PC games, ROMs or emulators.
+6. **Optional keys**: SteamGridDB and IGDB, as in [API keys](#api-keys).
+7. **All set**: **Finish and scan** scans your stores and folders.
+
+A library that already has games shows an **Add store accounts** banner above the games instead; **Set up** opens the same setup and **×** hides the banner for good. **Settings → Accounts → Run setup again** opens it any time.
+
+### Accounts
+
+**Settings → Accounts** lists the store accounts. Steam shows whether you are signed in, the last sync, and **Sign in through Steam**, **Sync now**, **Sign out** and **Use**: **Account** (owned games and Steam playtime) or **Installed files only** (keeps the sign-in, removes the not-installed games it added and stops asking Steam until you choose Account again). **Sign out** forgets the SteamID and the Steam Web API key and removes the not-installed games they added; games you favourited, played, rated or customized stay. GOG, Battle.net, Xbox, Epic Games and Humble are listed as coming in a later version; their installed games are found as before.
+
+### Signing in through Steam
+
+**Sign in through Steam** opens a small Game Lobby window titled *Sign in to Steam – steamcommunity.com* with Steam's own sign-in page. Sign in there as usual (with Steam Guard if you use it); when Steam confirms, the window closes by itself and Settings shows **Signed in**. Game Lobby then knows your SteamID64, so you don't have to look it up; add a free Steam Web API key to list the games you own.
+
+- The window is Game Lobby's own window showing the store's real page. Your password goes only to Steam: Game Lobby never sees, reads or stores it. All Game Lobby keeps is the SteamID64 that Steam confirms, encrypted for your Windows user like the API keys.
+- The window is private (InPrivate): no cookies, cache or history are kept after it closes, so you sign in again each time. It only shows pages of steamcommunity.com over https (its title always shows the current site), opens no popups or downloads and does not start other apps. Sign-in buttons for other services are blocked; use your Steam account name and password.
+- Only one sign-in runs at a time. Closing the window or **Cancel sign-in** stops it; after 10 minutes it is closed automatically.
+- Game Lobby checks Steam's answer before using it (it must come from Steam, for this sign-in, recently, and only once) and asks Steam to confirm it.
+- If the window says the WebView2 Runtime is too old for a private window, update the Microsoft Edge WebView2 Runtime and try again.
 
 ## Store libraries
 
@@ -40,7 +69,7 @@ Screens and game pages animate subtly: a game page grows out of the poster you c
 
 ### Steam games you own but haven't installed
 
-Steam is installed-games only unless you set this up. In **Settings → API keys** (also reachable from the Steam row in **Settings → Libraries**), choose **Add keys** and fill in the **Steam Web API key and SteamID64** card:
+Steam is installed-games only unless you set this up. The easiest way is **Settings → Accounts → Sign in through Steam** (see [Signing in through Steam](#signing-in-through-steam)), which fills in your SteamID64; then add the API key below. To enter both yourself instead, open **Settings → API keys** (also reachable from the Steam row in **Settings → Libraries**), choose **Add keys** and fill in the **Steam Web API key and SteamID64** card:
 
 1. Get a free Steam Web API key at [steamcommunity.com/dev/apikey](https://steamcommunity.com/dev/apikey) (any domain name, such as `localhost`, works).
 2. Find your SteamID64: it is the 17-digit number starting with `7656119`, shown as "Steam ID" on your [Steam account page](https://store.steampowered.com/account/).

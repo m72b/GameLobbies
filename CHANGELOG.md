@@ -2,6 +2,19 @@
 
 All notable changes to Game Lobby are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Store accounts and first-time setup
+- New first-time setup inside the main window when the library is empty: welcome, the stores you use, how to use each (sign in, installed files only or skip), Steam sign-in and API key, library folders, optional keys, then **Finish and scan**. Every step can be skipped. Existing libraries get a dismissible **Add store accounts** banner instead.
+- New **Settings → Accounts**: per-store status, **Sign in through Steam**, **Sync now**, **Sign out**, **Use** (Account or Installed files only) and **Run setup again**. GOG, Battle.net, Xbox, Epic Games and Humble are listed as coming in a later version; EA app, Ubisoft Connect and itch.io stay installed files only. Amazon account sign-in is not planned.
+- **Sign in through Steam** opens Game Lobby's own private (InPrivate) window with Steam's sign-in page; the password goes only to Steam. Steam's OpenID answer is checked (nonce, endpoint, return address, signed fields, freshness, one use) and confirmed with Steam before the SteamID64 is saved in the existing encrypted owned-games setting, so the Steam Web API key is the only thing left to enter. The window only shows https pages of steamcommunity.com, blocks popups, downloads and app links, and closes on success, cancel or after 10 minutes.
+- **Installed files only** for Steam pauses the owned-games import and removes the not-installed games it added (games with your data stay); saving Steam credentials again resumes it.
+
+### Security
+- Every app command is now in the Tauri app manifest, and only the main window is granted them (`capabilities/default.json`); the backend also refuses commands from any other window, and the `lobby-cover` / `lobby-shot` protocols answer other windows with 403. Sign-in windows can call nothing.
+- Logs and the diagnostics report also redact OAuth codes, `gamekeys`, every `openid.*` value, `Cookie` / `Set-Cookie` headers and JSON Web Tokens.
+- Technical: new commands `accounts_status`, `accounts_sign_in`, `accounts_cancel_sign_in`, `accounts_sign_out`, `accounts_set_mode`, `accounts_sync`, `setup_get`, `setup_save` (enum inputs only); event `accounts:changed` (main window only); settings section id `accounts`. New `settings` row `setup` (not in backups) and `library_connections` rows `account:<store>`; no schema version change.
+
 ## [0.7.0] — 2026-11-19
 
 ### Statistics
