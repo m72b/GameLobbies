@@ -35,7 +35,7 @@ Every optional key lives in **Settings → API keys**: the SteamGridDB key (cove
 
 ### Motion
 
-Screens and game pages animate subtly: a game page grows out of the poster you clicked, the library fades when you switch launcher or filter, and buttons respond to a press. **Settings → Appearance → Reduce motion** sets this: **Follow Windows** (the default) uses Windows' animation setting, **Reduced** keeps only short fades, and **Off** turns every animation off.
+Screens and game pages animate subtly: a game page grows out of the poster you clicked, the library fades when you switch launcher or filter, and buttons respond to a press. **Settings → Appearance → Reduce motion** sets this: **Full** always animates, **Follow Windows** (the default) uses Windows' animation setting, **Reduced** keeps only short fades, and **Off** turns every animation off. If Windows' *Animation effects* are off, Follow Windows reduces motion and Settings shows a note saying so; choose **Full** to see every animation anyway.
 
 ### Steam games you own but haven't installed
 

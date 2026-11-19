@@ -1,7 +1,10 @@
-import { EASE, durationFor, motionLevel, parseMotion, type MotionLevel } from '../shared/motion'
+import { EASE, EASE_MOVE, durationFor, motionLevel, parseMotion, type MotionLevel } from '../shared/motion'
 import type { MotionPreference } from '../shared/types'
 
 const query = () => { try { return window.matchMedia('(prefers-reduced-motion: reduce)') } catch { return null } }
+
+/** Whether Windows asks for reduced motion (its Animation effects switch is off). */
+export const osPrefersReducedMotion = (): boolean => !!query()?.matches
 
 /** The motion the user wants right now: the `data-motion` attribute that {@link applyMotion} keeps on <html>. */
 export function currentMotion(): MotionLevel {
@@ -10,7 +13,7 @@ export function currentMotion(): MotionLevel {
 
 /**
  * Puts the effective motion level on <html data-motion="full|reduced|off"> for CSS and
- * {@link currentMotion}. "Follow Windows" tracks the OS setting while the app runs. Returns a cleanup.
+ * {@link currentMotion}. "Follow Windows" tracks the OS setting while the app runs; "Full" ignores it. Returns a cleanup.
  */
 export function applyMotion(preference: MotionPreference, animationsOn: boolean): () => void {
   const media = query()
@@ -26,4 +29,4 @@ export function play(element: Element, keyframes: Keyframe[], ms: number, option
   return element.animate(keyframes, { duration: ms, easing: EASE, ...options })
 }
 
-export { EASE, durationFor }
+export { EASE, EASE_MOVE, durationFor }

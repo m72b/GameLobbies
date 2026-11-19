@@ -2,6 +2,7 @@ import { Fragment, useEffect, useState } from 'react'
 import { ArrowLeft, Blocks, ChevronRight, CircleHelp, Cloud, FolderSearch, Gamepad2, Keyboard, KeyRound, Library, ListChecks, Puzzle, Rocket, RotateCcw, Settings2, SlidersHorizontal, Sparkles, Star } from 'lucide-react'
 import type { IgdbBulkProgress, MotionPreference, Settings, SettingsSection, SteamGridDbStyle, StoreId, StoreStatus } from '../shared/types'
 import { steamGridDbStyles } from '../shared/types'
+import { osPrefersReducedMotion } from './motion'
 import { StoreIcon } from './store-icons'
 import { EmulatorsSection, LibraryFoldersSection, useLocalScan } from './library-settings'
 import { ReviewSection } from './review-panel'
@@ -65,6 +66,14 @@ export function SettingsView({ settings, onSettings, say, keys, page: section, o
   onAnchorDone(): void
   onClose(): void
 }) {
+  const [osReduced, setOsReduced] = useState(osPrefersReducedMotion)
+  useEffect(() => {
+    let media: MediaQueryList | null = null
+    try { media = window.matchMedia('(prefers-reduced-motion: reduce)') } catch { return }
+    const change = () => setOsReduced(media!.matches)
+    media.addEventListener?.('change', change)
+    return () => media!.removeEventListener?.('change', change)
+  }, [])
   const setSettings = onSettings
   const [plugins, setPlugins] = useState<any[]>([])
   const localScan = useLocalScan()
@@ -199,7 +208,8 @@ export function SettingsView({ settings, onSettings, say, keys, page: section, o
             <label className="setting-row">Poster width <span>{settings.posterWidth}px</span><input type="range" min="120" max="250" value={settings.posterWidth} onChange={event => void save({ posterWidth: +event.target.value })} /></label>
             <div className="toggle-row"><div><b>Store badges</b><small>Show a store mark on each poster</small></div><input type="checkbox" checked={settings.showBadges} onChange={event => void save({ showBadges: event.target.checked })} /></div>
             <div className="toggle-row"><div><b>Animations</b><small>Enable poster hover motion</small></div><input type="checkbox" checked={settings.animations} onChange={event => void save({ animations: event.target.checked })} /></div>
-            <label className="setting-row"><span><b>Reduce motion</b><small className="setting-help">Follow Windows uses its animation setting. Reduced keeps only short fades. Off turns all animation off.</small></span><select value={settings.motion} aria-label="Reduce motion" onChange={event => void save({ motion: event.target.value as MotionPreference })}><option value="system">Follow Windows</option><option value="reduced">Reduced</option><option value="off">Off (no animation)</option></select></label>
+            <label className="setting-row"><span><b>Reduce motion</b><small className="setting-help">Full always animates. Follow Windows uses its animation setting. Reduced keeps only short fades. Off turns all animation off.</small></span><select value={settings.motion} aria-label="Reduce motion" onChange={event => void save({ motion: event.target.value as MotionPreference })}><option value="full">Full (always animate)</option><option value="system">Follow Windows</option><option value="reduced">Reduced</option><option value="off">Off (no animation)</option></select></label>
+            {settings.motion === 'system' && osReduced && <p className="setting-note" role="note">Windows animation effects are off, so Game Lobby reduces motion. Choose Full to always animate.</p>}
             <div className="feature-row"><span>Grid density</span><span className="coming-soon">COMING SOON</span></div>
           </div>
           <div className="settings-card" id="settings-cover-art">

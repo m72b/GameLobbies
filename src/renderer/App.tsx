@@ -17,7 +17,7 @@ import { SettingsView, anchorFor, defaultPage, sectionFor, type SettingsPage } f
 import { ApiKeysSheet, KeysUiContext, useApiKeys } from './api-keys'
 import type { KeyId } from '../shared/api-keys'
 import { applyMotion, currentMotion, durationFor, play } from './motion'
-import { fadeIn, originOf, zoomOut, type ZoomOrigin } from './zoom'
+import { beginClose, captureLibrary, fadeIn, originOf, zoomOut, type ZoomOrigin } from './zoom'
 import { gridKey, isRectVisible, rectOf, type Rect } from '../shared/motion'
 import { LinkReview } from './link-review'
 import { routeRef } from '../shared/routes'
@@ -137,6 +137,7 @@ export default function App() {
   const openGame = (game: Game, from?: Element | null) => {
     if (!settingsOpen && !openId) savedScroll.current = scrollRef.current?.scrollTop ?? savedScroll.current
     zoomRef.current = originOf(from, coverSrc(game.cover))
+    if (zoomRef.current && !openId && !settingsOpen && !storageOpen) captureLibrary(mainRef.current)
     setSettingsOpen(false)
     setOpenId(game.id)
     setMenu(null)
@@ -146,6 +147,7 @@ export default function App() {
     const hero = document.querySelector('.gp-hero')
     const heroImage = document.querySelector<HTMLImageElement>('.gp-hero-img.ready')
     closingRef.current = current && hero ? { id: current.id, rect: rectOf(hero.getBoundingClientRect()), src: heroImage?.currentSrc || coverSrc(current.cover) } : null
+    beginClose(document.querySelector<HTMLElement>('.game-page'))
     zoomRef.current = null
     setOpenId(null)
   }
@@ -417,7 +419,6 @@ export default function App() {
       const closing = closingRef.current
       closingRef.current = null
       if (closing) {
-        if (mainRef.current) fadeIn(Array.from(mainRef.current.children))
         const find = () => {
           const poster = scrollRef.current?.querySelector('[data-game-id="' + CSS.escape(closing.id) + '"] .poster')
           const grid = scrollRef.current?.getBoundingClientRect()
@@ -425,7 +426,11 @@ export default function App() {
           if (!poster || !grid || !box || !isRectVisible(rectOf(box), rectOf(grid))) return null
           return { rect: rectOf(box), radius: Number.parseFloat(getComputedStyle(poster).borderTopLeftRadius) || 10 }
         }
-        requestAnimationFrame(() => requestAnimationFrame(() => zoomOut(closing.rect, closing.src, find())))
+        const parts = mainRef.current ? Array.from(mainRef.current.children) : []
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          const grid = scrollRef.current?.getBoundingClientRect()
+          zoomOut(closing.rect, closing.src, find(), parts, grid ? { x: grid.left + grid.width / 2, y: grid.top + grid.height / 2 } : undefined)
+        }))
       } else if (mainRef.current && !pageOpen) {
         fadeIn(Array.from(mainRef.current.children), 160)
       }

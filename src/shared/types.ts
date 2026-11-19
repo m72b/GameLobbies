@@ -57,12 +57,12 @@ export interface Settings { scanIntervalHours: number; posterWidth: number; show
   autoCheckUpdates: boolean
   /** Minimize Game Lobby when a game is started from it. */
   minimizeOnLaunch: boolean
-  /** Motion in the interface: follow Windows, short fades only, or no animation at all. Default "system". */
+  /** Motion in the interface: always animate, follow Windows, short fades only, or no animation at all. Default "system". */
   motion: MotionPreference
   /** Stores that library scans skip (distinct `StoreId`s). Default []. */
   disabledStores: StoreId[] }
-/** `Settings.motion`: "system" follows the Windows setting, "reduced" keeps only short fades, "off" turns every animation off. */
-export type MotionPreference = 'system' | 'reduced' | 'off'
+/** `Settings.motion`: "full" always animates (whatever Windows prefers), "system" follows the Windows setting, "reduced" keeps only short fades, "off" turns every animation off. */
+export type MotionPreference = 'system' | 'full' | 'reduced' | 'off'
 /** Grid styles accepted by `Settings.steamGridDbStyles` (the backend rejects anything else). */
 export const steamGridDbStyles = ['alternate', 'blurred', 'white_logo', 'material', 'no_logo'] as const
 export type SteamGridDbStyle = typeof steamGridDbStyles[number]

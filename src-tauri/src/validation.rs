@@ -702,7 +702,7 @@ pub fn settings_patch(value: &Value) -> Result<Map<String, Value>> {
             .as_str()
             .is_some_and(|m| crate::types::MOTION_CHOICES.contains(&m))
         {
-            bail!("motion must be \"system\", \"reduced\" or \"off\".");
+            bail!("motion must be \"system\", \"full\", \"reduced\" or \"off\".");
         }
     }
     if let Some(v) = map.get("steamGridDbStyles") {
@@ -1479,13 +1479,19 @@ mod tests {
             false
         );
         assert!(settings_patch(&json!({ "minimizeOnLaunch": "yes" })).is_err());
-        for ok in ["system", "reduced", "off"] {
+        for ok in ["system", "full", "reduced", "off"] {
             assert_eq!(
                 settings_patch(&json!({ "motion": ok })).unwrap()["motion"],
                 ok
             );
         }
-        for bad in [json!("fast"), json!(""), json!(true), json!("OFF")] {
+        for bad in [
+            json!("fast"),
+            json!(""),
+            json!(true),
+            json!("OFF"),
+            json!("Full"),
+        ] {
             assert!(settings_patch(&json!({ "motion": bad })).is_err(), "{bad}");
         }
         // Stored settings without it follow Windows.
