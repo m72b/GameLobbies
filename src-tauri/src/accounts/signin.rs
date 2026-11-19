@@ -58,6 +58,8 @@ pub struct Flight {
     pub generation: u64,
     /// The loopback listener (browser sign-in). Aborted when the flight ends early.
     listener: Option<tauri::async_runtime::JoinHandle<()>>,
+    /// Browser sign-in: the Rust-built start URL, opened again when the user asks a second time.
+    browser_url: Option<Url>,
 }
 
 pub fn label(store: AccountStore) -> String {
@@ -197,9 +199,20 @@ pub async fn start(app: &AppHandle, store: AccountStore) -> Result<(), String> {
     let state = app.state::<AppState>();
     // One flight: a second request for the same store keeps the running one; another store
     // waits. The lock is released before any window or browser call.
-    let running = lock(&state.accounts.flight).as_ref().map(|f| f.store);
-    if let Some(running) = running {
+    let running = lock(&state.accounts.flight)
+        .as_ref()
+        .map(|f| (f.store, f.browser_url.clone()));
+    if let Some((running, browser_url)) = running {
         if running == store {
+            // A browser sign-in opens the same page again (same nonce, same listener).
+            if let Some(url) = browser_url {
+                if !open_in_browser(&url).await {
+                    return Err(
+                        SignInError::Window("Windows could not open your web browser.").message(),
+                    );
+                }
+                return Ok(());
+            }
             if let Some(window) = app.get_webview_window(&label(store)) {
                 let _ = window.unminimize();
                 let _ = window.set_focus();
@@ -238,6 +251,7 @@ fn reserve(
         loaded,
         generation,
         listener: None,
+        browser_url: None,
     });
     Ok(id)
 }
@@ -257,6 +271,12 @@ fn spawn_timeout(app: &AppHandle, id: u64) {
     });
 }
 
+/// Opens a Rust-built sign-in URL in the default web browser. Only Steam's OpenID endpoint
+/// ([`browser_url_ok`]) is ever opened; this is the one place that hands a URL to the browser.
+async fn open_in_browser(url: &Url) -> bool {
+    browser_url_ok(url) && crate::platform::shell_open(url.to_string()).await.is_ok()
+}
+
 /// Steam: listens on `127.0.0.1:<random port>`, then opens the Rust-built OpenID URL in the
 /// default web browser. The URL is never logged (it carries the nonce).
 async fn start_browser(app: &AppHandle, store: AccountStore) -> Result<(), String> {
@@ -273,9 +293,6 @@ async fn start_browser(app: &AppHandle, store: AccountStore) -> Result<(), Strin
         steam_openid::new_nonce(),
     );
     let start = expected.start_url();
-    if !browser_url_ok(&start) {
-        return Err(SignInError::Window("the sign-in address is not Steam's.").message());
-    }
     let id = reserve(&state, store, Some(expected), true)?;
     let handle = app.clone();
     let task = tauri::async_runtime::spawn(steam_openid::serve_return(listener, move |url| {
@@ -283,14 +300,14 @@ async fn start_browser(app: &AppHandle, store: AccountStore) -> Result<(), Strin
         async move { browser_return(&app, id, url).await }
     }));
     match lock(&state.accounts.flight).as_mut() {
-        Some(flight) if flight.id == id => flight.listener = Some(task),
+        Some(flight) if flight.id == id => {
+            flight.listener = Some(task);
+            flight.browser_url = Some(start.clone());
+        }
         _ => task.abort(),
     }
     spawn_timeout(app, id);
-    if crate::platform::shell_open(start.to_string())
-        .await
-        .is_err()
-    {
+    if !open_in_browser(&start).await {
         let e = SignInError::Window("Windows could not open your web browser.");
         finish(app, id, Err(e.clone()));
         return Err(e.message());
@@ -321,12 +338,32 @@ async fn browser_return(app: &AppHandle, id: u64, url: Url) -> ReturnReply {
         &state.accounts.seen_nonces,
     )
     .await;
-    let ok = result.is_ok();
-    finish(app, id, result);
+    let reply = match result {
+        Err(e) => {
+            finish(app, id, Err(e));
+            ReturnReply::Failed
+        }
+        Ok(steam_id) => match end_flight(app, id) {
+            // Cancelled (or timed out) while Steam was being asked: nothing is saved.
+            None => ReturnReply::Unsaved,
+            Some(flight) => {
+                page_for(save_sign_in(app, flight.store, flight.generation, &steam_id).await)
+            }
+        },
+    };
     if let Err(e) = crate::windows::focus_main(app) {
         log::warn!("Could not bring Game Lobby forward: {e}");
     }
-    ReturnReply::Done { ok }
+    reply
+}
+
+/// The page the browser gets for a saved, skipped or failed save.
+fn page_for(saved: Saved) -> ReturnReply {
+    match saved {
+        Saved::Yes => ReturnReply::SignedIn,
+        Saved::SignedOut => ReturnReply::Unsaved,
+        Saved::Failed => ReturnReply::Failed,
+    }
 }
 
 /// Opens the store's sign-in window. Unused in this version (no store signs in in a window).
@@ -468,21 +505,9 @@ pub fn cancel_store(app: &AppHandle, store: AccountStore) {
 /// window and tells the main window.
 fn finish(app: &AppHandle, id: u64, result: Result<String, SignInError>) {
     let state = app.state::<AppState>();
-    let Some(flight) = ({
-        let mut slot = lock(&state.accounts.flight);
-        match slot.as_ref() {
-            Some(f) if f.id == id => slot.take(),
-            _ => None,
-        }
-    }) else {
+    let Some(flight) = end_flight(app, id) else {
         return;
     };
-    if let Some(listener) = &flight.listener {
-        listener.abort();
-    }
-    if let Some(window) = app.get_webview_window(&label(flight.store)) {
-        let _ = window.destroy();
-    }
     let store = flight.store;
     match result {
         Ok(steam_id) => {
@@ -505,14 +530,50 @@ fn finish(app: &AppHandle, id: u64, result: Result<String, SignInError>) {
     notify(app);
 }
 
+/// Takes flight `id` out of the slot (a later or earlier flight is left alone), aborts its
+/// listener if it still has one and closes its window. `None` when it already ended.
+fn end_flight(app: &AppHandle, id: u64) -> Option<Flight> {
+    let state = app.state::<AppState>();
+    let flight = {
+        let mut slot = lock(&state.accounts.flight);
+        match slot.as_ref() {
+            Some(f) if f.id == id => slot.take(),
+            _ => None,
+        }
+    }?;
+    if let Some(listener) = &flight.listener {
+        listener.abort();
+    }
+    if let Some(window) = app.get_webview_window(&label(flight.store)) {
+        let _ = window.destroy();
+    }
+    Some(flight)
+}
+
+/// What [`save_sign_in`] did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Saved {
+    Yes,
+    /// Signed out since the sign-in started: nothing saved.
+    SignedOut,
+    /// Windows secure storage or the library failed.
+    Failed,
+}
+
 /// Whether a sign-in that started at `generation` may still save: no sign-out happened since.
 fn still_wanted(generation: u64, current: u64) -> bool {
     generation == current
 }
 
 /// Saves a verified sign-in under the scan lock (which sign-out and imports also hold), unless
-/// the account was signed out since the sign-in started; then syncs when the key is saved.
-async fn save_sign_in(app: &AppHandle, store: AccountStore, generation: u64, steam_id: &str) {
+/// the account was signed out since the sign-in started; then starts a sync in the background
+/// when the key is saved. Says whether it saved.
+async fn save_sign_in(
+    app: &AppHandle,
+    store: AccountStore,
+    generation: u64,
+    steam_id: &str,
+) -> Saved {
     let state = app.state::<AppState>();
     let saved = {
         let _guard = state.scan_lock.lock().await;
@@ -524,6 +585,11 @@ async fn save_sign_in(app: &AppHandle, store: AccountStore, generation: u64, ste
         } else {
             None
         }
+    };
+    let outcome = match &saved {
+        None => Saved::SignedOut,
+        Some(Ok(_)) => Saved::Yes,
+        Some(Err(_)) => Saved::Failed,
     };
     match saved {
         None => {
@@ -547,10 +613,13 @@ async fn save_sign_in(app: &AppHandle, store: AccountStore, generation: u64, ste
                 },
             );
             if key_set {
-                notify(app);
-                if let Err(e) = crate::steam_owned::sync_now(app).await {
-                    log::warn!("Steam owned games: {e:#}");
-                }
+                let app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(e) = crate::steam_owned::sync_now(&app).await {
+                        log::warn!("Steam owned games: {e:#}");
+                    }
+                    notify(&app);
+                });
             }
         }
         Some(Err(e)) => {
@@ -563,6 +632,7 @@ async fn save_sign_in(app: &AppHandle, store: AccountStore, generation: u64, ste
         }
     }
     notify(app);
+    outcome
 }
 
 /// Stores the SteamID64 from a verified sign-in (the caller holds the scan lock). True when the
@@ -939,16 +1009,25 @@ mod tests {
         let browser = &browser[..browser.find("\n}\n").unwrap_or(browser.len())];
         let at = |needle: &str| browser.find(needle).unwrap_or_else(|| panic!("{needle}"));
         assert!(at("TcpListener::bind(\"127.0.0.1:0\")") < at("Expected::new("));
-        assert!(at("let start = expected.start_url();") < at("browser_url_ok(&start)"));
-        assert!(
-            at("browser_url_ok(&start)") < at("crate::platform::shell_open(start.to_string())")
-        );
+        assert!(at("let start = expected.start_url();") < at("open_in_browser(&start)"));
+        assert!(at("flight.browser_url = Some(start.clone())") < at("open_in_browser(&start)"));
+        // The one opener checks the URL first; nothing else hands a URL to the browser.
         let code = &source[..source.find("#[cfg(test)]").unwrap()];
         assert_eq!(code.matches("platform::shell_open(").count(), 1);
-        assert!(!browser.contains("log::info!(\"{start}") && !browser.contains("{start}"));
-        // Cancel and timeout end the flight through `finish`, which aborts the listener.
+        assert!(code.contains(
+            "browser_url_ok(url) && crate::platform::shell_open(url.to_string()).await.is_ok()"
+        ));
+        assert!(!browser.contains("{start}"));
+        // Asking again during a browser sign-in reopens the stored URL (same nonce).
+        let again = &source[source.find("pub async fn start(").unwrap()..];
+        let again = &again[..again.find("match method(store)").unwrap()];
+        assert!(again.contains("f.browser_url.clone()"));
+        assert!(again.contains("open_in_browser(&url)"));
+        // Cancel and timeout end the flight through `end_flight`, which aborts the listener.
+        let end = &source[source.find("fn end_flight(").unwrap()..];
+        assert!(end.find("listener.abort()").is_some());
         let finish = &source[source.find("fn finish(").unwrap()..];
-        assert!(finish.find("listener.abort()").is_some());
+        assert!(finish.find("end_flight(app, id)").is_some());
         let timeout = &source[source.find("fn spawn_timeout").unwrap()..];
         assert!(timeout
             .find("finish(&handle, id, Err(SignInError::TimedOut))")
@@ -957,6 +1036,15 @@ mod tests {
 
     #[test]
     fn only_this_sign_ins_answer_is_taken_and_only_once() {
+        // The browser is told what really happened to the save.
+        assert_eq!(page_for(Saved::Yes), ReturnReply::SignedIn);
+        assert_eq!(page_for(Saved::SignedOut), ReturnReply::Unsaved);
+        assert_eq!(page_for(Saved::Failed), ReturnReply::Failed);
+        let source = include_str!("signin.rs");
+        let back = &source[source.find("async fn browser_return").unwrap()..];
+        let back = &back[..back.find("fn page_for").unwrap()];
+        assert!(back.contains("None => ReturnReply::Unsaved"));
+        assert!(back.contains("page_for(save_sign_in("));
         let id = 5;
         let url = |n: &str| {
             Url::parse(&format!(
@@ -1025,6 +1113,7 @@ mod tests {
             loaded: true,
             generation: 0,
             listener: None,
+            browser_url: None,
         }
     }
 

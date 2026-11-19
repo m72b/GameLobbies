@@ -416,9 +416,16 @@ pub async fn verify(
 // ---------------------------------------------------------------------------
 // Loopback return
 
-const MAX_REQUEST_HEAD: usize = 8 * 1024;
-/// How long one browser connection may take to send its request, and to take the reply.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+/// Largest request head read. Browsers send every cookie set for `127.0.0.1` with the
+/// request, so this is generous; a larger head gets a fixed 431 page.
+const MAX_REQUEST_HEAD: usize = 64 * 1024;
+/// How long one connection may take to send its request head (a browser sends it at once; an
+/// idle pre-opened socket is dropped quickly).
+const HEAD_TIMEOUT: Duration = Duration::from_secs(3);
+/// How long one connection may take to take the reply.
+const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
+/// Connections handled at once; more are closed straight away.
+const MAX_CONNECTIONS: usize = 8;
 
 /// What the flight made of a return request.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -426,14 +433,21 @@ pub enum ReturnReply {
     /// Not this sign-in's answer (no, another or two nonces; or one is already being checked):
     /// the listener keeps waiting.
     Ignored,
-    /// The sign-in ended (`ok`: Steam confirmed it). The listener answers and stops.
-    Done { ok: bool },
+    /// Steam confirmed it and the account was saved. The listener answers and stops.
+    SignedIn,
+    /// The answer failed a check, Steam did not confirm it, or saving failed. Ends the sign-in.
+    Failed,
+    /// Confirmed but not saved (cancelled or signed out meanwhile). Ends the sign-in.
+    Unsaved,
 }
 
 /// The pages the listener sends. Fixed text: nothing from the request is ever echoed.
 pub const PAGE_OK: &str = "<!doctype html><html lang=en><meta charset=utf-8><title>Game Lobby</title><p>Signed in to Steam. You can close this tab and return to Game Lobby.</p></html>";
 pub const PAGE_FAILED: &str = "<!doctype html><html lang=en><meta charset=utf-8><title>Game Lobby</title><p>Steam sign-in did not complete. Return to Game Lobby for details and try again.</p></html>";
+pub const PAGE_UNSAVED: &str = "<!doctype html><html lang=en><meta charset=utf-8><title>Game Lobby</title><p>Return to Game Lobby. This sign-in was not saved there.</p></html>";
 pub const PAGE_IGNORED: &str = "<!doctype html><html lang=en><meta charset=utf-8><title>Game Lobby</title><p>This link is not for the sign-in Game Lobby is waiting for.</p></html>";
+pub const PAGE_BAD_REQUEST: &str = "<!doctype html><html lang=en><meta charset=utf-8><title>Game Lobby</title><p>Bad request.</p></html>";
+pub const PAGE_TOO_LARGE: &str = "<!doctype html><html lang=en><meta charset=utf-8><title>Game Lobby</title><p>The request was too large. Return to Game Lobby and try again.</p></html>";
 pub const PAGE_NOT_FOUND: &str = "<!doctype html><html lang=en><meta charset=utf-8><title>Game Lobby</title><p>Not found.</p></html>";
 
 /// One complete HTTP response with a fixed page: no caching, no scripts, styles, frames or
@@ -445,28 +459,81 @@ fn reply(status: &str, page: &str) -> String {
     )
 }
 
-/// Reads one request head (up to the blank line), or `None` when it is too large or the
-/// connection ends first.
-async fn read_head(socket: &mut tokio::net::TcpStream) -> Option<Vec<u8>> {
+/// One request head as read from a connection.
+enum Head {
+    Complete(Vec<u8>),
+    TooLarge,
+    /// The connection ended (or failed) before the head was complete.
+    Closed,
+}
+
+/// Reads one request head (up to the blank line), at most [`MAX_REQUEST_HEAD`] bytes.
+async fn read_head(socket: &mut tokio::net::TcpStream) -> Head {
     use tokio::io::AsyncReadExt;
     let mut head = Vec::new();
-    let mut buf = [0u8; 2048];
+    let mut buf = [0u8; 4096];
     while !head.windows(4).any(|w| w == b"\r\n\r\n") {
         match socket.read(&mut buf).await {
-            Ok(0) | Err(_) => return None,
-            Ok(n) if head.len() + n > MAX_REQUEST_HEAD => return None,
+            Ok(0) | Err(_) => return Head::Closed,
+            Ok(n) if head.len() + n > MAX_REQUEST_HEAD => return Head::TooLarge,
             Ok(n) => head.extend_from_slice(&buf[..n]),
         }
     }
-    Some(head)
+    Head::Complete(head)
 }
 
-/// The browser's side of the sign-in, on `127.0.0.1` only. Connections are taken one at a time
-/// from loopback peers; each gets [`REQUEST_TIMEOUT`] to send its head. Only `GET <RETURN_PATH>?…`
-/// is handed to `on_return`; any other method or path (a favicon, say) gets 404 and changes
-/// nothing. An [`ReturnReply::Ignored`] answer keeps the listener waiting; once a return ends
-/// the sign-in, the listener answers with a fixed page and stops. Cancelling the sign-in or its
-/// timeout aborts the task, which closes the port.
+/// Whether the head has exactly one `Host` header and it is `127.0.0.1:<port>` (a page on
+/// another name that reached this port, for example through DNS rebinding, is refused).
+fn host_ok(head: &[u8], port: u16) -> bool {
+    let Ok(text) = std::str::from_utf8(head) else {
+        return false;
+    };
+    let expected = format!("127.0.0.1:{port}");
+    let mut hosts = text.split("\r\n").skip(1).filter_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        name.eq_ignore_ascii_case("host").then(|| value.trim())
+    });
+    matches!((hosts.next(), hosts.next()), (Some(host), None) if host == expected)
+}
+
+/// The response to one request head, and whether it ended the sign-in.
+async fn respond<F, Fut>(head: Head, port: u16, on_return: &F) -> (String, bool)
+where
+    F: Fn(Url) -> Fut,
+    Fut: std::future::Future<Output = ReturnReply>,
+{
+    let head = match head {
+        Head::Complete(head) => head,
+        Head::TooLarge => {
+            return (
+                reply("431 Request Header Fields Too Large", PAGE_TOO_LARGE),
+                false,
+            )
+        }
+        Head::Closed => return (String::new(), false),
+    };
+    if !host_ok(&head, port) {
+        return (reply("400 Bad Request", PAGE_BAD_REQUEST), false);
+    }
+    let Some(url) = return_url(&head, port) else {
+        return (reply("404 Not Found", PAGE_NOT_FOUND), false);
+    };
+    match on_return(url).await {
+        ReturnReply::Ignored => (reply("400 Bad Request", PAGE_IGNORED), false),
+        ReturnReply::SignedIn => (reply("200 OK", PAGE_OK), true),
+        ReturnReply::Failed => (reply("200 OK", PAGE_FAILED), true),
+        ReturnReply::Unsaved => (reply("200 OK", PAGE_UNSAVED), true),
+    }
+}
+
+/// The browser's side of the sign-in, on `127.0.0.1` only. Each loopback connection is handled
+/// in its own task (at most [`MAX_CONNECTIONS`] at once; more are closed), so an idle or slow
+/// connection never holds up the real return; each gets [`HEAD_TIMEOUT`] to send its head. The
+/// `Host` must be `127.0.0.1:<port>` (else 400) and a head over [`MAX_REQUEST_HEAD`] gets 431.
+/// Only `GET <RETURN_PATH>?…` is handed to `on_return`; any other method or path (a favicon,
+/// say) gets 404 and changes nothing. An [`ReturnReply::Ignored`] answer keeps the listener
+/// waiting; once a return ends the sign-in, it gets a fixed page and the listener stops
+/// accepting. Cancelling the sign-in or its timeout aborts the task, which closes the port.
 pub async fn serve_return<F, Fut>(listener: tokio::net::TcpListener, on_return: F)
 where
     F: Fn(Url) -> Fut + Send + Sync + 'static,
@@ -476,33 +543,42 @@ where
     let Ok(local) = listener.local_addr() else {
         return;
     };
+    let port = local.port();
+    let on_return = std::sync::Arc::new(on_return);
+    let slots = std::sync::Arc::new(tokio::sync::Semaphore::new(MAX_CONNECTIONS));
+    let stop = std::sync::Arc::new(tokio::sync::Notify::new());
     loop {
-        let Ok((mut socket, peer)) = listener.accept().await else {
+        let accepted = tokio::select! {
+            _ = stop.notified() => return,
+            accepted = listener.accept() => accepted,
+        };
+        let Ok((mut socket, peer)) = accepted else {
             return;
         };
         if !peer.ip().is_loopback() {
             continue;
         }
-        let Ok(Some(head)) = tokio::time::timeout(REQUEST_TIMEOUT, read_head(&mut socket)).await
-        else {
+        let Ok(slot) = slots.clone().try_acquire_owned() else {
             continue;
         };
-        let (response, done) = match return_url(&head, local.port()) {
-            None => (reply("404 Not Found", PAGE_NOT_FOUND), false),
-            Some(url) => match on_return(url).await {
-                ReturnReply::Ignored => (reply("400 Bad Request", PAGE_IGNORED), false),
-                ReturnReply::Done { ok: true } => (reply("200 OK", PAGE_OK), true),
-                ReturnReply::Done { ok: false } => (reply("200 OK", PAGE_FAILED), true),
-            },
-        };
-        let _ = tokio::time::timeout(REQUEST_TIMEOUT, async {
-            let _ = socket.write_all(response.as_bytes()).await;
-            let _ = socket.shutdown().await;
-        })
-        .await;
-        if done {
-            return;
-        }
+        let (on_return, stop) = (on_return.clone(), stop.clone());
+        tokio::spawn(async move {
+            let _slot = slot;
+            let head = tokio::time::timeout(HEAD_TIMEOUT, read_head(&mut socket))
+                .await
+                .unwrap_or(Head::Closed);
+            let (response, done) = respond(head, port, on_return.as_ref()).await;
+            if !response.is_empty() {
+                let _ = tokio::time::timeout(WRITE_TIMEOUT, async {
+                    let _ = socket.write_all(response.as_bytes()).await;
+                    let _ = socket.shutdown().await;
+                })
+                .await;
+            }
+            if done {
+                stop.notify_one();
+            }
+        });
     }
 }
 
@@ -984,8 +1060,8 @@ mod tests {
         out
     }
 
-    fn get(target: &str) -> String {
-        format!("GET {target} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+    fn get_at(port: u16, target: &str) -> String {
+        format!("GET {target} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: a=b\r\n\r\n")
     }
 
     /// The listener wired the way the app wires it: the nonce gate, then full verification
@@ -1019,7 +1095,11 @@ mod tests {
                 let got = verify(&Endpoint::local(&base), &url, &expected, NOW, &cache).await;
                 let ok = got.is_ok();
                 results.lock().unwrap().push(got);
-                ReturnReply::Done { ok }
+                if ok {
+                    ReturnReply::SignedIn
+                } else {
+                    ReturnReply::Failed
+                }
             })
         }
     }
@@ -1060,23 +1140,25 @@ mod tests {
             browser_flow(base, expected, Arc::default(), results.clone()),
         ));
         // Other paths, other methods, and returns without exactly this nonce change nothing.
-        let not_found = ask(port, get("/favicon.ico")).await;
+        let not_found = ask(port, get_at(port, "/favicon.ico")).await;
         assert!(not_found.starts_with("HTTP/1.1 404"), "{not_found}");
-        let post = format!("POST {target} HTTP/1.1\r\nHost: x\r\nContent-Length: 0\r\n\r\n");
+        let post = format!(
+            "POST {target} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Length: 0\r\n\r\n"
+        );
         assert!(ask(port, post).await.starts_with("HTTP/1.1 404"));
         let wrong = target.replacen(&nonce, &"e".repeat(64), 1);
         let missing = target.replacen(&format!("n={nonce}&"), "", 1);
         let twice = target.replacen(&format!("n={nonce}"), &format!("n={nonce}&n={nonce}"), 1);
         assert_ne!(missing, target);
         for bad in [wrong, missing, twice] {
-            let out = ask(port, get(&bad)).await;
+            let out = ask(port, get_at(port, &bad)).await;
             assert!(out.starts_with("HTTP/1.1 400"), "{out}");
             assert!(out.ends_with(PAGE_IGNORED));
         }
         assert!(results.lock().unwrap().is_empty());
         assert!(seen.lock().unwrap().is_empty(), "nothing reached Steam yet");
         // The real answer: verified with Steam, answered with the fixed page, listener stops.
-        let out = ask(port, get(&target)).await;
+        let out = ask(port, get_at(port, &target)).await;
         assert!(out.starts_with("HTTP/1.1 200"), "{out}");
         assert!(out.ends_with(PAGE_OK));
         assert!(out.contains("Content-Security-Policy: default-src 'none'"));
@@ -1103,7 +1185,7 @@ mod tests {
             listener,
             browser_flow(base, expected, Arc::default(), results.clone()),
         ));
-        let out = ask(port, get(&target)).await;
+        let out = ask(port, get_at(port, &target)).await;
         assert!(out.ends_with(PAGE_FAILED), "{out}");
         assert_eq!(
             results.lock().unwrap().clone(),
@@ -1116,6 +1198,116 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn an_idle_connection_does_not_hold_up_the_real_return() {
+        let (base, _) = serve(200, VALID).await;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (expected, target) = browser_response(port, &"c".repeat(64));
+        let results: Arc<Mutex<Vec<Result<String, SignInError>>>> = Arc::default();
+        let task = tokio::spawn(serve_return(
+            listener,
+            browser_flow(base, expected, Arc::default(), results.clone()),
+        ));
+        // Idle sockets (a browser's pre-connections) and one sending half a head.
+        let mut idle = Vec::new();
+        for _ in 0..3 {
+            idle.push(
+                tokio::net::TcpStream::connect(("127.0.0.1", port))
+                    .await
+                    .unwrap(),
+            );
+        }
+        let mut half = tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .unwrap();
+        half.write_all(b"GET /gamelobby/steam-return?n=")
+            .await
+            .unwrap();
+        let started = std::time::Instant::now();
+        let out = ask(port, get_at(port, &target)).await;
+        assert!(out.ends_with(PAGE_OK), "{out}");
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "the return waited"
+        );
+        tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .expect("the listener stops after the sign-in ended")
+            .unwrap();
+        drop(idle);
+    }
+
+    #[tokio::test]
+    async fn oversized_heads_get_431_and_foreign_hosts_400() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let calls = Arc::new(Mutex::new(0));
+        let counter = calls.clone();
+        let task = tokio::spawn(serve_return(listener, move |_| {
+            *counter.lock().unwrap() += 1;
+            async { ReturnReply::Ignored }
+        }));
+        let target = format!("{RETURN_PATH}?n=1");
+        // Many cookies under the cap are fine; over the cap is a fixed 431.
+        let cookies = format!("Cookie: {}\r\n", "c=".to_string() + &"x".repeat(40_000));
+        let big = format!("GET {target} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n{cookies}\r\n");
+        assert!(ask(port, big).await.ends_with(PAGE_IGNORED));
+        let huge = format!(
+            "GET {target} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: c={}\r\n\r\n",
+            "x".repeat(70_000)
+        );
+        let out = ask(port, huge).await;
+        assert!(
+            out.starts_with("HTTP/1.1 431"),
+            "{}",
+            &out[..40.min(out.len())]
+        );
+        assert!(out.ends_with(PAGE_TOO_LARGE));
+        // Host must be exactly 127.0.0.1:<port>, once.
+        for host in [
+            format!("Host: localhost:{port}\r\n"),
+            "Host: 127.0.0.1\r\n".to_string(),
+            format!("Host: evil.example:{port}\r\n"),
+            String::new(),
+            format!("Host: 127.0.0.1:{port}\r\nHost: 127.0.0.1:{port}\r\n"),
+        ] {
+            let out = ask(port, format!("GET {target} HTTP/1.1\r\n{host}\r\n")).await;
+            assert!(out.starts_with("HTTP/1.1 400"), "{host:?}: {out}");
+            assert!(out.ends_with(PAGE_BAD_REQUEST));
+        }
+        assert_eq!(
+            *calls.lock().unwrap(),
+            1,
+            "only the good request reached the flight"
+        );
+        assert!(host_ok(
+            format!("GET / HTTP/1.1\r\nhOsT:  127.0.0.1:{port} \r\n\r\n").as_bytes(),
+            port
+        ));
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn each_ending_gets_its_own_fixed_page() {
+        for (outcome, page) in [
+            (ReturnReply::SignedIn, PAGE_OK),
+            (ReturnReply::Failed, PAGE_FAILED),
+            (ReturnReply::Unsaved, PAGE_UNSAVED),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let task = tokio::spawn(serve_return(listener, move |_| async move { outcome }));
+            let out = ask(port, get_at(port, &format!("{RETURN_PATH}?n=1"))).await;
+            assert!(out.ends_with(page), "{out}");
+            tokio::time::timeout(Duration::from_secs(5), task)
+                .await
+                .unwrap()
+                .unwrap();
+        }
+        assert!(!PAGE_UNSAVED.contains("Signed in"));
+    }
+
+    #[tokio::test]
     async fn pages_never_echo_the_request() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -1125,12 +1317,20 @@ mod tests {
             format!("{RETURN_PATH}?n={evil}&openid.mode=<b>"),
             format!("/{evil}"),
         ] {
-            let out = ask(port, get(&target)).await;
+            let out = ask(port, get_at(port, &target)).await;
             let body = out.split("\r\n\r\n").nth(1).unwrap();
             assert!([PAGE_IGNORED, PAGE_NOT_FOUND].contains(&body), "{out}");
             assert!(!out.contains("script") && !out.contains("<b>"), "{out}");
         }
-        for page in [PAGE_OK, PAGE_FAILED, PAGE_IGNORED, PAGE_NOT_FOUND] {
+        for page in [
+            PAGE_OK,
+            PAGE_FAILED,
+            PAGE_UNSAVED,
+            PAGE_IGNORED,
+            PAGE_BAD_REQUEST,
+            PAGE_TOO_LARGE,
+            PAGE_NOT_FOUND,
+        ] {
             assert!(!page.contains("<script") && !page.contains("src=") && !page.contains("href="));
         }
         // Cancel and timeout abort the task: the port closes.
