@@ -91,7 +91,8 @@ fn open_if_allowed_external(url: &Url) {
 }
 
 /// Settings pages that `settings_open` may jump to (the `settings:open` event's payload).
-pub const SETTINGS_SECTIONS: [&str; 4] = ["updates", "cover-art", "metadata", "api-keys"];
+pub const SETTINGS_SECTIONS: [&str; 5] =
+    ["updates", "cover-art", "metadata", "api-keys", "accounts"];
 
 pub fn create(app: &AppHandle) -> tauri::Result<()> {
     WebviewWindowBuilder::new(app, MAIN, WebviewUrl::App("index.html".into()))
@@ -165,6 +166,7 @@ mod tests {
     #[test]
     fn settings_sections_include_the_api_keys_tab() {
         assert!(SETTINGS_SECTIONS.contains(&"api-keys"));
+        assert!(SETTINGS_SECTIONS.contains(&"accounts"));
         assert!(!SETTINGS_SECTIONS.contains(&"libraries"));
     }
 

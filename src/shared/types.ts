@@ -526,7 +526,7 @@ export interface UpdateInfo { available: boolean; currentVersion: string; versio
 /** `updates.onProgress`: bytes downloaded so far; `total` when the server sent a size. Throttled. */
 export interface UpdateProgress { downloaded: number; total?: number }
 /** Settings pages `settings.open(section)` can show. */
-export type SettingsSection = 'updates' | 'cover-art' | 'metadata' | 'api-keys'
+export type SettingsSection = 'updates' | 'cover-art' | 'metadata' | 'api-keys' | 'accounts'
 /**
  * Signed updates (all work happens in the backend; one check or install at a time, a concurrent
  * call rejects).
@@ -587,6 +587,50 @@ export interface SteamOwnedAPI {
   /** Clears the key and the SteamID64 and removes the not-installed games the import added (games with your data stay). */
   remove(): Promise<SteamOwnedStatus>
 }
+/** A store with an account sign-in (now or later). Only `steam` signs in in this version. */
+export type AccountStore = 'steam' | 'gog' | 'battlenet' | 'humble' | 'xbox' | 'epic'
+/** `account`: owned games and store playtime come from the account; `installed`: only games installed on this PC. */
+export type AccountMode = 'account' | 'installed'
+/** One store account as the backend reports it. Never a credential: only flags and fixed-text messages. */
+export interface AccountStatus {
+  store: AccountStore; name: string
+  /** This version can sign in to the store. */
+  available: boolean
+  mode: AccountMode; signedIn: boolean
+  /** Steam: the Web API key is saved (the owned-games list needs it). */
+  keySet: boolean
+  /** A sign-in window for this store is open. */
+  signingIn: boolean
+  last: { ok: boolean; message: string; checkedAt: number } | null
+  /** The last sign-in or account action's outcome. */
+  notice: { ok: boolean; message: string; at: number } | null
+}
+/**
+ * Store accounts (`window.lobby.accounts`). The renderer names a store and a mode only; the
+ * sign-in window, its URLs and every credential stay in Rust. `signIn` opens Game Lobby's
+ * sign-in window and returns at once; the outcome arrives through `onChanged`.
+ */
+export interface AccountsAPI {
+  status(): Promise<AccountStatus[]>
+  signIn(store: AccountStore): Promise<AccountStatus[]>
+  cancelSignIn(): Promise<AccountStatus[]>
+  /** Forgets the account (Steam: the SteamID and the Web API key) and removes the not-installed games it added. */
+  signOut(store: AccountStore): Promise<AccountStatus[]>
+  setMode(store: AccountStore, mode: AccountMode): Promise<AccountStatus[]>
+  /** Syncs now, ignoring the scan throttle. */
+  sync(store: AccountStore): Promise<AccountStatus[]>
+  onChanged(callback: (statuses: AccountStatus[]) => void): () => void
+}
+/** A store the first-time setup asks about. */
+export type SetupStore = 'steam' | 'epic' | 'gog' | 'xbox' | 'battlenet' | 'humble' | 'ea' | 'ubisoft' | 'itch'
+export type SetupChoice = 'signin' | 'installed' | 'skip'
+export interface SetupState { version: number; completedAt?: number; skippedAt?: number; choices: Partial<Record<SetupStore, SetupChoice>> }
+export interface SetupStoreInfo { id: SetupStore; name: string; signIn: boolean; note: string }
+/** `show`: open the setup now (fresh install); `banner`: offer it in the library (existing library). */
+export interface SetupInfo { state: SetupState | null; show: boolean; banner: boolean; stores: SetupStoreInfo[] }
+/** Only these fields; `completed` / `skipped` may only be true (Rust sets the time). */
+export interface SetupPatch { choices?: Partial<Record<SetupStore, SetupChoice>>; completed?: true; skipped?: true }
+export interface SetupAPI { get(): Promise<SetupInfo>; save(patch: SetupPatch): Promise<SetupInfo> }
 export interface IgdbBulkProgress { running: boolean; done: number; total: number; updated: number; notFound: number; failed: number; message?: string }
 export interface IgdbMetadataEvent { gameId: string; changed: boolean }
 export interface IgdbAPI {
@@ -679,6 +723,8 @@ export interface LobbyAPI {
   plugins: { list(): Promise<PluginManifest[]>; install(): Promise<PluginManifest[]> }
   steamGridDb: SteamGridDbAPI
   steamOwned: SteamOwnedAPI
+  accounts: AccountsAPI
+  setup: SetupAPI
   tracking: TrackingAPI
   art: ArtAPI
   igdb: IgdbAPI

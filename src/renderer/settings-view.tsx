@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useState } from 'react'
-import { ArrowLeft, Blocks, ChevronRight, CircleHelp, Cloud, FolderSearch, Gamepad2, Keyboard, KeyRound, Library, ListChecks, Puzzle, Rocket, RotateCcw, Settings2, SlidersHorizontal, Sparkles, Star } from 'lucide-react'
+import { ArrowLeft, Blocks, ChevronRight, CircleHelp, CircleUserRound, Cloud, FolderSearch, Gamepad2, Keyboard, KeyRound, Library, ListChecks, Puzzle, Rocket, RotateCcw, Settings2, SlidersHorizontal, Sparkles, Star } from 'lucide-react'
 import type { IgdbBulkProgress, MotionPreference, Settings, SettingsSection, SteamGridDbStyle, StoreId, StoreStatus } from '../shared/types'
 import { steamGridDbStyles } from '../shared/types'
 import { osPrefersReducedMotion } from './motion'
@@ -10,9 +10,11 @@ import { LaunchersSection } from './launcher-settings'
 import { UpdatesSection } from './updates-section'
 import { IgdbAttribution } from './igdb-details'
 import { ApiKeysSection, KeyStatusLine, type ApiKeys } from './api-keys'
+import { AccountsSection, type Accounts } from './accounts'
 
 const sections = [
   ['Libraries', 'Stores and launchers Game Lobby detects on this PC, and how often it scans.', Library],
+  ['Accounts', 'Store sign-in for games you own but have not installed, and the first-time setup.', CircleUserRound],
   ['Library folders', 'Choose game and emulator folders and scan them.', FolderSearch],
   ['Emulators', 'Manage emulator profiles and the systems they run.', Gamepad2],
   ['Custom launchers', 'Your own launchers: name, icon, colour and how they start a game.', Rocket],
@@ -33,7 +35,7 @@ const sgdbStyleLabels: Record<SteamGridDbStyle, string> = { alternate: 'Alternat
 type Section = typeof sections[number][0]
 
 /** Sections `settings.open(id)` can show. */
-const sectionIds: Record<SettingsSection, Section> = { updates: 'About and Updates', 'cover-art': 'Appearance', metadata: 'Playtime and Stats', 'api-keys': 'API keys' }
+const sectionIds: Record<SettingsSection, Section> = { updates: 'About and Updates', 'cover-art': 'Appearance', metadata: 'Playtime and Stats', 'api-keys': 'API keys', accounts: 'Accounts' }
 /** Cards a deep link scrolls to once its section is shown. */
 const sectionAnchors: Partial<Record<SettingsSection, string>> = { 'cover-art': 'settings-cover-art', metadata: 'settings-metadata' }
 export const anchorFor = (id: string | null) => id !== null && Object.prototype.hasOwnProperty.call(sectionAnchors, id) ? sectionAnchors[id as SettingsSection] : undefined
@@ -54,11 +56,14 @@ export const defaultPage: SettingsPage = 'Libraries'
  * left, a Back control, and Escape (handled by App) to leave. `page` and `anchor` are owned by
  * App so that `settings.open(section)` can switch them.
  */
-export function SettingsView({ settings, onSettings, say, keys, page: section, onPage: setSection, anchor, onAnchorDone, onClose }: {
+export function SettingsView({ settings, onSettings, say, keys, accounts, onRunSetup, page: section, onPage: setSection, anchor, onAnchorDone, onClose }: {
   settings: Settings
   onSettings(next: Settings): void
   say(text: string): void
   keys: ApiKeys
+  accounts: Accounts
+  /** Leaves Settings for the first-time setup. */
+  onRunSetup(): void
   page: SettingsPage
   onPage(page: SettingsPage): void
   /** The card a deep link scrolls to once the page is shown. */
@@ -201,6 +206,7 @@ export function SettingsView({ settings, onSettings, say, keys, page: section, o
         {section === 'Custom launchers' && <LaunchersSection scan={localScan} say={say} />}
         {section === 'Review' && <ReviewSection say={say} />}
         {section === 'API keys' && <ApiKeysSection keys={keys} />}
+        {section === 'Accounts' && <AccountsSection accounts={accounts} onRunSetup={onRunSetup} />}
 
         {section === 'Appearance' && <>
           <div className="settings-card">

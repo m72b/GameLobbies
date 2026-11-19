@@ -1,0 +1,113 @@
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { LogIn, RefreshCw, ShieldCheck } from 'lucide-react'
+import type { AccountMode, AccountStatus, AccountStore } from '../shared/types'
+import { accountLine, canSync } from '../shared/accounts'
+import { StoreIcon } from './store-icons'
+import { useKeysUi } from './api-keys'
+
+const errorText = (error: unknown, fallback: string) => error instanceof Error ? error.message : typeof error === 'string' ? error : fallback
+
+/** StoreIcon names for the account stores. */
+const iconName: Record<AccountStore, string> = { steam: 'Steam', gog: 'GOG', battlenet: 'Battle.net', humble: 'Humble', xbox: 'Xbox', epic: 'Epic Games' }
+
+/**
+ * Store account statuses for the whole window (kept by App), with the calls that change them.
+ * The backend sends `accounts:changed` after a sign-in ends; a new notice is also shown as a toast.
+ * `onChanged` runs after every change (App reloads the API key flags: a Steam sign-in saves the SteamID).
+ */
+export function useAccounts(say: (text: string) => void, onChanged: () => void) {
+  const [statuses, setStatuses] = useState<AccountStatus[]>([])
+  const [busy, setBusy] = useState<AccountStore | null>(null)
+  const sayRef = useRef(say); sayRef.current = say
+  const changedRef = useRef(onChanged); changedRef.current = onChanged
+  const seen = useRef(new Map<AccountStore, number>())
+  const take = useCallback((next: AccountStatus[], announce: boolean) => {
+    for (const status of next) {
+      const at = status.notice?.at ?? 0
+      const before = seen.current.get(status.store)
+      seen.current.set(status.store, at)
+      if (announce && status.notice && before !== undefined && at > before) sayRef.current(status.notice.message)
+    }
+    setStatuses(next)
+    changedRef.current()
+  }, [])
+  useEffect(() => {
+    void window.lobby.accounts.status().then(next => take(next, false)).catch(() => undefined)
+    return window.lobby.accounts.onChanged(next => take(next, true))
+  }, [take])
+  const run = async (store: AccountStore, action: () => Promise<AccountStatus[]>, fallback: string) => {
+    setBusy(store)
+    try { take(await action(), true); return true }
+    catch (error) { sayRef.current(errorText(error, fallback)); return false }
+    finally { setBusy(null) }
+  }
+  return {
+    statuses, busy,
+    get: (store: AccountStore) => statuses.find(status => status.store === store),
+    signIn: (store: AccountStore) => run(store, () => window.lobby.accounts.signIn(store), 'Could not open the sign-in window'),
+    cancel: (store: AccountStore) => run(store, () => window.lobby.accounts.cancelSignIn(), 'Could not cancel the sign-in'),
+    signOut: (store: AccountStore) => run(store, () => window.lobby.accounts.signOut(store), 'Could not sign out'),
+    setMode: (store: AccountStore, mode: AccountMode) => run(store, () => window.lobby.accounts.setMode(store, mode), 'Could not change the mode'),
+    sync: (store: AccountStore) => run(store, () => window.lobby.accounts.sync(store), 'Sync failed')
+  }
+}
+export type Accounts = ReturnType<typeof useAccounts>
+
+/** The note every sign-in place shows: whose window it is and where the password goes. */
+export function SignInNote() {
+  return <p className="account-note"><ShieldCheck size={14} aria-hidden="true" /><span>The sign-in window is Game Lobby's own window showing the store's real sign-in page. Your password goes only to the store; Game Lobby never sees or stores it. Nothing from the window is kept after it closes.</span></p>
+}
+
+/** Steam sign-in with its states (used by Settings → Accounts and the first-time setup). */
+export function SteamSignIn({ accounts, status }: { accounts: Accounts; status: AccountStatus }) {
+  const busy = accounts.busy === 'steam'
+  if (status.signingIn) return <div className="account-actions"><span className="account-waiting" role="status">Finish signing in in the Steam window…</span><button type="button" className="secondary-button" disabled={busy} onClick={() => void accounts.cancel('steam')}>Cancel sign-in</button></div>
+  return <div className="account-actions"><button type="button" className={status.signedIn ? 'secondary-button' : 'primary-button'} disabled={busy} onClick={() => void accounts.signIn('steam')}><LogIn size={14} /> {status.signedIn ? 'Sign in again' : 'Sign in through Steam'}</button></div>
+}
+
+function AccountRow({ status, accounts }: { status: AccountStatus; accounts: Accounts }) {
+  const { openSheet } = useKeysUi()
+  const [confirming, setConfirming] = useState(false)
+  const line = accountLine(status)
+  const busy = accounts.busy === status.store
+  return <div className="account-row">
+    <span className="store-badge small"><StoreIcon store={iconName[status.store]} /></span>
+    <div className="account-main">
+      <div className="key-row-title"><b>{status.name}</b><span className={'key-pill ' + (line.state === 'ok' ? 'set' : line.state === 'partial' ? 'partial' : '')}>{line.pill}</span></div>
+      <small>{line.label}</small>
+      {status.last && status.signedIn && <small className={status.last.ok ? 'account-last' : 'key-row-problem'}>{status.last.ok ? '✓' : '✗'} {status.last.message} · {new Date(status.last.checkedAt).toLocaleString()}</small>}
+      {status.notice && !status.notice.ok && <small className="key-row-problem" role="status">✗ {status.notice.message}</small>}
+      {status.available && <>
+        {!status.signedIn && <SteamSignIn accounts={accounts} status={status} />}
+        {status.signedIn && <div className="account-actions">
+          <label className="account-mode">Use<select value={status.mode} disabled={busy || status.signingIn} aria-label={'How Game Lobby uses ' + status.name} onChange={event => void accounts.setMode(status.store, event.target.value as AccountMode)}>
+            <option value="account">Account: owned games and playtime</option>
+            <option value="installed">Installed files only</option>
+          </select></label>
+          {status.store === 'steam' && !status.keySet && <button type="button" className="primary-button" onClick={() => openSheet('steam')}>Add API key</button>}
+          <button type="button" className="secondary-button" disabled={busy || !canSync(status)} onClick={() => void accounts.sync(status.store)}><RefreshCw size={13} className={busy ? 'spin' : ''} /> Sync now</button>
+          {confirming
+            ? <span className="confirm-group"><span>Sign out and remove the not-installed games it added?</span><button type="button" className="secondary-button danger" disabled={busy} onClick={() => { setConfirming(false); void accounts.signOut(status.store) }}>Sign out</button><button type="button" className="secondary-button" onClick={() => setConfirming(false)}>Cancel</button></span>
+            : <button type="button" className="secondary-button" disabled={busy} onClick={() => setConfirming(true)}>Sign out</button>}
+        </div>}
+        {status.signedIn && status.signingIn && <SteamSignIn accounts={accounts} status={status} />}
+      </>}
+    </div>
+  </div>
+}
+
+/** Settings → Accounts: every store account, its status, sign in / out, mode and sync. */
+export function AccountsSection({ accounts, onRunSetup }: { accounts: Accounts; onRunSetup(): void }) {
+  return <>
+    <div className="settings-card">
+      <div className="card-heading"><div><h3>Store accounts</h3><p>Optional. Without an account Game Lobby lists the games installed on this PC. With Steam signed in and a free Web API key it also lists the games you own but haven't installed, with Steam's playtime. Signing out removes the not-installed games it added; games you played, rated or customized stay.</p></div></div>
+      {accounts.statuses.map(status => <AccountRow key={status.store} status={status} accounts={accounts} />)}
+      <SignInNote />
+    </div>
+    <div className="settings-card">
+      <h3>First-time setup</h3>
+      <p className="muted-text">Walk through stores, library folders and optional keys again. Nothing changes until you choose it.</p>
+      <div className="settings-actions"><button type="button" className="secondary-button" onClick={onRunSetup}>Run setup again</button></div>
+    </div>
+  </>
+}

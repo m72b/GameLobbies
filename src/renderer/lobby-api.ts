@@ -2,7 +2,7 @@
 // Replaces the Electron preload script; the API shape is unchanged.
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
-import type { ArtChangedEvent, StorageProgress, IgdbBulkProgress, IgdbMetadataEvent, LobbyAPI, LocalScanProgress, LocalScanSummary, RunningGame, Settings, SettingsSection, SteamGridDbFetchSummary, UpdateProgress } from '../shared/types'
+import type { AccountStatus, ArtChangedEvent, StorageProgress, IgdbBulkProgress, IgdbMetadataEvent, LobbyAPI, LocalScanProgress, LocalScanSummary, RunningGame, Settings, SettingsSection, SteamGridDbFetchSummary, UpdateProgress } from '../shared/types'
 
 async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   try {
@@ -146,6 +146,19 @@ const api: LobbyAPI = {
     status: () => call('steam_owned_status'),
     save: (key, steamId) => call('steam_owned_save', { key, steamId }),
     remove: () => call('steam_owned_remove')
+  },
+  accounts: {
+    status: () => call('accounts_status'),
+    signIn: store => call('accounts_sign_in', { store }),
+    cancelSignIn: () => call('accounts_cancel_sign_in'),
+    signOut: store => call('accounts_sign_out', { store }),
+    setMode: (store, mode) => call('accounts_set_mode', { store, mode }),
+    sync: store => call('accounts_sync', { store }),
+    onChanged: callback => subscribe<AccountStatus[]>('accounts:changed', callback)
+  },
+  setup: {
+    get: () => call('setup_get'),
+    save: patch => call('setup_save', { patch })
   },
   tracking: {
     status: () => call('tracking_status'),

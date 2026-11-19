@@ -1,10 +1,10 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import Fuse from 'fuse.js'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { BarChart3, CloudDownload, EyeOff, Gamepad2, HardDrive, Heart, History, Library, MoreHorizontal, Pencil, Play, Plus, Search, Settings2, Star, X } from 'lucide-react'
+import { BarChart3, CircleUserRound, CloudDownload, EyeOff, Gamepad2, HardDrive, Heart, History, Library, MoreHorizontal, Pencil, Play, Plus, Search, Settings2, Star, X } from 'lucide-react'
 import { StoreIcon } from './store-icons'
 import { GlMark } from './gl-mark'
-import type { CustomLauncher, Game, LauncherTargetKind, RunningGame, Settings, Store as StoreName, SteamGridDbCover, StoreTime, UpdateInfo } from '../shared/types'
+import type { CustomLauncher, Game, LauncherTargetKind, RunningGame, Settings, SetupInfo, Store as StoreName, SteamGridDbCover, StoreTime, UpdateInfo } from '../shared/types'
 import { effectiveLastPlayed, effectiveSeconds } from '../shared/store-time'
 import { defaultSettings } from '../shared/defaults'
 import { applyTheme } from './theme'
@@ -17,6 +17,8 @@ import { RecentShelf } from './recent-shelf'
 import { GamePage, type GamePageActions } from './game-page'
 import { SettingsView, anchorFor, defaultPage, sectionFor, type SettingsPage } from './settings-view'
 import { ApiKeysSheet, KeysUiContext, useApiKeys } from './api-keys'
+import { useAccounts } from './accounts'
+import { SetupView } from './setup-view'
 import type { KeyId } from '../shared/api-keys'
 import { applyMotion, currentMotion, durationFor, play } from './motion'
 import { beginClose, captureLibrary, fadeIn, originOf, zoomOut, type ZoomOrigin } from './zoom'
@@ -101,6 +103,9 @@ export default function App() {
   const [settingsPage, setSettingsPage] = useState<SettingsPage>(defaultPage)
   const [settingsAnchor, setSettingsAnchor] = useState<string | undefined>()
   const [sheet, setSheet] = useState<{ open: boolean; focus?: KeyId }>({ open: false })
+  // First-time setup: the backend says whether to show it (fresh install) or offer it (banner).
+  const [setupInfo, setSetupInfo] = useState<SetupInfo | null>(null)
+  const [setupOpen, setSetupOpen] = useState(false)
   // Where the game page zooms from, and what it zooms back to; read once, when the page opens or closes.
   const zoomRef = useRef<ZoomOrigin | null>(null)
   const closingRef = useRef<{ id: string; rect: Rect; src?: string } | null>(null)
@@ -139,6 +144,25 @@ export default function App() {
     }
   }
   const keys = useApiKeys(notice)
+  const accounts = useAccounts(notice, () => void keys.reload())
+  useEffect(() => {
+    void window.lobby.setup.get().then(info => { setSetupInfo(info); if (info.show) setSetupOpen(true) }).catch(() => undefined)
+  }, [])
+  /** Shows the first-time setup in place of the library (from the banner or Settings → Accounts). */
+  const openSetup = async () => {
+    try { setSetupInfo(await window.lobby.setup.get()) } catch { /* keep what we have */ }
+    setOpenId(null); setSettingsOpen(false); setStatsOpen(false); setStorageOpen(false)
+    setSetupOpen(true)
+  }
+  const closeSetup = (scanNow: boolean) => {
+    setSetupOpen(false)
+    setSetupInfo(current => current ? { ...current, show: false, banner: false } : current)
+    if (scanNow) void scan()
+  }
+  const dismissSetupBanner = async () => {
+    setSetupInfo(current => current ? { ...current, banner: false } : current)
+    try { await window.lobby.setup.save({ skipped: true }) } catch (error) { notice(error instanceof Error ? error.message : 'Could not save') }
+  }
   /** `from`: the clicked card or shelf item; the page zooms out of its poster. */
   const openGame = (game: Game, from?: Element | null) => {
     if (!settingsOpen && !openId) savedScroll.current = scrollRef.current?.scrollTop ?? savedScroll.current
@@ -146,6 +170,7 @@ export default function App() {
     if (zoomRef.current && !openId && !settingsOpen && !storageOpen && !statsOpen) captureLibrary(mainRef.current)
     setSettingsOpen(false)
     setStatsOpen(false)
+    setSetupOpen(false)
     setOpenId(game.id)
     setMenu(null)
   }
@@ -166,6 +191,7 @@ export default function App() {
     setStorageOpen(false)
     setStatsOpen(false)
     if (page) { setSettingsPage(page); setSettingsAnchor(anchorFor(id ?? null)) }
+    setSetupOpen(false)
     setSettingsOpen(true)
   }
   openSettingsRef.current = openSettings
@@ -176,6 +202,7 @@ export default function App() {
     setOpenId(null)
     setSettingsOpen(false)
     setStorageOpen(false)
+    setSetupOpen(false)
     setStatsOpen(true)
   }
   const closeStats = () => setStatsOpen(false)
@@ -429,7 +456,7 @@ export default function App() {
   const openGameData = openId ? games.find(game => game.id === openId) : undefined
   const pageOpen = !!openGameData && !settingsOpen
   // The library is out of view while a game page or Settings is showing.
-  const awayFromLibrary = pageOpen || settingsOpen || statsOpen
+  const awayFromLibrary = pageOpen || settingsOpen || statsOpen || setupOpen
   const wasAway = useRef(false)
   useLayoutEffect(() => {
     if (wasAway.current && !awayFromLibrary && scrollRef.current) {
@@ -596,7 +623,7 @@ export default function App() {
       <button className="title-action" onClick={() => window.lobby.window.toggleMaximize()} aria-label="Maximize">□</button>
       <button className="title-action close" onClick={() => window.lobby.window.close()} aria-label="Close">×</button>
     </header>
-    <aside className={'rail ' + (collapsed ? 'compact' : '')}>
+    <aside className={'rail ' + (collapsed ? 'compact' : '')} onClickCapture={() => { if (setupOpen) setSetupOpen(false) }}>
       <button className="rail-button" onClick={() => setCollapsed(!collapsed)} title="Menu"><GlMark size={16} className="gl-mark" /></button>
       <button className="rail-button search-button" onClick={() => searchRef.current?.focus()} title="Search"><Search /></button>
       <div className="rail-sep" />
@@ -620,12 +647,19 @@ export default function App() {
         <button className="rail-button" title="Quit" onClick={() => window.lobby.app.quit()}><X /></button>
       </div>
     </aside>
-    <main ref={mainRef} className={'main' + (pageOpen ? ' page-open' : '') + (settingsOpen ? ' settings-open' : '') + (statsOpen && !pageOpen && !settingsOpen ? ' stats-open' : '')}>
-      {settingsOpen && <SettingsView settings={settings} onSettings={setSettings} say={notice} keys={keys} page={settingsPage} onPage={setSettingsPage} anchor={settingsAnchor} onAnchorDone={() => setSettingsAnchor(undefined)} onClose={closeSettings} />}
-      {pageOpen && openGameData && <GamePage origin={zoomRef.current} game={openGameData} index={Math.max(0, games.findIndex(game => game.id === openGameData.id))} settings={settings} launchers={launchers} running={runningById.get(openGameData.id)} libraryVersion={libraryVersion} actions={pageActions} />}
-      {!pageOpen && !settingsOpen && statsOpen && <StatsView say={notice} onClose={closeStats} onOpenGame={id => { const game = games.find(item => item.id === id); if (game) openGame(game) }} />}
-      {!pageOpen && !settingsOpen && !statsOpen && storageOpen && <StorageView notice={notice} onClose={() => setStorageOpen(false)} onOpen={id => { const game = games.find(item => item.id === id); if (game) { setStorageOpen(false); openGame(game) } }} />}
-      {!pageOpen && !settingsOpen && !statsOpen && !storageOpen && <>
+    <main ref={mainRef} className={'main' + (pageOpen ? ' page-open' : '') + (settingsOpen || setupOpen ? ' settings-open' : '') + (statsOpen && !pageOpen && !settingsOpen ? ' stats-open' : '')}>
+      {setupOpen && setupInfo && <SetupView info={setupInfo} accounts={accounts} keys={keys} say={notice} onDone={closeSetup} />}
+      {!setupOpen && settingsOpen && <SettingsView settings={settings} onSettings={setSettings} say={notice} keys={keys} accounts={accounts} onRunSetup={() => void openSetup()} page={settingsPage} onPage={setSettingsPage} anchor={settingsAnchor} onAnchorDone={() => setSettingsAnchor(undefined)} onClose={closeSettings} />}
+      {!setupOpen && pageOpen && openGameData && <GamePage origin={zoomRef.current} game={openGameData} index={Math.max(0, games.findIndex(game => game.id === openGameData.id))} settings={settings} launchers={launchers} running={runningById.get(openGameData.id)} libraryVersion={libraryVersion} actions={pageActions} />}
+      {!setupOpen && !pageOpen && !settingsOpen && statsOpen && <StatsView say={notice} onClose={closeStats} onOpenGame={id => { const game = games.find(item => item.id === id); if (game) openGame(game) }} />}
+      {!setupOpen && !pageOpen && !settingsOpen && !statsOpen && storageOpen && <StorageView notice={notice} onClose={() => setStorageOpen(false)} onOpen={id => { const game = games.find(item => item.id === id); if (game) { setStorageOpen(false); openGame(game) } }} />}
+      {!setupOpen && !pageOpen && !settingsOpen && !statsOpen && !storageOpen && <>
+      {setupInfo?.banner && <div className="setup-banner" role="status">
+        <CircleUserRound size={16} aria-hidden="true" />
+        <span><b>Add store accounts</b> · Sign in to Steam to also list the games you own but haven't installed. Installed games are found without an account.</span>
+        <button type="button" className="primary-button" onClick={() => void openSetup()}>Set up</button>
+        <button type="button" className="update-notice-close" title="Dismiss" aria-label="Dismiss the store accounts banner" onClick={() => void dismissSetupBanner()}><X size={14} /></button>
+      </div>}
       <div className="toolbar">
         <div><div className="eyebrow">YOUR COLLECTION</div><h1>{view === 'All Games' ? (store === 'All Games' ? 'All games' : activeLauncher ? activeLauncher.name : store) : view}</h1></div>
         <div className="toolbar-actions">
