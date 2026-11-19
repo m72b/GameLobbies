@@ -559,6 +559,10 @@ pub fn protocol<R: Runtime>(
     ctx: UriSchemeContext<'_, R>,
     request: Request<Vec<u8>>,
 ) -> Response<Cow<'static, [u8]>> {
+    // Only Game Lobby's own window reads screenshots; a sign-in window's remote page gets 403.
+    if !crate::windows::is_main_label(ctx.webview_label()) {
+        return crate::windows::forbidden_response();
+    }
     let not_found = || {
         Response::builder()
             .status(StatusCode::NOT_FOUND)

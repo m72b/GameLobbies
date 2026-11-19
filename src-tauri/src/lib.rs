@@ -64,6 +64,10 @@ fn cover_protocol<R: Runtime>(
     ctx: UriSchemeContext<'_, R>,
     request: Request<Vec<u8>>,
 ) -> Response<Cow<'static, [u8]>> {
+    // Only Game Lobby's own window reads local files; a sign-in window's remote page gets 403.
+    if !windows::is_main_label(ctx.webview_label()) {
+        return windows::forbidden_response();
+    }
     let not_found = || {
         Response::builder()
             .status(StatusCode::NOT_FOUND)
@@ -133,6 +137,22 @@ fn with_single_instance(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<t
             log::warn!("Could not show the main window: {e}");
         }
     }))
+}
+
+/// Runs a command only when it comes from the main window (see [`windows::require_main`]). The
+/// command ACL already limits every app command to `main`; this check does not depend on the
+/// capability files and covers every command without touching each one.
+fn main_window_only<F>(handler: F) -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static
+where
+    F: Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static,
+{
+    move |invoke| {
+        if !windows::is_main_label(invoke.message.webview_ref().label()) {
+            invoke.resolver.reject(windows::NOT_MAIN);
+            return true;
+        }
+        handler(invoke)
+    }
 }
 
 pub fn run() {
@@ -217,7 +237,7 @@ pub fn run() {
             covercache::spawn_startup(app.handle());
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
+        .invoke_handler(main_window_only(tauri::generate_handler![
             commands::window_minimize,
             commands::window_toggle_maximize,
             commands::window_close,
@@ -358,15 +378,135 @@ pub fn run() {
             updater::updates_auto_check,
             updater::updates_last,
             updater::updates_install,
-        ])
+        ]))
         .run(tauri::generate_context!())
         .expect("error while running Game Lobby");
 }
 
 #[cfg(test)]
+mod command_list {
+    include!("../command_list.rs");
+}
+
+#[cfg(test)]
 mod tests {
     use super::cover_file;
+    use std::collections::BTreeSet;
     use std::path::Path;
+
+    /// The command names in `generate_handler![...]` (the last path segment of each entry).
+    fn handler_commands() -> Vec<String> {
+        let source = include_str!("lib.rs");
+        let start = source.find("generate_handler![").unwrap() + "generate_handler![".len();
+        let end = start + source[start..].find(']').unwrap();
+        source[start..end]
+            .split(',')
+            .map(str::trim)
+            .filter(|entry| !entry.is_empty())
+            .map(|entry| entry.rsplit("::").next().unwrap().to_string())
+            .collect()
+    }
+
+    fn capabilities() -> Vec<(String, serde_json::Value)> {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("capabilities");
+        let mut found = Vec::new();
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            let text = std::fs::read_to_string(&path).unwrap();
+            let value = serde_json::from_str(&text)
+                .unwrap_or_else(|e| panic!("{} is not JSON: {e}", path.display()));
+            found.push((path.display().to_string(), value));
+        }
+        assert!(!found.is_empty());
+        found
+    }
+
+    #[test]
+    fn every_registered_command_is_in_the_app_manifest() {
+        let handler = handler_commands();
+        let listed: Vec<String> = super::command_list::COMMANDS
+            .iter()
+            .map(|c| c.to_string())
+            .collect();
+        assert!(handler.len() > 100, "the handler list was not parsed");
+        let unique: BTreeSet<&String> = handler.iter().collect();
+        assert_eq!(unique.len(), handler.len(), "a command is registered twice");
+        assert_eq!(
+            handler.iter().collect::<BTreeSet<_>>(),
+            listed.iter().collect::<BTreeSet<_>>(),
+            "command_list.rs and generate_handler! differ"
+        );
+    }
+
+    /// Capabilities only ever name the main window, never allow remote origins, and grant
+    /// exactly one `allow-<command>` per listed command.
+    #[test]
+    fn capabilities_cover_only_the_main_window() {
+        let mut granted = BTreeSet::new();
+        for (path, capability) in capabilities() {
+            let object = capability.as_object().unwrap();
+            assert!(!object.contains_key("remote"), "{path} allows remote URLs");
+            assert!(!object.contains_key("webviews"), "{path} names webviews");
+            assert!(
+                !object.contains_key("platforms") || object["platforms"].is_array(),
+                "{path}"
+            );
+            let windows = object["windows"].as_array().unwrap();
+            assert!(!windows.is_empty(), "{path}");
+            for window in windows {
+                assert_eq!(window, "main", "{path} grants a window other than main");
+            }
+            for permission in object["permissions"].as_array().unwrap() {
+                let id = permission
+                    .as_str()
+                    .unwrap_or_else(|| panic!("{path}: scoped permissions are not used"));
+                assert!(!id.contains('*'), "{path}: {id}");
+                if let Some(command) = id.strip_prefix("allow-") {
+                    assert!(granted.insert(command.replace('-', "_")), "{id} twice");
+                } else {
+                    assert!(
+                        [
+                            "core:event:allow-listen",
+                            "core:event:allow-unlisten",
+                            "core:window:allow-start-dragging",
+                            "core:window:allow-internal-toggle-maximize",
+                        ]
+                        .contains(&id),
+                        "{path}: unexpected permission {id}"
+                    );
+                }
+            }
+        }
+        let listed: BTreeSet<String> = super::command_list::COMMANDS
+            .iter()
+            .map(|c| c.to_string())
+            .collect();
+        assert_eq!(granted, listed, "capabilities and command_list.rs differ");
+    }
+
+    #[test]
+    fn the_build_script_uses_the_shared_command_list() {
+        let build = include_str!("../build.rs");
+        assert!(build.contains(r#"include!("command_list.rs")"#));
+        assert!(build.contains(".commands(COMMANDS)"));
+        assert!(build.contains("cargo:rerun-if-changed=command_list.rs"));
+    }
+
+    /// Every command passes the main-window check, and both local protocols refuse other
+    /// webviews before they touch the disk.
+    #[test]
+    fn commands_and_local_protocols_are_for_the_main_window_only() {
+        let source = include_str!("lib.rs");
+        assert!(source.contains(".invoke_handler(main_window_only(tauri::generate_handler!["));
+        let cover = &source[source.find("fn cover_protocol").unwrap()..];
+        let guard = cover.find("is_main_label(ctx.webview_label())").unwrap();
+        assert!(guard < cover.find("try_state").unwrap());
+        let shots = include_str!("screenshots.rs");
+        let protocol = &shots[shots.find("pub fn protocol").unwrap()..];
+        let guard = protocol.find("is_main_label(ctx.webview_label())").unwrap();
+        assert!(guard < protocol.find("try_state").unwrap());
+        assert!(guard < protocol.find("std::fs::read").unwrap());
+    }
 
     #[test]
     fn cover_requests_resolve_to_a_bare_name_in_the_covers_folder() {

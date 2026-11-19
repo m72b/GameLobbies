@@ -6,6 +6,23 @@ use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use url::Url;
 
 pub const MAIN: &str = "main";
+
+/// Whether a webview may use the app's commands and local protocols: only Game Lobby's own
+/// window. Sign-in windows (`signin-<store>`) show remote store pages and get neither.
+pub fn is_main_label(label: &str) -> bool {
+    label == MAIN
+}
+
+/// The error for a command called from another webview.
+pub const NOT_MAIN: &str = "This window may not use Game Lobby's commands.";
+
+/// The `403` a local protocol (`lobby-cover`, `lobby-shot`) returns to any webview but `main`.
+pub fn forbidden_response() -> tauri::http::Response<std::borrow::Cow<'static, [u8]>> {
+    tauri::http::Response::builder()
+        .status(tauri::http::StatusCode::FORBIDDEN)
+        .body(std::borrow::Cow::Borrowed(&b"Forbidden"[..]))
+        .unwrap()
+}
 const PAGES: [&str; 2] = ["/", "/index.html"];
 const EXTERNAL_HOSTS: [&str; 11] = [
     "playnite.link",
@@ -123,6 +140,15 @@ mod tests {
         // Settings is part of the main window now; its old page no longer exists.
         assert!(!page("http://tauri.localhost/settings.html"));
         assert!(!page("https://example.com/index.html"));
+    }
+
+    #[test]
+    fn only_the_main_window_is_trusted() {
+        assert!(is_main_label("main"));
+        for label in ["signin-steam", "signin-gog", "Main", "main ", ""] {
+            assert!(!is_main_label(label), "{label}");
+        }
+        assert_eq!(forbidden_response().status(), 403);
     }
 
     #[test]
