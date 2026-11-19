@@ -496,6 +496,34 @@ mod tests {
         assert_eq!(granted, listed, "capabilities and command_list.rs differ");
     }
 
+    fn rust_sources(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                rust_sources(&path, out);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                out.push(path);
+            }
+        }
+    }
+
+    /// Tauri exempts IPC `Channel` callbacks from the command ACL, so the app must not use
+    /// them (a sign-in window could otherwise reach one).
+    #[test]
+    fn no_ipc_channels_are_used() {
+        let needle = ["ipc", "::", "Channel"].concat();
+        let mut files = Vec::new();
+        rust_sources(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+            &mut files,
+        );
+        assert!(files.len() > 20);
+        for file in files {
+            let text = std::fs::read_to_string(&file).unwrap();
+            assert!(!text.contains(&needle), "{} uses {needle}", file.display());
+        }
+    }
+
     #[test]
     fn the_build_script_uses_the_shared_command_list() {
         let build = include_str!("../build.rs");

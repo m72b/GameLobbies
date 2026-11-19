@@ -639,8 +639,14 @@ pub async fn steam_owned_remove(
 /// in Settings → Accounts).
 pub async fn remove_all(app: &AppHandle) -> Result<usize> {
     let state = app.state::<AppState>();
-    crate::secrets::clear_steam_owned_credentials(&state)?;
+    // Under the scan lock, like a sign-in saving its SteamID: the two never interleave, and a
+    // sign-in that started earlier sees the new generation and saves nothing.
     let _guard = state.scan_lock.lock().await;
+    state
+        .accounts
+        .steam_generation
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    crate::secrets::clear_steam_owned_credentials(&state)?;
     let deleted = {
         let mut conn = state.db.lock();
         let deleted = undo(&mut conn)?;

@@ -201,6 +201,11 @@ pub fn has_steam_owned_steam_id(state: &AppState) -> Result<bool> {
     has(state, STEAM_OWNED_STEAM_ID)
 }
 
+/// The saved SteamID64, if any (a Steam sign-in compares it with the new account). Backend only.
+pub fn get_steam_owned_steam_id(state: &AppState) -> Result<Option<String>> {
+    read(state, STEAM_OWNED_STEAM_ID, "Steam Web API")
+}
+
 /// The key and SteamID64, or `None` unless both are saved. Backend only; never sent to the
 /// renderer, logged or put in an error message.
 pub fn get_steam_owned_credentials(state: &AppState) -> Result<Option<(String, String)>> {

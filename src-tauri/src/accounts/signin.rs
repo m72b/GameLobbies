@@ -6,8 +6,11 @@
 //! - WebView2 InPrivate (`incognito`): no profile, cookies or cache on disk, a fresh session for
 //!   every sign-in. The window refuses to open when InPrivate is not in effect;
 //! - top-level navigation only to https pages of the store's sign-in hosts ([`navigation_allowed`]),
-//!   popups and downloads denied, external app links (`steam://`, `mailto:`) cancelled, devtools
-//!   off, drag and drop off, no initialization script;
+//!   checked twice (Tauri's handler and a native WebView2 one, which also cancels URIs `url`
+//!   cannot parse), popups, downloads and permission requests denied, external app links
+//!   (`steam://`, `mailto:`) cancelled, devtools, context menu, browser shortcuts and drag and
+//!   drop off. No app script is added; Tauri's own core scripts (IPC bridge, `freezePrototype`)
+//!   are injected into every webview, but every call from this one is refused;
 //! - the title shows the host of the page being shown;
 //! - one sign-in at a time, ended by its result, by closing the window (cancelled), by
 //!   `accounts_cancel_sign_in` or after ten minutes. Rust always closes the window, and the
@@ -34,8 +37,13 @@ pub struct Flight {
     pub store: AccountStore,
     /// Steam OpenID: the nonce and `return_to` this sign-in expects back.
     pub expected: Expected,
-    /// The answer was caught and is being checked; closing the window no longer cancels.
+    /// The answer was caught and is being checked; closing the window no longer cancels, and
+    /// the timeout leaves it to finish.
     pub verifying: bool,
+    /// The store page was requested: from then on `about:blank` is no longer allowed.
+    pub loaded: bool,
+    /// [`super::AccountsState::steam_generation`] when the sign-in started.
+    pub generation: u64,
     /// The loopback listener ([`ReturnMode::Loopback`] only).
     listener: Option<tauri::async_runtime::JoinHandle<()>>,
 }
@@ -100,6 +108,34 @@ pub fn navigation_allowed(url: &Url, hosts: &[&str]) -> bool {
         && matches!(url.host(), Some(url::Host::Domain(host)) if host_allowed(host, hosts))
 }
 
+/// The decision of the native WebView2 navigation handler, which sees every top-level navigation
+/// even when Tauri's own handler lets one through unchecked (it allows URIs that `url` cannot
+/// parse). Allowed: `about:blank` before the store page was requested, and pages
+/// [`navigation_allowed`] accepts. Everything else, including Steam's return address (caught by
+/// [`guard`]), is cancelled.
+pub fn native_nav_ok(uri: &str, hosts: &[&str], blank_ok: bool) -> bool {
+    let Ok(url) = Url::parse(uri) else {
+        return false;
+    };
+    if uri == "about:blank" {
+        return blank_ok;
+    }
+    navigation_allowed(&url, hosts)
+}
+
+/// Whether flight `id` may still show `about:blank` (only before its store page was requested).
+fn blank_ok(app: &AppHandle, id: u64) -> bool {
+    lock(&app.state::<AppState>().accounts.flight)
+        .as_ref()
+        .is_some_and(|f| f.id == id && !f.loaded)
+}
+
+/// Whether the ten-minute timeout ends flight `id` now: not while its answer is being checked
+/// (that ends on its own within the request timeout).
+fn times_out(flight: Option<&Flight>, id: u64) -> bool {
+    flight.is_some_and(|f| f.id == id && !f.verifying)
+}
+
 /// What a blocked navigation is logged as: scheme and host only (never a path or query).
 fn describe(url: &Url) -> String {
     format!("{}://{}", url.scheme(), url.host_str().unwrap_or("-"))
@@ -113,7 +149,9 @@ fn title(store: AccountStore, host: &str) -> String {
 pub async fn start(app: &AppHandle, store: AccountStore) -> Result<(), String> {
     let state = app.state::<AppState>();
     // One flight: a second request for the same store shows its window; another store waits.
-    if let Some(running) = lock(&state.accounts.flight).as_ref().map(|f| f.store) {
+    // The lock is released before any window call.
+    let running = lock(&state.accounts.flight).as_ref().map(|f| f.store);
+    if let Some(running) = running {
         if running == store {
             if let Some(window) = app.get_webview_window(&label(store)) {
                 let _ = window.unminimize();
@@ -139,6 +177,7 @@ pub async fn start(app: &AppHandle, store: AccountStore) -> Result<(), String> {
     let expected = Expected::new(&base, steam_openid::new_nonce());
     let start = start_url(store, &expected).ok_or_else(|| store.unavailable())?;
     let id = state.accounts.next_flight.fetch_add(1, Ordering::Relaxed) + 1;
+    let generation = state.accounts.steam_generation.load(Ordering::SeqCst);
     {
         let mut flight = lock(&state.accounts.flight);
         if flight.is_some() {
@@ -149,6 +188,8 @@ pub async fn start(app: &AppHandle, store: AccountStore) -> Result<(), String> {
             store,
             expected,
             verifying: false,
+            loaded: false,
+            generation,
             listener: None,
         });
     }
@@ -172,8 +213,17 @@ pub async fn start(app: &AppHandle, store: AccountStore) -> Result<(), String> {
     let handle = app.clone();
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(FLIGHT_TIMEOUT).await;
-        finish(&handle, id, Err(SignInError::TimedOut));
+        let due = times_out(
+            lock(&handle.state::<AppState>().accounts.flight).as_ref(),
+            id,
+        );
+        if due {
+            finish(&handle, id, Err(SignInError::TimedOut));
+        }
     });
+    if let Some(flight) = lock(&state.accounts.flight).as_mut().filter(|f| f.id == id) {
+        flight.loaded = true;
+    }
     if let Err(e) = window.navigate(start) {
         log::warn!("Could not load the sign-in page: {e}");
         finish(app, id, Err(SignInError::Window("the page did not load.")));
@@ -233,7 +283,7 @@ async fn open_window(
             window_closed(&closed, id);
         }
     });
-    if let Err(e) = harden(&window).await {
+    if let Err(e) = harden(&window, app, id, store).await {
         let _ = window.destroy();
         return Err(e);
     }
@@ -243,7 +293,7 @@ async fn open_window(
 /// The navigation guard (runs on the UI thread; never blocks).
 fn guard(app: &AppHandle, id: u64, store: AccountStore, url: &Url) -> bool {
     if url.as_str() == "about:blank" {
-        return true;
+        return blank_ok(app, id);
     }
     let is_return = lock(&app.state::<AppState>().accounts.flight)
         .as_ref()
@@ -264,12 +314,21 @@ fn guard(app: &AppHandle, id: u64, store: AccountStore, url: &Url) -> bool {
     false
 }
 
-/// Takes the answer of flight `id` once: closes the window and checks it in the background.
+/// Takes the answer of flight `id` once: closes the window and checks it in the background. A
+/// return without exactly this sign-in's nonce is ignored (its navigation stays cancelled), so
+/// it can't use up the sign-in.
 fn caught_return(app: &AppHandle, id: u64, url: Url) {
     let state = app.state::<AppState>();
     let (store, expected) = {
         let mut flight = lock(&state.accounts.flight);
         match flight.as_mut() {
+            Some(f) if f.id == id && !f.verifying && !f.expected.carries_nonce(&url) => {
+                log::info!(
+                    "{} sign-in: ignored an answer for another sign-in.",
+                    f.store.name()
+                );
+                return;
+            }
             Some(f) if f.id == id && !f.verifying => {
                 f.verifying = true;
                 (f.store, f.expected.clone())
@@ -354,38 +413,13 @@ fn finish(app: &AppHandle, id: u64, result: Result<String, SignInError>) {
     }
     let store = flight.store;
     match result {
-        Ok(steam_id) => match signed_in(&state, &steam_id) {
-            Ok(key_set) => {
-                log::info!("{} sign-in finished.", store.name());
-                state.accounts.set_notice(
-                    store,
-                    true,
-                    if key_set {
-                        "Signed in to Steam.".into()
-                    } else {
-                        "Signed in to Steam. Add a free Steam Web API key to list the games you own."
-                            .into()
-                    },
-                );
-                if key_set {
-                    let app = app.clone();
-                    tauri::async_runtime::spawn(async move {
-                        if let Err(e) = crate::steam_owned::sync_now(&app).await {
-                            log::warn!("Steam owned games: {e:#}");
-                        }
-                        notify(&app);
-                    });
-                }
-            }
-            Err(e) => {
-                log::error!("Could not save the Steam sign-in: {e:#}");
-                state.accounts.set_notice(
-                    store,
-                    false,
-                    "The sign-in worked but could not be saved (Windows secure storage).".into(),
-                );
-            }
-        },
+        Ok(steam_id) => {
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                save_sign_in(&app, store, flight.generation, &steam_id).await;
+            });
+            return;
+        }
         Err(e) => {
             let message = e.message();
             if e == SignInError::Cancelled {
@@ -399,29 +433,113 @@ fn finish(app: &AppHandle, id: u64, result: Result<String, SignInError>) {
     notify(app);
 }
 
-/// Stores the SteamID64 from a verified sign-in. True when the Web API key is saved too.
-fn signed_in(state: &AppState, steam_id: &str) -> anyhow::Result<bool> {
-    crate::secrets::set_steam_owned_credentials(state, "", steam_id)?;
-    {
-        let conn = state.db.lock();
-        // New account: the import may have been paused or throttled for the old one.
-        super::resume_steam_import(&conn)?;
-        let mut import = crate::steam_owned::load_import_state(&conn)?;
-        import.attempted_at = 0;
-        import.status = None;
-        crate::steam_owned::save_import_state(&conn, &import)?;
+/// Whether a sign-in that started at `generation` may still save: no sign-out happened since.
+fn still_wanted(generation: u64, current: u64) -> bool {
+    generation == current
+}
+
+/// Saves a verified sign-in under the scan lock (which sign-out and imports also hold), unless
+/// the account was signed out since the sign-in started; then syncs when the key is saved.
+async fn save_sign_in(app: &AppHandle, store: AccountStore, generation: u64, steam_id: &str) {
+    let state = app.state::<AppState>();
+    let saved = {
+        let _guard = state.scan_lock.lock().await;
+        if still_wanted(
+            generation,
+            state.accounts.steam_generation.load(Ordering::SeqCst),
+        ) {
+            Some(signed_in(&state, steam_id))
+        } else {
+            None
+        }
+    };
+    match saved {
+        None => {
+            log::info!("{} sign-in discarded: signed out meanwhile.", store.name());
+            state.accounts.set_notice(
+                store,
+                false,
+                "You signed out while the sign-in was being checked; nothing was saved.".into(),
+            );
+        }
+        Some(Ok(key_set)) => {
+            log::info!("{} sign-in finished.", store.name());
+            state.accounts.set_notice(
+                store,
+                true,
+                if key_set {
+                    "Signed in to Steam.".into()
+                } else {
+                    "Signed in to Steam. Add a free Steam Web API key to list the games you own."
+                        .into()
+                },
+            );
+            if key_set {
+                notify(app);
+                if let Err(e) = crate::steam_owned::sync_now(app).await {
+                    log::warn!("Steam owned games: {e:#}");
+                }
+            }
+        }
+        Some(Err(e)) => {
+            log::error!("Could not save the Steam sign-in: {e:#}");
+            state.accounts.set_notice(
+                store,
+                false,
+                "The sign-in worked but could not be saved (Windows secure storage).".into(),
+            );
+        }
     }
+    notify(app);
+}
+
+/// Stores the SteamID64 from a verified sign-in (the caller holds the scan lock). True when the
+/// Web API key is saved too.
+fn signed_in(state: &AppState, steam_id: &str) -> anyhow::Result<bool> {
+    let old = crate::secrets::get_steam_owned_steam_id(state)?;
+    let changed = prepare_for_account(&mut state.db.lock(), old.as_deref(), steam_id)?;
+    if changed {
+        log::info!("Steam sign-in: another account than before; its owned games were removed.");
+    }
+    crate::secrets::set_steam_owned_credentials(state, "", steam_id)?;
     crate::secrets::has_steam_owned_key(state)
+}
+
+/// Gets the library ready for the Steam account `new`: when another account was saved, the
+/// not-installed games its import added are removed (games with your data stay, as with
+/// Remove); either way the import is resumed and its throttle reset. True when the account
+/// changed.
+pub(crate) fn prepare_for_account(
+    conn: &mut rusqlite::Connection,
+    old: Option<&str>,
+    new: &str,
+) -> anyhow::Result<bool> {
+    let changed = old.is_some_and(|old| old != new);
+    if changed {
+        crate::steam_owned::undo(conn)?;
+    }
+    super::resume_steam_import(conn)?;
+    let mut import = crate::steam_owned::load_import_state(conn)?;
+    import.attempted_at = 0;
+    import.status = None;
+    crate::steam_owned::save_import_state(conn, &import)?;
+    Ok(changed)
 }
 
 /// Locks the WebView2 instance down before any store page loads: InPrivate must really be on,
 /// and external app links are cancelled (not even the "open this app?" prompt is shown).
 #[cfg(windows)]
-async fn harden(window: &WebviewWindow) -> Result<(), SignInError> {
+async fn harden(
+    window: &WebviewWindow,
+    app: &AppHandle,
+    id: u64,
+    store: AccountStore,
+) -> Result<(), SignInError> {
     let (tx, rx) = tokio::sync::oneshot::channel();
+    let app = app.clone();
     window
         .with_webview(move |webview| {
-            let _ = tx.send(harden_webview2(&webview));
+            let _ = tx.send(harden_webview2(&webview, app, id, store));
         })
         .map_err(|_| SignInError::Window("its web view is not ready."))?;
     rx.await
@@ -429,10 +547,19 @@ async fn harden(window: &WebviewWindow) -> Result<(), SignInError> {
 }
 
 #[cfg(windows)]
-fn harden_webview2(webview: &tauri::webview::PlatformWebview) -> Result<(), SignInError> {
-    use webview2_com::LaunchingExternalUriSchemeEventHandler;
+fn harden_webview2(
+    webview: &tauri::webview::PlatformWebview,
+    app: AppHandle,
+    id: u64,
+    store: AccountStore,
+) -> Result<(), SignInError> {
     use webview2_com::Microsoft::Web::WebView2::Win32::{
-        ICoreWebView2Settings4, ICoreWebView2_13, ICoreWebView2_18,
+        ICoreWebView2Settings3, ICoreWebView2Settings4, ICoreWebView2_13, ICoreWebView2_18,
+        COREWEBVIEW2_PERMISSION_STATE_DENY,
+    };
+    use webview2_com::{
+        take_pwstr, LaunchingExternalUriSchemeEventHandler, NavigationStartingEventHandler,
+        PermissionRequestedEventHandler,
     };
     use windows_core::Interface;
     const OLD_RUNTIME: SignInError = SignInError::Window(
@@ -469,11 +596,51 @@ fn harden_webview2(webview: &tauri::webview::PlatformWebview) -> Result<(), Sign
                 &mut token,
             )
             .map_err(|_| OLD_RUNTIME)?;
+        // A second navigation check on WebView2 itself, added after Tauri's: Tauri lets a URI
+        // through unchecked when `url` cannot parse it; this one cancels it (it only ever
+        // cancels, so it never overrides Tauri's own cancel of Steam's return address).
+        let hosts = login_hosts(store);
+        let mut token = 0i64;
+        core.add_NavigationStarting(
+            &NavigationStartingEventHandler::create(Box::new(move |_, args| {
+                if let Some(args) = args {
+                    let mut uri = windows_core::PWSTR::null();
+                    args.Uri(&mut uri)?;
+                    let uri = take_pwstr(uri);
+                    if !native_nav_ok(&uri, hosts, blank_ok(&app, id)) {
+                        args.SetCancel(true)?;
+                    }
+                }
+                Ok(())
+            })),
+            &mut token,
+        )
+        .map_err(|_| OLD_RUNTIME)?;
+        // No camera, microphone, location, notification or other permission prompts.
+        let mut token = 0i64;
+        core.add_PermissionRequested(
+            &PermissionRequestedEventHandler::create(Box::new(|_, args| {
+                if let Some(args) = args {
+                    args.SetState(COREWEBVIEW2_PERMISSION_STATE_DENY)?;
+                }
+                Ok(())
+            })),
+            &mut token,
+        )
+        .map_err(|_| OLD_RUNTIME)?;
+        let settings = core.Settings().map_err(|_| OLD_RUNTIME)?;
+        // No browser context menu (Back, Reload, Inspect, Save as...). Browser shortcuts (find,
+        // print, reload, zoom, devtools) are off; WebView2 keeps editing keys such as Ctrl+C,
+        // Ctrl+V, Ctrl+A and Ctrl+Z working.
+        settings
+            .SetAreDefaultContextMenusEnabled(false)
+            .map_err(|_| OLD_RUNTIME)?;
+        settings
+            .cast::<ICoreWebView2Settings3>()
+            .and_then(|s| s.SetAreBrowserAcceleratorKeysEnabled(false))
+            .map_err(|_| OLD_RUNTIME)?;
         // No "save password?" or autofill prompts in Game Lobby's window.
-        if let Ok(settings) = core
-            .Settings()
-            .and_then(|s| s.cast::<ICoreWebView2Settings4>())
-        {
+        if let Ok(settings) = settings.cast::<ICoreWebView2Settings4>() {
             let _ = settings.SetIsPasswordAutosaveEnabled(false);
             let _ = settings.SetIsGeneralAutofillEnabled(false);
         }
@@ -482,7 +649,12 @@ fn harden_webview2(webview: &tauri::webview::PlatformWebview) -> Result<(), Sign
 }
 
 #[cfg(not(windows))]
-async fn harden(_window: &WebviewWindow) -> Result<(), SignInError> {
+async fn harden(
+    _window: &WebviewWindow,
+    _app: &AppHandle,
+    _id: u64,
+    _store: AccountStore,
+) -> Result<(), SignInError> {
     Err(SignInError::Window("sign-in windows need Windows."))
 }
 
@@ -614,6 +786,137 @@ mod tests {
                 < start.find("window.navigate(start)").unwrap()
         );
         let open = &source[source.find("async fn open_window").unwrap()..];
-        assert!(open.find("harden(&window)").unwrap() < open.find("Ok(window)").unwrap());
+        assert!(
+            open.find("harden(&window, app, id, store)").unwrap()
+                < open.find("Ok(window)").unwrap()
+        );
+        // about:blank stops being allowed just before the store page is requested.
+        assert!(
+            start.find("flight.loaded = true").unwrap()
+                < start.find("window.navigate(start)").unwrap()
+        );
+        // The native WebView2 checks are in place and only ever cancel.
+        let harden = &source[source.find("fn harden_webview2").unwrap()..];
+        let harden = &harden[..harden.find("#[cfg(not(windows))]").unwrap()];
+        for needed in [
+            "core.add_NavigationStarting(",
+            "native_nav_ok(&uri, hosts, blank_ok(&app, id))",
+            "core.add_PermissionRequested(",
+            "COREWEBVIEW2_PERMISSION_STATE_DENY",
+            "SetAreDefaultContextMenusEnabled(false)",
+            "SetAreBrowserAcceleratorKeysEnabled(false)",
+            "add_LaunchingExternalUriScheme(",
+            "IsInPrivateModeEnabled(",
+        ] {
+            assert!(harden.contains(needed), "{needed}");
+        }
+        assert!(!harden.contains("SetCancel(false)"));
+        // A verified sign-in is saved under the scan lock, after the generation check.
+        let save = &source[source.find("async fn save_sign_in").unwrap()..];
+        assert!(
+            save.find("state.scan_lock.lock().await").unwrap()
+                < save.find("signed_in(&state").unwrap()
+        );
+        let owned = include_str!("../steam_owned.rs");
+        let remove = &owned[owned.find("pub async fn remove_all").unwrap()..];
+        assert!(
+            remove.find("scan_lock.lock().await").unwrap()
+                < remove.find("steam_generation").unwrap()
+        );
+        assert!(
+            remove.find("steam_generation").unwrap()
+                < remove.find("clear_steam_owned_credentials").unwrap()
+        );
+    }
+
+    #[test]
+    fn the_native_navigation_check_refuses_what_url_cannot_parse() {
+        let hosts = login_hosts(AccountStore::Steam);
+        for bad in [
+            "https://exa mple.com",
+            "https://a|b.com/",
+            "https://xn--a.steamcommunity.com/",
+            "http://localhost/gamelobby/steam-return?n=1",
+            "steam://run/570",
+            "",
+            "about:blank#x",
+        ] {
+            assert!(!native_nav_ok(bad, hosts, true), "{bad}");
+        }
+        assert!(native_nav_ok(
+            "https://steamcommunity.com/openid/login?x=1",
+            hosts,
+            false
+        ));
+        // about:blank only before the store page was requested.
+        assert!(native_nav_ok("about:blank", hosts, true));
+        assert!(!native_nav_ok("about:blank", hosts, false));
+    }
+
+    fn flight(id: u64, verifying: bool) -> Flight {
+        Flight {
+            id,
+            store: AccountStore::Steam,
+            expected: Expected::new("http://localhost", "a".repeat(64)),
+            verifying,
+            loaded: true,
+            generation: 0,
+            listener: None,
+        }
+    }
+
+    #[test]
+    fn the_timeout_leaves_a_sign_in_being_checked_alone() {
+        assert!(times_out(Some(&flight(3, false)), 3));
+        assert!(!times_out(Some(&flight(3, true)), 3));
+        assert!(!times_out(Some(&flight(4, false)), 3));
+        assert!(!times_out(None, 3));
+        // A sign-out after the sign-in started wins.
+        assert!(still_wanted(7, 7));
+        assert!(!still_wanted(7, 8));
+    }
+
+    #[test]
+    fn signing_in_to_another_steam_account_removes_the_old_accounts_games() {
+        use crate::steam_owned::{apply, load_import_state, OwnedApp, OwnedList};
+        let list = |ids: &[&str]| OwnedList {
+            ids: ids.iter().map(|i| i.to_string()).collect(),
+            apps: ids
+                .iter()
+                .map(|i| OwnedApp {
+                    app_id: i.to_string(),
+                    name: format!("Game {i}"),
+                })
+                .collect(),
+            playtime: Default::default(),
+            last_played: Default::default(),
+        };
+        let database = crate::db::Db::memory().unwrap();
+        let mut conn = database.lock();
+        let old = "76561197960287930";
+        let new = "76561197960287931";
+        apply(&mut conn, &Ok(list(&["10", "20"])), 1000).unwrap();
+        conn.execute("UPDATE games SET favorite=1 WHERE id='steam:20'", [])
+            .unwrap();
+        // The same account again: nothing removed, the throttle reset.
+        assert!(!prepare_for_account(&mut conn, Some(old), old).unwrap());
+        assert_eq!(crate::db::game_count(&conn).unwrap(), 2);
+        let state = load_import_state(&conn).unwrap();
+        assert_eq!((state.attempted_at, state.status), (0, None));
+        // No account before: nothing removed.
+        assert!(!prepare_for_account(&mut conn, None, new).unwrap());
+        assert_eq!(crate::db::game_count(&conn).unwrap(), 2);
+        // Another account: the old import's games go, the favourite stays, the pause is lifted.
+        super::super::save_mode(
+            &conn,
+            AccountStore::Steam,
+            super::super::AccountMode::Installed,
+        )
+        .unwrap();
+        assert!(prepare_for_account(&mut conn, Some(old), new).unwrap());
+        assert!(crate::db::get_game(&conn, "steam:10").unwrap().is_none());
+        assert!(crate::db::get_game(&conn, "steam:20").unwrap().is_some());
+        assert!(load_import_state(&conn).unwrap().app_ids.is_empty());
+        assert!(!super::super::steam_import_paused(&conn).unwrap());
     }
 }

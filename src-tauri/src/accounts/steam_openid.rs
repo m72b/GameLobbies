@@ -131,6 +131,13 @@ impl Expected {
         url
     }
 
+    /// Whether a return carries exactly one `n` and it is this sign-in's nonce. A return without
+    /// it is stopped but ignored, so a stray or forged navigation can't use up the sign-in.
+    pub fn carries_nonce(&self, url: &Url) -> bool {
+        let mut values = url.query_pairs().filter(|(k, _)| k == "n").map(|(_, v)| v);
+        matches!((values.next(), values.next()), (Some(n), None) if n == self.nonce.as_str())
+    }
+
     /// Whether a navigation goes to `return_to`'s address (any query): such a navigation is
     /// always stopped, and its query checked.
     pub fn is_return(&self, url: &Url) -> bool {
@@ -589,6 +596,22 @@ mod tests {
         assert!(loop_back.is_return(&Url::parse(&loop_back.return_to).unwrap()));
         assert!(!loop_back
             .is_return(&Url::parse(&format!("http://127.0.0.1:50124{RETURN_PATH}?n=x")).unwrap()));
+    }
+
+    #[test]
+    fn only_a_return_with_this_sign_ins_single_nonce_counts() {
+        let e = expected();
+        assert!(e.carries_nonce(&response(|_| {})));
+        let base = format!("http://localhost{RETURN_PATH}");
+        for bad in [
+            base.clone(),
+            format!("{base}?openid.mode=id_res"),
+            format!("{base}?n={}", "b".repeat(64)),
+            format!("{base}?n={0}&n={0}", "a".repeat(64)),
+            format!("{base}?n=&openid.mode=id_res"),
+        ] {
+            assert!(!e.carries_nonce(&Url::parse(&bad).unwrap()), "{bad}");
+        }
     }
 
     #[test]

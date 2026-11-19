@@ -173,6 +173,9 @@ pub struct AccountsState {
     /// The one sign-in that may run at a time.
     pub(crate) flight: Mutex<Option<signin::Flight>>,
     pub(crate) next_flight: AtomicU64,
+    /// Bumped (under the scan lock) every time the Steam account is forgotten. A sign-in that
+    /// started before a sign-out saves nothing.
+    pub(crate) steam_generation: AtomicU64,
     /// Steam `response_nonce` values already accepted (replay protection).
     pub(crate) seen_nonces: Mutex<steam_openid::NonceCache>,
     notices: Mutex<HashMap<AccountStore, Notice>>,
@@ -365,6 +368,8 @@ pub async fn accounts_set_mode(
     match mode {
         AccountMode::Installed => {
             let _guard = state.scan_lock.lock().await;
+            // Not one SQL transaction: `undo` runs its own. The pause is written first, so if the
+            // removal fails the import can't add the games back, and choosing it again finishes.
             let deleted = {
                 let mut conn = state.db.lock();
                 save_mode(&conn, store, AccountMode::Installed).map_err(err)?;

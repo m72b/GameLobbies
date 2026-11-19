@@ -67,7 +67,8 @@ export function SteamSignIn({ accounts, status }: { accounts: Accounts; status: 
 
 function AccountRow({ status, accounts }: { status: AccountStatus; accounts: Accounts }) {
   const { openSheet } = useKeysUi()
-  const [confirming, setConfirming] = useState(false)
+  // 'out': confirm signing out; 'installed': confirm switching to installed files only (both remove games).
+  const [confirming, setConfirming] = useState<'out' | 'installed' | null>(null)
   const line = accountLine(status)
   const busy = accounts.busy === status.store
   return <div className="account-row">
@@ -80,15 +81,17 @@ function AccountRow({ status, accounts }: { status: AccountStatus; accounts: Acc
       {status.available && <>
         {!status.signedIn && <SteamSignIn accounts={accounts} status={status} />}
         {status.signedIn && <div className="account-actions">
-          <label className="account-mode">Use<select value={status.mode} disabled={busy || status.signingIn} aria-label={'How Game Lobby uses ' + status.name} onChange={event => void accounts.setMode(status.store, event.target.value as AccountMode)}>
+          <label className="account-mode">Use<select value={status.mode} disabled={busy || status.signingIn} aria-label={'How Game Lobby uses ' + status.name} onChange={event => { const mode = event.target.value as AccountMode; if (mode === 'installed') setConfirming('installed'); else { setConfirming(null); void accounts.setMode(status.store, mode) } }}>
             <option value="account">Account: owned games and playtime</option>
             <option value="installed">Installed files only</option>
           </select></label>
           {status.store === 'steam' && !status.keySet && <button type="button" className="primary-button" onClick={() => openSheet('steam')}>Add API key</button>}
           <button type="button" className="secondary-button" disabled={busy || !canSync(status)} onClick={() => void accounts.sync(status.store)}><RefreshCw size={13} className={busy ? 'spin' : ''} /> Sync now</button>
-          {confirming
-            ? <span className="confirm-group"><span>Sign out and remove the not-installed games it added?</span><button type="button" className="secondary-button danger" disabled={busy} onClick={() => { setConfirming(false); void accounts.signOut(status.store) }}>Sign out</button><button type="button" className="secondary-button" onClick={() => setConfirming(false)}>Cancel</button></span>
-            : <button type="button" className="secondary-button" disabled={busy} onClick={() => setConfirming(true)}>Sign out</button>}
+          {confirming === 'out'
+            ? <span className="confirm-group"><span>Sign out and remove the not-installed games it added?</span><button type="button" className="secondary-button danger" disabled={busy} onClick={() => { setConfirming(null); void accounts.signOut(status.store) }}>Sign out</button><button type="button" className="secondary-button" onClick={() => setConfirming(null)}>Cancel</button></span>
+            : confirming === 'installed'
+              ? <span className="confirm-group"><span>Show installed games only and remove the not-installed games it added? Games you played, rated or customized stay.</span><button type="button" className="secondary-button danger" disabled={busy} onClick={() => { setConfirming(null); void accounts.setMode(status.store, 'installed') }}>Installed only</button><button type="button" className="secondary-button" onClick={() => setConfirming(null)}>Cancel</button></span>
+              : <button type="button" className="secondary-button" disabled={busy} onClick={() => setConfirming('out')}>Sign out</button>}
         </div>}
         {status.signedIn && status.signingIn && <SteamSignIn accounts={accounts} status={status} />}
       </>}
