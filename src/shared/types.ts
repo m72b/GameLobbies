@@ -626,6 +626,19 @@ export interface StorageReport { entries: StorageEntry[]; totalBytes: number }
 export interface StorageProgress { done: number; total: number; title: string }
 /** A game first discovered recently and not yet dismissed from the "Recently added" shelf. */
 export interface RecentGame { gameId: string; addedAt: number }
+/** Statistics (`stats_summary`). Playtime is in seconds; percents are 0 to 100. */
+export interface StatsTopGame { gameId: string; title: string; /** What counts: the larger of tracked and store-reported time. */ seconds: number; trackedSeconds: number; storeSeconds?: number; /** The store `storeSeconds` came from, e.g. "Steam". */ storeSource?: string; percent: number; store: string; cover?: string }
+export interface StatsSummary {
+  includeHidden: boolean
+  counts: { all: number; installed: number; notInstalled: number; /** Hidden games in the whole library. */ hidden: number; favorite: number }
+  playtime: { totalSeconds: number; /** Over the games with time above zero. */ averageSeconds: number; playedGames: number; /** The part of the total that comes from a store's figure. */ storeSeconds: number }
+  installSize: { bytes: number; known: number; unknown: number; partial: number }
+  completion: { played: number; notPlayed: number }
+  top: StatsTopGame[]
+  library: Array<{ name: string; count: number; percent: number }>
+  /** Stores whose reported time is part of the figures. */
+  storeSources: string[]
+}
 export interface LobbyAPI {
   window: { minimize(): Promise<void>; toggleMaximize(): Promise<void>; close(): Promise<void>; isMaximized(): Promise<boolean> }
   library: { list(): Promise<Game[]>; scan(): Promise<LibraryStats>; launch(id: string, route?: number): Promise<LaunchOutcome>; continueLaunch(id: string, pendingId: string): Promise<LaunchOutcome>; cancelLaunch(pendingId: string): Promise<void>; pendingLaunch(pendingId: string): Promise<PendingLaunchStatus>; save(game: Partial<Game> & { id: string }): Promise<Game[]>; remove(id: string): Promise<Game[]>; linkPreview(gameIds: string[], title?: string): Promise<LinkPreview>; link(gameIds: string[], choices: LinkChoices, reviewId?: string): Promise<Game[]>; unlinkPreview(gameId: string, route: RouteRef): Promise<UnlinkPreview>; unlink(gameId: string, route: RouteRef): Promise<{ gameId: string; games: Game[] }>; renameRoute(gameId: string, route: RouteRef, name: string): Promise<Game[]>; setRouteArgs(gameId: string, route: RouteRef, args: string): Promise<Game[]>; /** The route's stored launch options won't run until they are confirmed again (they came from a backup or an older version, or its program changed). */ routeArgsPending(gameId: string, route: RouteRef): Promise<boolean>; /** Checks launch options text for a route without saving: what would run, or rejects with the reason. */ routeArgsCheck(gameId: string, route: RouteRef, args: string): Promise<ArgsPreview>; resetPlaytime(): Promise<Game[]>; setCover(id: string, dataUrl: string | null): Promise<Game[]>; chooseCover(id: string): Promise<Game[]>; chooseInstallFolder(id: string): Promise<void>; add(title: string, target: string): Promise<Game[]>; stores(): Promise<StoreStatus[]>; onChanged(callback: () => void): () => void
@@ -669,6 +682,8 @@ export interface LobbyAPI {
   /** Cached install sizes. `rescan` measures in the background (progress events) and rejects if one is running. `uninstall` only hands off to the game's launcher (never deletes files): the backend builds the link from the stored route. */
   storage: { list(): Promise<StorageReport>; rescan(): Promise<StorageReport>; uninstall(gameId: string, routeIndex: number): Promise<void>; onProgress(callback: (progress: StorageProgress) => void): () => void }
   /** The "Recently added" shelf. `dismiss()` without an id clears it. Both return the remaining shelf. */
+  /** Read-only library statistics, computed by the backend. Hidden games are left out unless `includeHidden`. */
+  stats: { summary(includeHidden: boolean): Promise<StatsSummary> }
   recent: { list(): Promise<RecentGame[]>; dismiss(gameId?: string): Promise<RecentGame[]> }
 }
 declare global { interface Window { lobby: LobbyAPI } }

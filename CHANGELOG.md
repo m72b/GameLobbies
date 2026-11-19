@@ -2,6 +2,13 @@
 
 All notable changes to Game Lobby are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Statistics
+- New **Statistics** view, opened from the side rail or the library bar (it replaces the **Recently played** view and button; **Play history** is unchanged). It opens in place of the library like Settings (**Back** or **Esc** to leave) with four tabs: **Overview** (all, installed, not installed, hidden and favorite games, total and average play time, total install size), **Completion** (played and not played), **Top playtime** (the 50 most played games with time and share of the total, sortable) and **Library** (games and share per store or custom launcher). Hidden games are left out unless **Include hidden games** is on. The average is over games with play time; games with several routes count once under the store shown on their card; installed games without a measured size are counted separately.
+- Steam playtime: the Steam owned-games import now also saves the hours Steam reports (`playtime_forever`) for each owned game, so Statistics include time played outside Game Lobby. Per game the larger of tracked and Steam time counts (never the sum), the Overview says when Steam time is included and a tooltip shows both figures. It is stored apart from Game Lobby's own playtime, which is never changed, refreshed on each import, cleared by **Remove** and left out of backups.
+- Technical: new read-only command `stats_summary` (one boolean argument, computed in one pass in Rust); new table `store_playtime(source, appId, seconds, updatedAt)` (added table, no schema version change; older builds ignore it).
+
 ## [0.6.0] — 2026-11-19
 
 ### Interface

@@ -215,6 +215,9 @@ const api: LobbyAPI = {
     uninstall: (gameId, routeIndex) => call('storage_uninstall', { gameId, routeIndex }),
     onProgress: callback => subscribe<StorageProgress>('storage:progress', callback)
   },
+  stats: {
+    summary: includeHidden => call('stats_summary', { includeHidden })
+  },
   recent: {
     list: () => call('recent_list'),
     dismiss: gameId => call('recent_dismiss', { gameId: gameId ?? null })

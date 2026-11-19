@@ -10,6 +10,7 @@ Detailed reference for Game Lobby's features. For an overview, installation and 
 - [Linked games, versions and launch options](#linked-games-versions-and-launch-options)
 - [Launch options](#launch-options)
 - [Play session history](#play-session-history)
+- [Statistics](#statistics)
 - [Themes](#themes)
 - [Extensions](#extensions)
 - [Local data](#local-data)
@@ -46,7 +47,7 @@ Steam is installed-games only unless you set this up. In **Settings → API keys
 3. Set **Game details** to **Public** in your Steam profile's privacy settings; otherwise Steam returns no games.
 4. Paste both and choose **Save**. Game Lobby asks Steam at once and shows the result on the status line.
 
-Owned games that aren't installed are added as Steam games marked not installed; they show under **All** when **Show only installed games** is off, and **Play** asks Steam to install them. What the installed-games scan finds always wins, there are no duplicates, and your titles, covers, favourites, notes and playtime are never changed (Steam's own playtime is not imported). Library scans ask Steam at most every 30 minutes (10 minutes after a failure). If Steam can't be reached, the profile is private or the key is rejected, the games from the last successful check stay and the status line says why; after "Key rejected", save a new key. Games that leave your Steam account later are removed again unless you favourited, played, rated or customized them.
+Owned games that aren't installed are added as Steam games marked not installed; they show under **All** when **Show only installed games** is off, and **Play** asks Steam to install them. What the installed-games scan finds always wins, there are no duplicates, and your titles, covers, favourites, notes and tracked playtime are never changed. Steam's own playtime (`playtime_forever`) is saved separately, only for the [Statistics](#statistics) view; it is never added to the playtime Game Lobby tracks. Library scans ask Steam at most every 30 minutes (10 minutes after a failure). If Steam can't be reached, the profile is private or the key is rejected, the games from the last successful check stay and the status line says why; after "Key rejected", save a new key. Games that leave your Steam account later are removed again unless you favourited, played, rated or customized them.
 
 The key and SteamID are encrypted for your Windows user, are never shown again, and are left out of backups, logs and **Copy diagnostics**. **Remove** clears both and removes the not-installed games the import added (again, games you put something into stay).
 
@@ -195,6 +196,19 @@ Every tracked session (game, start, end, duration and whether it was launched fr
 - **Journal.** Each session can have a short note (up to 2,000 characters) and screenshots you added to the game.
 - **Share.** **Share session** builds a plain-text or Markdown summary (game, date, start and end, duration, store or emulator and system, note) to copy or save through a Save dialog, and can open a Backloggd search for the game in your browser. Nothing leaves your PC unless you copy, save or open a link.
 - **Storage and backups.** History, notes and screenshot links are stored in the local library database in the app data folder (see [Local data](#local-data)). Library backups include finished sessions and their notes; importing a backup restores them for games in the library and skips sessions you already have.
+
+## Statistics
+
+The **Statistics** button in the side rail and in the library bar (it replaces the old Recently played view) opens a Statistics view in place of the library, like Settings: **Back** or **Esc** returns, and a game in the Top playtime list opens its page. Everything is calculated from your library on this PC; nothing is sent anywhere.
+
+**Include hidden games** (top right) is off by default: hidden games are left out of every figure. The **Hidden** tile always shows how many games you have hidden.
+
+- **Overview.** All games, Installed, Not installed, Hidden, Favorites, Total play time, Average play time and Total install size. The average is the total play time divided by the games that have play time, so games you never played don't pull it down. Install size adds up the sizes Storage has measured for installed games; installed games without a known size are counted on the tile and not guessed (run **Rescan sizes** in Storage to measure them).
+- **Completion.** A game is *played* when it has play time, a last-played date or a recorded session; everything else is *not played*.
+- **Top playtime.** The 50 games with the most time: game, time played and share of the total play time. Click a column heading to sort. Hover the time for the breakdown of where it comes from.
+- **Library.** How many games each store or custom launcher has, and its share of the games counted. A game with several ways to play (see [Linked games](#linked-games-versions-and-launch-options)) counts once, under the store or launcher shown on its card.
+
+**Store playtime.** With a Steam Web API key (see [Steam games you own but haven't installed](#steam-games-you-own-but-havent-installed)), each import also saves the hours Steam reports for every game you own. For each game the Statistics use the larger of what Game Lobby tracked and what Steam reports, never the sum, because Steam usually already counts the hours you played through Game Lobby. The Overview says "includes Steam playtime" when Steam's figure adds hours, and the time tooltip in Top playtime lists both numbers. Steam's hours are only used for Statistics: they don't change a game's own playtime or the library's Playtime sort, are refreshed with each Steam import, are removed with **Remove** in API keys, and are not part of backups.
 
 ## Themes
 

@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import Fuse from 'fuse.js'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { Clock3, CloudDownload, EyeOff, Gamepad2, HardDrive, Heart, History, Library, ListFilter, MoreHorizontal, Pencil, Play, Plus, Search, Settings2, Star, X } from 'lucide-react'
+import { BarChart3, CloudDownload, EyeOff, Gamepad2, HardDrive, Heart, History, Library, MoreHorizontal, Pencil, Play, Plus, Search, Settings2, Star, X } from 'lucide-react'
 import { StoreIcon } from './store-icons'
 import { GlMark } from './gl-mark'
 import type { CustomLauncher, Game, LauncherTargetKind, RunningGame, Settings, Store as StoreName, SteamGridDbCover, UpdateInfo } from '../shared/types'
@@ -11,6 +11,7 @@ import { coverSrc, coverStyle } from './cover'
 import { CoverLayer, useCover } from './poster'
 import { CoverTiles, LoadMore, pickerCovers, useSgdbPages } from './cover-picker'
 import { StorageView } from './storage-view'
+import { StatsView } from './stats-view'
 import { RecentShelf } from './recent-shelf'
 import { GamePage, type GamePageActions } from './game-page'
 import { SettingsView, anchorFor, defaultPage, sectionFor, type SettingsPage } from './settings-view'
@@ -27,7 +28,7 @@ import { LauncherIcon, useLaunchers } from './launcher-icon'
 import { LauncherWaitDialog, LinkLauncherDialog, type WaitingLaunch } from './launcher-assign'
 import { displayStore, filterLauncherId, gameLauncher, gameMatchesFilter, identifierProblem, isLabelOnly, kindLabel, launcherFilter, launcherKinds } from '../shared/launchers'
 
-type View = 'All Games' | 'Favorites' | 'Recently Played' | 'Hidden'
+type View = 'All Games' | 'Favorites' | 'Hidden'
 type SortBy = 'title' | 'lastPlayed' | 'playtime' | 'library'
 const sortOptions: SortBy[] = ['title', 'lastPlayed', 'playtime', 'library']
 const SORT_KEY = 'gameLobby.sortBy'
@@ -59,6 +60,7 @@ export default function App() {
   const setSortBy = (value: SortBy) => { setSortByState(value); rememberSort(value) }
   const [openId, setOpenId] = useState<string | null>(null)
   const [storageOpen, setStorageOpen] = useState(false)
+  const [statsOpen, setStatsOpen] = useState(false)
   const [running, setRunning] = useState<RunningGame[]>([])
   const [libraryVersion, setLibraryVersion] = useState(0)
   const savedScroll = useRef(0)
@@ -137,8 +139,9 @@ export default function App() {
   const openGame = (game: Game, from?: Element | null) => {
     if (!settingsOpen && !openId) savedScroll.current = scrollRef.current?.scrollTop ?? savedScroll.current
     zoomRef.current = originOf(from, coverSrc(game.cover))
-    if (zoomRef.current && !openId && !settingsOpen && !storageOpen) captureLibrary(mainRef.current)
+    if (zoomRef.current && !openId && !settingsOpen && !storageOpen && !statsOpen) captureLibrary(mainRef.current)
     setSettingsOpen(false)
+    setStatsOpen(false)
     setOpenId(game.id)
     setMenu(null)
   }
@@ -157,11 +160,21 @@ export default function App() {
     if (!settingsOpen && !openId) savedScroll.current = scrollRef.current?.scrollTop ?? savedScroll.current
     setOpenId(null)
     setStorageOpen(false)
+    setStatsOpen(false)
     if (page) { setSettingsPage(page); setSettingsAnchor(anchorFor(id ?? null)) }
     setSettingsOpen(true)
   }
   openSettingsRef.current = openSettings
   const closeSettings = () => setSettingsOpen(false)
+  /** Shows Statistics in place of the library (like Settings; Back or Escape returns). */
+  const openStats = () => {
+    if (!settingsOpen && !openId && !statsOpen) savedScroll.current = scrollRef.current?.scrollTop ?? savedScroll.current
+    setOpenId(null)
+    setSettingsOpen(false)
+    setStorageOpen(false)
+    setStatsOpen(true)
+  }
+  const closeStats = () => setStatsOpen(false)
   const openSheet = (focus?: KeyId) => setSheet({ open: true, focus })
   const closeSheet = () => setSheet(current => ({ ...current, open: false }))
   const beginEdit = (game: Game) => {
@@ -354,6 +367,10 @@ export default function App() {
           if (typing) target.blur(); else closeSettings()
           return
         }
+        if (statsOpen && !dialogOpen && !openId) {
+          if (typing) target.blur(); else closeStats()
+          return
+        }
         if (!dialogOpen && openId) closeGame()
         setMenu(null)
         setLauncherLinkId(null)
@@ -395,7 +412,7 @@ export default function App() {
       observer.disconnect()
       window.removeEventListener('keydown', key)
     }
-  }, [openId, menu, adding, editingGame, sgdbGame, linkingGame, linkReview, launcherLinkId, settingsOpen, sheet.open])
+  }, [openId, menu, adding, editingGame, sgdbGame, linkingGame, linkReview, launcherLinkId, settingsOpen, statsOpen, sheet.open])
 
   useEffect(() => { applyTheme(settings.theme, settings); return applyMotion(settings.motion, settings.animations) }, [settings])
   useEffect(() => {
@@ -408,7 +425,7 @@ export default function App() {
   const openGameData = openId ? games.find(game => game.id === openId) : undefined
   const pageOpen = !!openGameData && !settingsOpen
   // The library is out of view while a game page or Settings is showing.
-  const awayFromLibrary = pageOpen || settingsOpen
+  const awayFromLibrary = pageOpen || settingsOpen || statsOpen
   const wasAway = useRef(false)
   useLayoutEffect(() => {
     if (wasAway.current && !awayFromLibrary && scrollRef.current) {
@@ -464,8 +481,7 @@ export default function App() {
       (!onlyInstalled || isInstalled(game)) &&
       (view === 'Hidden' ? game.hidden : !game.hidden) &&
       gameMatchesFilter(game, store) &&
-      (view !== 'Favorites' || game.favorite) &&
-      (view !== 'Recently Played' || !!game.lastPlayed)
+      (view !== 'Favorites' || game.favorite)
     )
   }, [games, query, store, view, fuzzy, onlyInstalled])
   const railStores = useMemo(() => stores.filter(item => item === store || games.some(game => game.store === item && !game.hidden && (!onlyInstalled || isInstalled(game)))).slice(0, 8), [games, store, onlyInstalled])
@@ -580,18 +596,18 @@ export default function App() {
       <button className="rail-button" onClick={() => setCollapsed(!collapsed)} title="Menu"><GlMark size={16} className="gl-mark" /></button>
       <button className="rail-button search-button" onClick={() => searchRef.current?.focus()} title="Search"><Search /></button>
       <div className="rail-sep" />
-      <button className={'rail-button ' + (view === 'All Games' ? 'active' : '')} onClick={() => { setStorageOpen(false); setSettingsOpen(false); setView('All Games'); setStore('All Games') }} title="All games"><Library /></button>
-      <button className={'rail-button ' + (view === 'Favorites' ? 'active' : '')} onClick={() => { setStorageOpen(false); setSettingsOpen(false); setView('Favorites') }} title="Favorites"><Heart /></button>
-      <button className={'rail-button ' + (view === 'Recently Played' ? 'active' : '')} onClick={() => { setStorageOpen(false); setSettingsOpen(false); setView('Recently Played') }} title="Recently played"><Clock3 /></button>
-      <button className={'rail-button ' + (view === 'Hidden' ? 'active' : '')} onClick={() => { setStorageOpen(false); setSettingsOpen(false); setView('Hidden') }} title="Hidden games"><EyeOff /></button>
-      <button className={'rail-button ' + (storageOpen ? 'active' : '')} onClick={() => { setOpenId(null); setSettingsOpen(false); setStorageOpen(!storageOpen) }} title="Storage"><HardDrive /></button>
+      <button className={'rail-button ' + (view === 'All Games' ? 'active' : '')} onClick={() => { setStorageOpen(false); setSettingsOpen(false); setStatsOpen(false); setView('All Games'); setStore('All Games') }} title="All games"><Library /></button>
+      <button className={'rail-button ' + (view === 'Favorites' ? 'active' : '')} onClick={() => { setStorageOpen(false); setSettingsOpen(false); setStatsOpen(false); setView('Favorites') }} title="Favorites"><Heart /></button>
+      <button className={'rail-button ' + (statsOpen ? 'active' : '')} onClick={() => statsOpen ? closeStats() : openStats()} title="Statistics"><BarChart3 /></button>
+      <button className={'rail-button ' + (view === 'Hidden' ? 'active' : '')} onClick={() => { setStorageOpen(false); setSettingsOpen(false); setStatsOpen(false); setView('Hidden') }} title="Hidden games"><EyeOff /></button>
+      <button className={'rail-button ' + (storageOpen ? 'active' : '')} onClick={() => { setOpenId(null); setSettingsOpen(false); setStatsOpen(false); setStorageOpen(!storageOpen) }} title="Storage"><HardDrive /></button>
       <button className={'rail-button ' + (historyOpen ? 'active' : '')} onClick={() => setHistoryOpen(true)} title="Play history (all games)"><History /></button>
       <div className="rail-sep" />
       <div className="rail-stores">{railStores.map(item =>
-        <button key={item} className={'rail-button mini ' + (store === item ? 'active' : '')} title={item} onClick={() => { setSettingsOpen(false); setStore(store === item ? 'All Games' : item); setView('All Games') }}><StoreIcon store={item} size={16} /></button>
+        <button key={item} className={'rail-button mini ' + (store === item ? 'active' : '')} title={item} onClick={() => { setSettingsOpen(false); setStatsOpen(false); setStorageOpen(false); setStore(store === item ? 'All Games' : item); setView('All Games') }}><StoreIcon store={item} size={16} /></button>
       )}{launchers.map(item => {
         const filter = launcherFilter(item.id)
-        return <button key={filter} className={'rail-button mini ' + (store === filter ? 'active' : '')} title={item.name} aria-label={item.name} onClick={() => { setSettingsOpen(false); setStore(store === filter ? 'All Games' : filter); setView('All Games') }}><LauncherIcon launcher={item} size={16} /></button>
+        return <button key={filter} className={'rail-button mini ' + (store === filter ? 'active' : '')} title={item.name} aria-label={item.name} onClick={() => { setSettingsOpen(false); setStatsOpen(false); setStorageOpen(false); setStore(store === filter ? 'All Games' : filter); setView('All Games') }}><LauncherIcon launcher={item} size={16} /></button>
       })}<button className="rail-button mini" title="Add source" onClick={() => openSettings()}><Plus /></button></div>
       <div className="rail-bottom">
         <button className="rail-button" title="Export library" onClick={() => void window.lobby.backup.export()}><CloudDownload /></button>
@@ -600,11 +616,12 @@ export default function App() {
         <button className="rail-button" title="Quit" onClick={() => window.lobby.app.quit()}><X /></button>
       </div>
     </aside>
-    <main ref={mainRef} className={'main' + (pageOpen ? ' page-open' : '') + (settingsOpen ? ' settings-open' : '')}>
+    <main ref={mainRef} className={'main' + (pageOpen ? ' page-open' : '') + (settingsOpen ? ' settings-open' : '') + (statsOpen && !pageOpen && !settingsOpen ? ' stats-open' : '')}>
       {settingsOpen && <SettingsView settings={settings} onSettings={setSettings} say={notice} keys={keys} page={settingsPage} onPage={setSettingsPage} anchor={settingsAnchor} onAnchorDone={() => setSettingsAnchor(undefined)} onClose={closeSettings} />}
       {pageOpen && openGameData && <GamePage origin={zoomRef.current} game={openGameData} index={Math.max(0, games.findIndex(game => game.id === openGameData.id))} settings={settings} launchers={launchers} running={runningById.get(openGameData.id)} libraryVersion={libraryVersion} actions={pageActions} />}
-      {!pageOpen && !settingsOpen && storageOpen && <StorageView notice={notice} onClose={() => setStorageOpen(false)} onOpen={id => { const game = games.find(item => item.id === id); if (game) { setStorageOpen(false); openGame(game) } }} />}
-      {!pageOpen && !settingsOpen && !storageOpen && <>
+      {!pageOpen && !settingsOpen && statsOpen && <StatsView say={notice} onClose={closeStats} onOpenGame={id => { const game = games.find(item => item.id === id); if (game) openGame(game) }} />}
+      {!pageOpen && !settingsOpen && !statsOpen && storageOpen && <StorageView notice={notice} onClose={() => setStorageOpen(false)} onOpen={id => { const game = games.find(item => item.id === id); if (game) { setStorageOpen(false); openGame(game) } }} />}
+      {!pageOpen && !settingsOpen && !statsOpen && !storageOpen && <>
       <div className="toolbar">
         <div><div className="eyebrow">YOUR COLLECTION</div><h1>{view === 'All Games' ? (store === 'All Games' ? 'All games' : activeLauncher ? activeLauncher.name : store) : view}</h1></div>
         <div className="toolbar-actions">
@@ -618,7 +635,7 @@ export default function App() {
       </div>
       <div className="library-meta">
         <span>{filtered.length} GAMES</span><span className="meta-dot" />
-        <button onClick={() => setView('Recently Played')}><ListFilter size={13} /> Recently played</button>
+        <button onClick={openStats}><BarChart3 size={13} /> Statistics</button>
         <button onClick={() => setHistoryOpen(true)}><History size={13} /> Play history</button>
         <label className="sort-control">Sort<select value={sortBy} onChange={event => setSortBy(event.target.value as SortBy)}><option value="title">Title</option><option value="lastPlayed">Last played</option><option value="playtime">Playtime</option><option value="library">Library</option></select></label>
         <span className="meta-spacer" />
@@ -652,7 +669,7 @@ export default function App() {
             </div>
           })}
         </div>
-        {!swapping && !filtered.length && onlyInstalled && !query && games.some(game => (view === 'Hidden' ? game.hidden : !game.hidden) && gameMatchesFilter(game, store) && (view !== 'Favorites' || game.favorite) && (view !== 'Recently Played' || !!game.lastPlayed)) ? <div className="empty"><Gamepad2 size={30} /><h3>No installed games here</h3><p>Uninstalled games are hidden. Show all to see games you own but haven't installed.</p><button className="primary-button" onClick={() => void setInstalledFilter(false)}>Show all games</button></div> : !swapping && !filtered.length && <div className="empty"><Gamepad2 size={30} /><h3>{query ? 'No matching games' : view === 'Hidden' ? 'No hidden games' : 'Your library is empty'}</h3><p>{view === 'Hidden' ? 'Games you hide will appear here.' : 'Scan your stores or add a game manually.'}</p><button className="primary-button" onClick={() => void scan()}><CloudDownload size={15} /> Scan libraries</button></div>}
+        {!swapping && !filtered.length && onlyInstalled && !query && games.some(game => (view === 'Hidden' ? game.hidden : !game.hidden) && gameMatchesFilter(game, store) && (view !== 'Favorites' || game.favorite)) ? <div className="empty"><Gamepad2 size={30} /><h3>No installed games here</h3><p>Uninstalled games are hidden. Show all to see games you own but haven't installed.</p><button className="primary-button" onClick={() => void setInstalledFilter(false)}>Show all games</button></div> : !swapping && !filtered.length && <div className="empty"><Gamepad2 size={30} /><h3>{query ? 'No matching games' : view === 'Hidden' ? 'No hidden games' : 'Your library is empty'}</h3><p>{view === 'Hidden' ? 'Games you hide will appear here.' : 'Scan your stores or add a game manually.'}</p><button className="primary-button" onClick={() => void scan()}><CloudDownload size={15} /> Scan libraries</button></div>}
       </section>
       </>}
     </main>

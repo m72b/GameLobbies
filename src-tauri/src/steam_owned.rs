@@ -14,8 +14,9 @@
 //! Owned games that are not installed become Steam games with `installed: false`, an owned
 //! mark and the usual `steam://run/<appid>` link (Steam offers to install a game that isn't).
 //! Installed games keep what the manifest scan says. Titles, covers, favourites, notes and
-//! playtime are never overwritten (the import adds no playtime). A failed request keeps the
-//! previous list; the outcome is kept as a short status line for Settings. Library scans fetch
+//! tracked playtime are never overwritten. Steam's `playtime_forever` is stored separately
+//! (`stats::store_playtime`) for the Statistics view and never merged into tracked playtime.
+//! A failed request keeps the previous list; the outcome is kept as a short status line for Settings. Library scans fetch
 //! at most every [`REFRESH_AFTER_MS`] (after a failure, [`RETRY_AFTER_MS`]; after a rejected
 //! key, not until the credentials are saved again).
 
@@ -39,6 +40,8 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_GAMES: usize = 50_000;
 const MAX_NAME_CHARS: usize = 200;
+/// A larger `playtime_forever` is not believable (about 19 years) and is capped.
+const MAX_PLAYTIME_MINUTES: u64 = 10_000_000;
 /// After a successful fetch, scans don't ask Steam again for this long.
 pub const REFRESH_AFTER_MS: i64 = 30 * 60_000;
 /// After a failed fetch (offline, private profile, server error), scans wait this long.
@@ -106,6 +109,10 @@ pub struct OwnedApp {
 pub struct OwnedList {
     pub ids: HashSet<String>,
     pub apps: Vec<OwnedApp>,
+    /// Steam's `playtime_forever` per app id, in seconds (it reports minutes). Only apps with
+    /// time above zero, named or not. Kept in its own table ([`crate::stats`]), never merged
+    /// into the playtime Game Lobby tracks.
+    pub playtime: std::collections::HashMap<String, i64>,
 }
 
 /// Where the request goes. Production is fixed to [`HOST`] over https; tests use a local server.
@@ -173,6 +180,9 @@ struct OwnedItem {
     appid: u64,
     #[serde(default)]
     name: Option<String>,
+    /// Minutes, all time. Anything but a non-negative whole number is ignored.
+    #[serde(default)]
+    playtime_forever: Option<serde_json::Value>,
 }
 
 /// Plain one-line text: control and bidi characters dropped, whitespace collapsed, capped.
@@ -200,6 +210,17 @@ pub fn parse_owned(body: &[u8]) -> Result<OwnedList, FetchError> {
     for item in items {
         if item.appid == 0 || !list.ids.insert(item.appid.to_string()) {
             continue;
+        }
+        let minutes = item
+            .playtime_forever
+            .as_ref()
+            .and_then(|v| v.as_u64())
+            .filter(|m| *m > 0)
+            .unwrap_or(0)
+            .min(MAX_PLAYTIME_MINUTES);
+        if minutes > 0 {
+            list.playtime
+                .insert(item.appid.to_string(), minutes as i64 * 60);
         }
         if let Some(name) = item.name.as_deref().and_then(clean_name) {
             list.apps.push(OwnedApp {
@@ -391,6 +412,9 @@ pub fn apply(
                 .map(owned_game)
                 .collect();
             db::upsert_imported_games(conn, &games)?;
+            // Steam's own playtime, for every owned app (installed ones too). It is replaced
+            // as a whole by each successful fetch and never touches the tracked playtime.
+            crate::stats::replace_store_playtime(conn, crate::stats::STEAM, &list.playtime, now)?;
             let previous: HashSet<String> = state.app_ids.iter().cloned().collect();
             let gone: HashSet<String> = previous
                 .iter()
@@ -482,6 +506,7 @@ pub fn undo(conn: &mut Connection) -> Result<usize> {
     let state = load_import_state(conn)?;
     let ids: HashSet<String> = state.app_ids.into_iter().collect();
     let deleted = db::drop_steam_owned(conn, &ids)?;
+    crate::stats::clear_store_playtime(conn, crate::stats::STEAM)?;
     delete_import_state(conn)?;
     Ok(deleted)
 }
@@ -687,6 +712,7 @@ mod tests {
                     name: name.to_string(),
                 })
                 .collect(),
+            playtime: Default::default(),
         }
     }
 
@@ -1159,5 +1185,121 @@ mod tests {
         );
         assert_eq!(undo(&mut conn).unwrap(), 1);
         assert!(db::get_game(&conn, "steam:570").unwrap().is_some());
+    }
+
+    #[test]
+    fn playtime_forever_is_parsed_into_seconds_for_named_and_unnamed_apps() {
+        let body = br#"{"response":{"games":[
+            {"appid":10,"name":"CS","playtime_forever":90},
+            {"appid":20,"playtime_forever":5},
+            {"appid":30,"name":"Never played","playtime_forever":0},
+            {"appid":40,"name":"No field"},
+            {"appid":50,"name":"Odd","playtime_forever":-3},
+            {"appid":60,"name":"Text","playtime_forever":"12"},
+            {"appid":70,"name":"Huge","playtime_forever":99999999999}
+        ]}}"#;
+        let got = parse_owned(body).unwrap();
+        let mut times: Vec<_> = got.playtime.iter().map(|(k, v)| (k.as_str(), *v)).collect();
+        times.sort();
+        assert_eq!(
+            times,
+            [
+                ("10", 5400),
+                ("20", 300),
+                ("70", MAX_PLAYTIME_MINUTES as i64 * 60)
+            ]
+        );
+    }
+
+    #[test]
+    fn store_playtime_is_saved_apart_from_tracked_playtime_and_never_double_counted() {
+        let database = db::Db::memory().unwrap();
+        let mut conn = database.lock();
+        db::upsert_imported_games(&mut conn, &[installed("570", "Dota 2")]).unwrap();
+        conn.execute(
+            "UPDATE games SET playtimeSeconds=7200 WHERE id='steam:570'",
+            [],
+        )
+        .unwrap();
+        let mut list = apps(&[("570", "Dota 2"), ("10", "Counter-Strike")]);
+        list.playtime = [("570".to_string(), 3600), ("10".to_string(), 600)].into();
+        assert!(apply(&mut conn, &Ok(list), 1000).unwrap().ok);
+
+        // Tracked playtime is untouched: the owned game got none, the installed one kept its own.
+        assert_eq!(
+            db::get_game(&conn, "steam:570")
+                .unwrap()
+                .unwrap()
+                .playtime_seconds,
+            Some(7200)
+        );
+        assert_eq!(
+            db::get_game(&conn, "steam:10")
+                .unwrap()
+                .unwrap()
+                .playtime_seconds,
+            Some(0)
+        );
+        let stored: i64 = conn
+            .query_row(
+                "SELECT SUM(seconds) FROM store_playtime WHERE source='steam'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, 4200);
+        // The statistics take the larger figure per game: 7200 (tracked) + 600 (store only).
+        let stats = crate::stats::summarize(&conn, false).unwrap();
+        assert_eq!(stats.playtime.total_seconds, 7800);
+
+        // A failed fetch keeps what is stored; a later success replaces it whole.
+        assert!(
+            !apply(&mut conn, &Err(FetchError::RateLimited), 2000)
+                .unwrap()
+                .ok
+        );
+        let count = |c: &Connection| -> i64 {
+            c.query_row("SELECT COUNT(*) FROM store_playtime", [], |r| r.get(0))
+                .unwrap()
+        };
+        assert_eq!(count(&conn), 2);
+        let mut later = apps(&[("570", "Dota 2"), ("10", "Counter-Strike")]);
+        later.playtime = [("10".to_string(), 1200)].into();
+        apply(&mut conn, &Ok(later), 3000).unwrap();
+        assert_eq!(count(&conn), 1);
+
+        // Removing the import forgets the stored playtime too.
+        undo(&mut conn).unwrap();
+        assert_eq!(count(&conn), 0);
+    }
+
+    #[test]
+    fn store_playtime_is_not_part_of_backups() {
+        let database = db::Db::memory().unwrap();
+        let mut conn = database.lock();
+        let mut list = apps(&[("10", "Counter-Strike")]);
+        list.playtime = [("10".to_string(), 600)].into();
+        apply(&mut conn, &Ok(list), 1000).unwrap();
+        // A backup's games come from `all_games`: tracked playtime only.
+        let games = db::all_games(&conn).unwrap();
+        assert_eq!(games[0].playtime_seconds, Some(0));
+        // And the backup format has no field for it.
+        let backup = crate::types::Backup {
+            games,
+            settings: None,
+            emulators: None,
+            game_page_custom: None,
+            game_notes: None,
+            game_added: None,
+            play_sessions: None,
+            launchers: None,
+            game_links: None,
+        };
+        let value = serde_json::to_value(&backup).unwrap();
+        assert!(value
+            .as_object()
+            .unwrap()
+            .keys()
+            .all(|k| !k.to_lowercase().contains("storeplaytime")));
     }
 }

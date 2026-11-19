@@ -172,6 +172,9 @@ fn migrate(db: &Connection, file: Option<&Path>) -> Result<()> {
     crate::launchers::migrate(db)?;
     // Linked games (`links`): an added table, no `user_version` change (older builds ignore it).
     crate::links::migrate(db)?;
+    // Playtime stores report (Steam), kept apart from tracked playtime: an added table, no
+    // `user_version` change (older builds ignore it).
+    crate::stats::migrate(db)?;
     // Session history columns and tables. Sessions still open belong to a previous run that
     // ended without closing them (crash, power loss): they keep their last saved length, are
     // closed at that point and marked interrupted.

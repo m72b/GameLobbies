@@ -202,7 +202,7 @@ fn install_paths(game: &Game) -> Vec<(&GameRoute, String)> {
         .collect()
 }
 
-fn is_installed(game: &Game) -> bool {
+pub fn is_installed(game: &Game) -> bool {
     game.routes.iter().any(|r| r.installed == Some(true))
 }
 
