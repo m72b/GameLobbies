@@ -2,7 +2,7 @@
 
 All notable changes to Game Lobby are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.7.0] — 2026-11-19
 
 ### Statistics
 - New **Statistics** view, opened from the side rail or the library bar (it replaces the **Recently played** view and button; **Play history** is unchanged). It opens in place of the library like Settings (**Back** or **Esc** to leave) with four tabs: **Overview** (all, installed, not installed, hidden and favorite games, total and average play time, total install size), **Completion** (played and not played), **Top playtime** (the 50 most played games with time and share of the total, sortable) and **Library** (games and share per store or custom launcher). Hidden games are left out unless **Include hidden games** is on. The average is over games with play time; games with several routes count once under the store shown on their card; installed games without a measured size are counted separately.
