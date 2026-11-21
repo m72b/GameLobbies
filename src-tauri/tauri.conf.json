@@ -14,7 +14,7 @@
     "withGlobalTauri": false,
     "security": {
       "csp": "default-src 'self'; img-src 'self' https: data: http://lobby-cover.localhost lobby-cover: http://lobby-shot.localhost lobby-shot:; style-src 'self' 'unsafe-inline'; script-src 'self'; media-src https://cdn2.steamgriddb.com; connect-src ipc: http://ipc.localhost",
-      "freezePrototype": true
+      "freezePrototype": false
     }
   },
   "bundle": {

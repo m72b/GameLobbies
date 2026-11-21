@@ -154,6 +154,29 @@ mod tests {
         assert!(!page("https://example.com/index.html"));
     }
 
+    /// Object.prototype is frozen in Game Lobby's own window by its first script (before any app
+    /// code), not by Tauri's app-wide `freezePrototype`, which would also freeze it inside the
+    /// store sign-in pages.
+    #[test]
+    fn the_prototype_freeze_runs_first_in_the_main_window_only() {
+        let html = include_str!("../../src/renderer/index.html");
+        let freeze = html
+            .find(r#"<script src="/freeze-prototype.js"></script>"#)
+            .unwrap();
+        assert!(freeze < html.find("<script type=\"module\"").unwrap());
+        assert!(freeze < html.find("</head>").unwrap());
+        let script = include_str!("../../src/renderer/public/freeze-prototype.js");
+        assert!(script
+            .lines()
+            .any(|l| l.trim() == "Object.freeze(Object.prototype)"));
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        assert_eq!(config["app"]["security"]["freezePrototype"], false);
+        // The page's CSP allows only its own scripts, so the file loads and nothing inline does.
+        let csp = config["app"]["security"]["csp"].as_str().unwrap();
+        assert!(csp.contains("script-src 'self';"));
+    }
+
     #[test]
     fn only_the_main_window_is_trusted() {
         assert!(is_main_label("main"));
