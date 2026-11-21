@@ -44,11 +44,11 @@ A library that already has games shows an **Add store accounts** banner above th
 
 ### Signing in to GOG
 
-**Sign in to GOG in your browser** opens GOG's own sign-in page in your default web browser. Sign in any way GOG offers: e-mail and password, Google, Discord, and the others. GOG then shows a page saying you are signed in; its address starts with `https://embed.gog.com/on_login_success`. Copy that whole address from the browser's address bar, paste it into the field Game Lobby shows (Settings → Accounts, or the setup) and choose **Continue**. Game Lobby checks it with GOG, says **Signed in to GOG as …** and lists your games.
+**Sign in to GOG in your browser** opens GOG's own sign-in page in your default web browser. Sign in any way GOG offers: e-mail and password, Google, Discord, and the others. GOG then shows a page saying you are signed in; its address starts with `https://embed.gog.com/on_login_success`. Copy that whole address from the browser's address bar, paste it into the field Game Lobby shows (Settings → Accounts, or the setup) and choose **Continue**. Game Lobby checks it with GOG, says **Signed in to GOG as …** and lists your games. If that is not your GOG account, choose **Not you? Sign out** next to it.
 
 - Each address works once and only for a few minutes. If Game Lobby says GOG did not accept it, choose **Open GOG's page again**, sign in, and paste the new address. **Cancel sign-in** stops; after 10 minutes the sign-in stops by itself.
 - **Unofficial**: GOG has no sign-in for other apps, so Game Lobby signs in as GOG Galaxy does, with Galaxy's public app id (the same way open-source launchers such as Heroic and Lutris do). GOG has not approved this and could stop it at any time; **Installed files only** keeps everything found on this PC.
-- **What is read**: the games you own and their titles, and GOG's playtime per game (for up to 500 games per sync), counted like Steam's: the larger of GOG's and Game Lobby's own time, with the difference shown as **Added from GOG** in the activity. Play opens the game in GOG Galaxy.
+- **What is read**: the games you own and their titles, and GOG's playtime per game (a large library is covered over several syncs, the games checked longest ago first), counted like Steam's: the larger of GOG's and Game Lobby's own time, with the difference shown as **Added from GOG** in the activity. Play opens the game in GOG Galaxy.
 - **Your sign-in**: your password goes only to GOG. Game Lobby keeps GOG's sign-in tokens, encrypted for your Windows user (never in backups, logs or **Copy diagnostics**, which only says whether you are signed in), and renews them on its own. **Sign out** deletes them and removes the not-installed games they added.
 
 ### Signing in to Battle.net
@@ -58,7 +58,7 @@ A library that already has games shows an **Add store accounts** banner above th
 - **What is read**, from Rust, never from the page: the games on your account and its classic games. Well-known Blizzard and Activision games get a Battle.net launch link; others are listed as owned without one (Play explains why).
 - **Unofficial**: Battle.net has no public interface for this; Game Lobby reads the data Battle.net's own account pages use, with your session, so it can stop working or ask you to sign in again at any time.
 - **Your sign-in**: the window is private (InPrivate) and keeps nothing after it closes. Game Lobby keeps only Battle.net's session cookies, encrypted for your Windows user. **Sign out** deletes them and removes the not-installed games it added.
-- **If the sign-in doesn't finish** (the page doesn't show its sign-in form, or stays on a page after you signed in): close the window; after 10 minutes the sign-in stops by itself. Game Lobby's log lists the pages the window showed and any errors the page ran into (sites and paths only, never what you typed), which helps find the cause. Choose **Installed files only** for Battle.net meanwhile.
+- **If the sign-in doesn't finish** (the page doesn't show its sign-in form, or stays on a page after you signed in): close the window; after 10 minutes the sign-in stops by itself. Game Lobby's log lists the pages the window showed and the kind of each problem the page ran into (for example a script error such as TypeError, a blocked request or an HTTP error), as sites and paths only: never the page's messages or anything you typed. That helps find the cause. Choose **Installed files only** for Battle.net meanwhile.
 
 ### What the GOG and Battle.net accounts add
 
