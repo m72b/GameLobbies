@@ -87,6 +87,13 @@ pub async fn read_capped_to(
     Ok(body)
 }
 
+/// An account name a store reports (GOG user name, BattleTag, Humble e-mail), for the sign-in
+/// notice: plain one-line text of at most 64 characters, without markup characters.
+pub fn display_name(raw: &str) -> Option<String> {
+    let name = clean_name(raw)?;
+    (name.chars().count() <= 64 && !name.contains(['<', '>', '"', '\\'])).then_some(name)
+}
+
 /// Plain one-line text: control and bidi characters dropped, whitespace collapsed, capped at
 /// [`MAX_NAME_CHARS`].
 pub fn clean_name(raw: &str) -> Option<String> {
@@ -283,7 +290,7 @@ impl StoreHttp {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     use std::sync::{Arc, Mutex};
@@ -447,6 +454,18 @@ mod tests {
         );
         assert!(FetchError::Rejected.needs_new_credentials());
         assert!(!FetchError::Private.needs_new_credentials());
+    }
+
+    #[test]
+    fn display_names_are_short_plain_text() {
+        assert_eq!(display_name(" Gamer#1234 "), Some("Gamer#1234".into()));
+        assert_eq!(
+            display_name("me@example.com"),
+            Some("me@example.com".into())
+        );
+        for bad in ["", "   ", "<b>x</b>", "a\"b", &"x".repeat(65)] {
+            assert_eq!(display_name(bad), None, "{bad}");
+        }
     }
 
     #[test]

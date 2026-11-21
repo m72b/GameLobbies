@@ -16,6 +16,9 @@ use anyhow::Result;
 use tauri::{AppHandle, Emitter, Manager};
 use url::Url;
 
+/// The longest a whole sync may take (it holds the scan lock).
+pub const SYNC_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+
 /// Stores whose account works through a cookie session.
 pub const COOKIE_STORES: [AccountStore; 3] = [
     AccountStore::Gog,
@@ -35,6 +38,33 @@ pub fn api_hosts(store: AccountStore) -> &'static [&'static str] {
         AccountStore::Humble => humble::API_HOSTS,
         _ => &[],
     }
+}
+
+/// The URLs whose cookies are read from the sign-in window: every API host's root and the
+/// store's own request URLs (a cookie set for a path is only sent there).
+pub fn cookie_urls(store: AccountStore) -> Vec<String> {
+    let requests: &[&str] = match store {
+        AccountStore::Gog => &[
+            "https://menu.gog.com/v1/account/basic",
+            "https://embed.gog.com/user/data/games",
+            "https://www.gog.com/u/",
+        ],
+        AccountStore::Battlenet => &[
+            "https://account.battle.net/api/games-and-subs",
+            "https://account.battle.net/api/classic-games",
+        ],
+        AccountStore::Humble => &[
+            "https://www.humblebundle.com/home/library",
+            "https://www.humblebundle.com/api/v1/orders",
+        ],
+        _ => &[],
+    };
+    let mut urls: Vec<String> = api_hosts(store)
+        .iter()
+        .map(|host| format!("https://{host}/"))
+        .collect();
+    urls.extend(requests.iter().map(|u| u.to_string()));
+    urls
 }
 
 /// The domains (and their subdomains) whose cookies are kept.
@@ -72,8 +102,8 @@ pub fn signed_in_page(store: AccountStore, url: &Url) -> bool {
 pub async fn probe(store: AccountStore, http: &StoreHttp) -> Result<Option<String>, FetchError> {
     match store {
         AccountStore::Gog => gog::probe(http).await.map(Some),
-        AccountStore::Battlenet => battlenet::probe(http).await.map(|_| None),
-        AccountStore::Humble => humble::probe(http).await.map(|_| None),
+        AccountStore::Battlenet => battlenet::probe(http).await,
+        AccountStore::Humble => humble::probe(http).await,
         _ => Err(FetchError::Invalid("this store has no account sign-in.")),
     }
 }
@@ -111,7 +141,11 @@ pub async fn sync_store(
     let (jar, user_agent) = saved.jar(cookie_domains(store));
     let http = StoreHttp::new(api_hosts(store), jar, &user_agent)
         .map_err(|e| anyhow::anyhow!(e.message_for(store.name())))?;
-    let outcome = fetch(store, &http).await;
+    let outcome = tokio::time::timeout(SYNC_TIMEOUT, fetch(store, &http))
+        .await
+        .unwrap_or(Err(FetchError::Network(
+            "the store took too long to answer.",
+        )));
     let status = {
         let mut conn = state.db.lock();
         let status =
@@ -215,6 +249,28 @@ pub async fn sync_now(app: &AppHandle, store: AccountStore) -> Result<Option<Syn
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cookies_are_read_for_the_roots_and_the_request_urls_of_listed_hosts_only() {
+        for store in COOKIE_STORES {
+            let urls = cookie_urls(store);
+            assert!(urls.len() > api_hosts(store).len());
+            for url in urls {
+                let url = Url::parse(&url).unwrap();
+                assert_eq!(url.scheme(), "https");
+                assert!(api_hosts(store).contains(&url.host_str().unwrap()), "{url}");
+            }
+        }
+        assert!(cookie_urls(AccountStore::Steam).is_empty());
+    }
+
+    #[test]
+    fn a_sync_is_bounded_in_time() {
+        let source = include_str!("stores.rs");
+        let sync = &source[source.find("pub async fn sync_store").unwrap()..];
+        assert!(sync.contains("tokio::time::timeout(SYNC_TIMEOUT, fetch(store, &http))"));
+        assert!(SYNC_TIMEOUT <= std::time::Duration::from_secs(300));
+    }
 
     #[test]
     fn each_store_has_its_own_hosts_and_pages() {

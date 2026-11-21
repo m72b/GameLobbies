@@ -399,12 +399,38 @@ async fn start_window(app: &AppHandle, store: AccountStore) -> Result<(), String
     Ok(())
 }
 
+/// When the window's session is checked with the store. A session the store refused (the
+/// sign-in is still going on) is checked again only once the cookies change; after any other
+/// failure (offline, a server error, a rate limit) it is checked again after [`RETRY_PROBE`].
+#[derive(Debug, Default, Clone, PartialEq)]
+struct ProbeGate {
+    refused: Option<u64>,
+    retry_at: Option<std::time::Instant>,
+}
+
+/// Wait this long before checking a session again after a failure that was not a refusal.
+const RETRY_PROBE: Duration = Duration::from_secs(6);
+
+impl ProbeGate {
+    fn may_probe(&self, fingerprint: u64, now: std::time::Instant) -> bool {
+        self.refused != Some(fingerprint) && self.retry_at.is_none_or(|at| now >= at)
+    }
+
+    fn record(&mut self, fingerprint: u64, refused: bool, now: std::time::Instant) {
+        if refused {
+            self.refused = Some(fingerprint);
+            self.retry_at = None;
+        } else {
+            self.retry_at = Some(now + RETRY_PROBE);
+        }
+    }
+}
+
 /// Waits for the store's signed-in page in flight `id`'s window, then takes the store's cookies
-/// and checks them with the store ([`super::stores::probe`]). A session the store doesn't accept
-/// yet (the sign-in is still going on) is tried again only when the cookies changed. Ends when
+/// and checks them with the store ([`super::stores::probe`]), as [`ProbeGate`] allows. Ends when
 /// the sign-in is saved, or with the flight (closed, cancelled, timed out).
 async fn watch_window(app: &AppHandle, store: AccountStore, id: u64) {
-    let mut last_tried: Option<u64> = None;
+    let mut gate = ProbeGate::default();
     loop {
         tokio::time::sleep(CAPTURE_EVERY).await;
         let state = app.state::<AppState>();
@@ -429,10 +455,9 @@ async fn watch_window(app: &AppHandle, store: AccountStore, id: u64) {
         };
         let jar = super::cookies::CookieJar::new(super::stores::cookie_domains(store), cookies);
         let fingerprint = jar_fingerprint(&jar);
-        if last_tried == Some(fingerprint) || jar.cookies().is_empty() {
+        if jar.cookies().is_empty() || !gate.may_probe(fingerprint, std::time::Instant::now()) {
             continue;
         }
-        last_tried = Some(fingerprint);
         let http =
             match super::http::StoreHttp::new(super::stores::api_hosts(store), jar, &user_agent) {
                 Ok(http) => http,
@@ -460,12 +485,17 @@ async fn watch_window(app: &AppHandle, store: AccountStore, id: u64) {
                 return;
             }
             // Not signed in yet: keep waiting for the next change.
-            Err(super::http::FetchError::Rejected) => {}
-            Err(e) => log::info!(
-                "{} sign-in: the store could not be checked yet ({}).",
-                store.name(),
-                e.message_for(store.name())
-            ),
+            Err(super::http::FetchError::Rejected) => {
+                gate.record(fingerprint, true, std::time::Instant::now())
+            }
+            Err(e) => {
+                gate.record(fingerprint, false, std::time::Instant::now());
+                log::info!(
+                    "{} sign-in: the store could not be checked yet ({}).",
+                    store.name(),
+                    e.message_for(store.name())
+                )
+            }
         }
     }
 }
@@ -563,10 +593,10 @@ async fn export_cookies(
     store: AccountStore,
 ) -> Result<(Vec<super::cookies::StoredCookie>, String), SignInError> {
     let (tx, rx) = tokio::sync::oneshot::channel();
-    let hosts = super::stores::api_hosts(store);
+    let urls = super::stores::cookie_urls(store);
     let allowed = super::stores::cookie_domains(store);
     window
-        .with_webview(move |webview| read_webview_cookies(&webview, hosts, allowed, tx))
+        .with_webview(move |webview| read_webview_cookies(&webview, urls, allowed, tx))
         .map_err(|_| SignInError::Window("its web view is not ready."))?;
     rx.await
         .map_err(|_| SignInError::Window("its web view is not ready."))?
@@ -582,12 +612,14 @@ async fn export_cookies(
 
 type CookieReply = Result<(Vec<super::cookies::StoredCookie>, String), SignInError>;
 
-/// Asks WebView2 for the cookies it would send to each `https://<host>/`, keeps those of the
-/// store's domains and sends them with the user agent once every host answered.
+/// Asks WebView2 for the cookies it would send to each of `urls` (every API host's root and the
+/// store's own request URLs, whose paths may carry path cookies), keeps those of the store's
+/// domains, merges them ([`super::cookies::merge`]) and sends them with the user agent once
+/// every URL answered.
 #[cfg(windows)]
 fn read_webview_cookies(
     webview: &tauri::webview::PlatformWebview,
-    hosts: &'static [&'static str],
+    urls: Vec<String>,
     allowed: &'static [&'static str],
     tx: tokio::sync::oneshot::Sender<CookieReply>,
 ) {
@@ -619,13 +651,13 @@ fn read_webview_cookies(
     };
     struct Pending {
         left: usize,
-        cookies: Vec<super::cookies::StoredCookie>,
+        cookies: Vec<Vec<super::cookies::StoredCookie>>,
         failed: bool,
         tx: Option<tokio::sync::oneshot::Sender<CookieReply>>,
         user_agent: String,
     }
     let pending = Arc::new(Mutex::new(Pending {
-        left: hosts.len(),
+        left: urls.len(),
         cookies: Vec::new(),
         failed: false,
         tx: Some(tx),
@@ -674,14 +706,14 @@ fn read_webview_cookies(
         }
         Ok(out)
     };
-    for host in hosts {
+    for url in &urls {
         let shared = pending.clone();
-        let uri = HSTRING::from(format!("https://{host}/"));
+        let uri = HSTRING::from(url.as_str());
         let handler = GetCookiesCompletedHandler::create(Box::new(move |result, list| {
             let mut p = super::lock(&shared);
             match (result, list) {
                 (Ok(()), Some(list)) => match read_list(&list) {
-                    Ok(found) => p.cookies.extend(found),
+                    Ok(found) => p.cookies.push(found),
                     Err(_) => p.failed = true,
                 },
                 _ => p.failed = true,
@@ -692,7 +724,10 @@ fn read_webview_cookies(
                     let reply = if p.failed {
                         Err(FAILED)
                     } else {
-                        Ok((std::mem::take(&mut p.cookies), p.user_agent.clone()))
+                        Ok((
+                            super::cookies::merge(std::mem::take(&mut p.cookies)),
+                            p.user_agent.clone(),
+                        ))
                     };
                     let _ = tx.send(reply);
                 }
@@ -1401,6 +1436,28 @@ mod tests {
             ..flight(id, false)
         });
         assert!(take_return(&mut window, id, &url(&nonce)).is_none());
+    }
+
+    #[test]
+    fn a_failed_check_is_retried_soon_and_a_refusal_waits_for_new_cookies() {
+        let t0 = std::time::Instant::now();
+        let mut gate = ProbeGate::default();
+        assert!(gate.may_probe(1, t0));
+        // A network error, a 5xx or a rate limit: the same cookies are tried again shortly.
+        gate.record(1, false, t0);
+        assert!(!gate.may_probe(1, t0 + Duration::from_secs(1)));
+        assert!(gate.may_probe(1, t0 + RETRY_PROBE));
+        // A refusal: only changed cookies are tried, at once.
+        gate.record(1, true, t0 + RETRY_PROBE);
+        assert!(!gate.may_probe(1, t0 + RETRY_PROBE * 10));
+        assert!(gate.may_probe(2, t0 + RETRY_PROBE));
+        // The loop records refusals and other failures separately.
+        let source = include_str!("signin.rs");
+        let watch = &source[source.find("async fn watch_window").unwrap()..];
+        let watch = &watch[..watch.find("fn jar_fingerprint").unwrap()];
+        assert!(watch.contains("gate.record(fingerprint, true, std::time::Instant::now())"));
+        assert!(watch.contains("gate.record(fingerprint, false, std::time::Instant::now())"));
+        assert!(watch.contains("gate.may_probe(fingerprint, std::time::Instant::now())"));
     }
 
     #[test]

@@ -134,7 +134,7 @@ impl CookieJar {
         };
         for cookie in cookies {
             if cookie.valid(allowed) {
-                jar.put(cookie);
+                jar.put(cookie, i64::MIN);
             }
         }
         jar
@@ -144,10 +144,20 @@ impl CookieJar {
         &self.cookies
     }
 
-    fn put(&mut self, cookie: StoredCookie) {
+    /// Adds or replaces a cookie. At [`MAX_COOKIES`], expired cookies go first, then the oldest
+    /// session cookie; only when neither exists is the new cookie dropped.
+    fn put(&mut self, cookie: StoredCookie, now_s: i64) {
         self.cookies.retain(|c| {
             !(c.name == cookie.name && c.domain == cookie.domain && c.path == cookie.path)
         });
+        if self.cookies.len() >= MAX_COOKIES {
+            self.cookies.retain(|c| !c.expired(now_s));
+        }
+        if self.cookies.len() >= MAX_COOKIES {
+            if let Some(oldest) = self.cookies.iter().position(|c| c.expires.is_none()) {
+                self.cookies.remove(oldest);
+            }
+        }
         if self.cookies.len() < MAX_COOKIES {
             self.cookies.push(cookie);
         }
@@ -237,8 +247,23 @@ impl CookieJar {
             });
             return;
         }
-        self.put(cookie);
+        self.put(cookie, now_s);
     }
+}
+
+/// Merges cookie lists read from several URLs: one cookie per name, domain and path (the first
+/// one read wins).
+pub fn merge(lists: Vec<Vec<StoredCookie>>) -> Vec<StoredCookie> {
+    let mut out: Vec<StoredCookie> = Vec::new();
+    for cookie in lists.into_iter().flatten() {
+        if !out
+            .iter()
+            .any(|c| c.name == cookie.name && c.domain == cookie.domain && c.path == cookie.path)
+        {
+            out.push(cookie);
+        }
+    }
+    out
 }
 
 /// Unix seconds of an HTTP date (`Wed, 21 Oct 2026 07:28:00 GMT`, also with `-` between the
@@ -420,11 +445,62 @@ mod tests {
         assert!(jar.cookies().iter().all(|c| c.name != "sid"));
         jar.absorb(&from, "e=1; Expires=Wed, 21 Oct 2015 07:28:00 GMT", NOW);
         assert!(jar.cookies().iter().all(|c| c.name != "e"));
-        // A flood is capped.
+        // A flood of session cookies is capped by evicting the oldest ones: the newest stays.
         for i in 0..500 {
             jar.absorb(&from, &format!("c{i}=1"), NOW);
         }
         assert_eq!(jar.cookies().len(), MAX_COOKIES);
+        assert!(jar.cookies().iter().any(|c| c.name == "c499"));
+        assert!(jar.cookies().iter().all(|c| c.name != "c0"));
+    }
+
+    #[test]
+    fn a_full_jar_evicts_expired_then_session_cookies() {
+        let from = url("https://www.gog.com/");
+        let mut jar = CookieJar::new(GOG, Vec::new());
+        for i in 0..MAX_COOKIES {
+            jar.absorb(
+                &from,
+                &format!("p{i}=1; Max-Age={}", if i == 7 { 10 } else { 100_000 }),
+                NOW,
+            );
+        }
+        // Cookie p7 expires at NOW + 10: later it is the one evicted.
+        jar.absorb(&from, "fresh=1; Max-Age=100", NOW + 20);
+        assert!(jar.cookies().iter().any(|c| c.name == "fresh"));
+        assert!(jar.cookies().iter().all(|c| c.name != "p7"));
+        // Full of long-lived cookies: one session cookie goes before the new one is dropped.
+        jar.absorb(&from, "s1=1", NOW + 20);
+        assert!(
+            jar.cookies().iter().all(|c| c.name != "s1"),
+            "full, no expired or session cookie"
+        );
+        assert_eq!(jar.cookies().len(), MAX_COOKIES);
+    }
+
+    #[test]
+    fn cookies_read_from_several_urls_are_merged_once() {
+        let c = |name: &str, value: &str, path: &str| {
+            StoredCookie::from_webview(name, value, ".gog.com", path, true, true, None, GOG)
+                .unwrap()
+        };
+        let merged = merge(vec![
+            vec![c("a", "1", "/"), c("b", "1", "/")],
+            vec![c("a", "2", "/"), c("a", "3", "/account"), c("c", "1", "/")],
+        ]);
+        let shown: Vec<(String, String, String)> = merged
+            .iter()
+            .map(|c| (c.name.clone(), c.value.clone(), c.path.clone()))
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                ("a".into(), "1".into(), "/".into()),
+                ("b".into(), "1".into(), "/".into()),
+                ("a".into(), "3".into(), "/account".into()),
+                ("c".into(), "1".into(), "/".into()),
+            ]
+        );
     }
 
     #[test]

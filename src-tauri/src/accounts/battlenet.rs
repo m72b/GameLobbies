@@ -115,6 +115,15 @@ pub fn parse_games_and_subs(body: &[u8]) -> Result<Vec<Value>, FetchError> {
         .ok_or(FetchError::Rejected)
 }
 
+/// The BattleTag `games-and-subs` reports, if it does (`battleTag` / `battletag`).
+pub fn parse_battletag(body: &[u8]) -> Option<String> {
+    let value: Value = serde_json::from_slice(body).ok()?;
+    ["battleTag", "battletag", "BattleTag"]
+        .iter()
+        .find_map(|k| value.get(*k).and_then(Value::as_str))
+        .and_then(super::http::display_name)
+}
+
 /// `classic-games`: the classic games (missing list: none).
 pub fn parse_classic(body: &[u8]) -> Result<Vec<Value>, FetchError> {
     let value: Value = serde_json::from_slice(body)
@@ -142,10 +151,12 @@ pub fn outcome(accounts: &[Value], classic: Option<&[Value]>) -> FetchOutcome {
     }
 }
 
-/// Checks that the session works.
-pub async fn probe(http: &StoreHttp) -> Result<(), FetchError> {
+/// Checks that the session works; the BattleTag when the store gives it.
+pub async fn probe(http: &StoreHttp) -> Result<Option<String>, FetchError> {
     let url = Url::parse("https://account.battle.net/api/games-and-subs").expect("valid URL");
-    parse_games_and_subs(&http.get(url).await?).map(|_| ())
+    let body = http.get(url).await?;
+    parse_games_and_subs(&body)?;
+    Ok(parse_battletag(&body))
 }
 
 pub async fn fetch(http: &StoreHttp) -> Result<FetchOutcome, FetchError> {
@@ -208,6 +219,17 @@ mod tests {
         }
         // Without the classic list the result is not complete (nothing is removed).
         assert!(!outcome(&accounts, None).complete);
+    }
+
+    #[test]
+    fn the_battletag_is_shown_when_present_and_plain() {
+        assert_eq!(
+            parse_battletag(br#"{"battleTag":"Hero#1234","gameAccounts":[]}"#),
+            Some("Hero#1234".into())
+        );
+        assert_eq!(parse_battletag(br#"{"gameAccounts":[]}"#), None);
+        assert_eq!(parse_battletag(br#"{"battleTag":"<script>"}"#), None);
+        assert_eq!(parse_battletag(b"nope"), None);
     }
 
     #[test]

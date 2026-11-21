@@ -39,9 +39,17 @@ pub fn signed_in_page(url: &Url) -> bool {
         && url.path().trim_end_matches('/') == "/home/library"
 }
 
-/// The order keys from the library page: the JSON of the single `user-home-json-data` block.
-/// No block (not signed in): [`FetchError::Rejected`].
-pub fn parse_library_page(html: &[u8]) -> Result<Vec<String>, FetchError> {
+/// What the library page's data block gives.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Library {
+    pub keys: Vec<String>,
+    /// The account's e-mail or name, when the block has one.
+    pub account: Option<String>,
+}
+
+/// The order keys (and the account name) from the library page: the JSON of the single
+/// `user-home-json-data` block. No block (not signed in): [`FetchError::Rejected`].
+pub fn parse_library_page(html: &[u8]) -> Result<Library, FetchError> {
     let text = String::from_utf8_lossy(html);
     let mut blocks = text.match_indices(MARKER);
     let Some((at, _)) = blocks.next() else {
@@ -78,7 +86,16 @@ pub fn parse_library_page(html: &[u8]) -> Result<Vec<String>, FetchError> {
         .collect();
     out.sort();
     out.dedup();
-    Ok(out)
+    let account = [
+        "/userOptions/email",
+        "/user/email",
+        "/email",
+        "/userOptions/username",
+    ]
+    .iter()
+    .find_map(|path| value.pointer(path).and_then(Value::as_str))
+    .and_then(super::http::display_name);
+    Ok(Library { keys: out, account })
 }
 
 fn owned_game(machine_name: &str, human_name: &str) -> Option<OwnedGame> {
@@ -147,18 +164,30 @@ pub fn parse_orders(body: &[u8], out: &mut HashMap<String, OwnedGame>) -> Result
     Ok(())
 }
 
-async fn library_keys(http: &StoreHttp) -> Result<Vec<String>, FetchError> {
+async fn library(http: &StoreHttp) -> Result<Library, FetchError> {
     let url = Url::parse("https://www.humblebundle.com/home/library").expect("valid URL");
     parse_library_page(&http.get(url).await?)
 }
 
-/// Checks that the session works.
-pub async fn probe(http: &StoreHttp) -> Result<(), FetchError> {
-    library_keys(http).await.map(|_| ())
+/// Checks that the session works; the account name when the page gives one.
+pub async fn probe(http: &StoreHttp) -> Result<Option<String>, FetchError> {
+    library(http).await.map(|l| l.account)
 }
 
 pub async fn fetch(http: &StoreHttp) -> Result<FetchOutcome, FetchError> {
-    let keys = library_keys(http).await?;
+    let keys = library(http).await?.keys;
+    let orders = Url::parse("https://www.humblebundle.com/api/v1/orders").expect("valid URL");
+    fetch_orders(http, &orders, &keys).await
+}
+
+/// The orders of `keys`, [`BATCH`] at a time from `orders`. The first failed batch ends the
+/// fetch as incomplete (nothing is removed then), so a struggling store can't hold the scan for
+/// up to [`MAX_PAGES`] slow requests; a rejected session ends it as an error.
+async fn fetch_orders(
+    http: &StoreHttp,
+    orders: &Url,
+    keys: &[String],
+) -> Result<FetchOutcome, FetchError> {
     let mut games = HashMap::new();
     let mut complete = true;
     for (n, batch) in keys.chunks(BATCH).enumerate() {
@@ -166,7 +195,7 @@ pub async fn fetch(http: &StoreHttp) -> Result<FetchOutcome, FetchError> {
             complete = false;
             break;
         }
-        let mut url = Url::parse("https://www.humblebundle.com/api/v1/orders").expect("valid URL");
+        let mut url = orders.clone();
         {
             let mut q = url.query_pairs_mut();
             q.append_pair("all_tpkds", "true");
@@ -181,7 +210,10 @@ pub async fn fetch(http: &StoreHttp) -> Result<FetchOutcome, FetchError> {
         {
             Ok(()) => {}
             Err(FetchError::Rejected) => return Err(FetchError::Rejected),
-            Err(_) => complete = false,
+            Err(_) => {
+                complete = false;
+                break;
+            }
         }
     }
     let mut games: Vec<OwnedGame> = games.into_values().collect();
@@ -207,8 +239,12 @@ mod tests {
 
     #[test]
     fn order_keys_come_only_from_the_data_block() {
-        let keys = parse_library_page(&page(r#"{"gamekeys":["abcDEF123","abcDEF123","bad key","../x",7],"other":{"gamekeys":["nested"]}}"#)).unwrap();
-        assert_eq!(keys, ["abcDEF123"]);
+        let library = parse_library_page(&page(r#"{"gamekeys":["abcDEF123","abcDEF123","bad key","../x",7],"other":{"gamekeys":["nested"]},"userOptions":{"email":"me@example.com"}}"#)).unwrap();
+        assert_eq!(library.keys, ["abcDEF123"]);
+        assert_eq!(library.account.as_deref(), Some("me@example.com"));
+        let plain =
+            parse_library_page(&page(r#"{"gamekeys":[],"userOptions":{"email":"<b>"}}"#)).unwrap();
+        assert_eq!(plain.account, None);
         // Signed out: no block.
         assert_eq!(
             parse_library_page(b"<html>Log in</html>"),
@@ -241,6 +277,35 @@ mod tests {
             parse_library_page(&huge),
             Err(FetchError::Invalid(_))
         ));
+    }
+
+    #[tokio::test]
+    async fn the_first_failed_batch_ends_the_fetch() {
+        use crate::accounts::http::tests::{ok, store_server};
+        let good = ok(
+            r#"{"k":{"subproducts":[{"machine_name":"a_game","human_name":"A","downloads":[{"platform":"windows"}]}]}}"#,
+            "",
+        );
+        let (base, seen) = store_server(vec![]).await;
+        let http = StoreHttp::local(Default::default());
+        let orders = Url::parse(&format!("{base}/api/v1/orders")).unwrap();
+        let keys: Vec<String> = (0..200).map(|i| format!("key{i}")).collect();
+        // Every batch fails (404): one request, then incomplete.
+        let out = fetch_orders(&http, &orders, &keys).await.unwrap();
+        assert!(!out.complete);
+        assert_eq!(seen.lock().unwrap().len(), 1);
+        drop(good);
+        // A rejected session is an error, not an incomplete list.
+        let (base, _) = store_server(vec![(
+            "/api/v1/orders?all_tpkds=true&gamekeys=key0",
+            "HTTP/1.1 401 X\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".into(),
+        )])
+        .await;
+        let orders = Url::parse(&format!("{base}/api/v1/orders")).unwrap();
+        assert_eq!(
+            fetch_orders(&http, &orders, &["key0".to_string()]).await,
+            Err(FetchError::Rejected)
+        );
     }
 
     #[test]

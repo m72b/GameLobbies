@@ -196,6 +196,13 @@ pub fn apply_account(
     let mut sync = account.sync.take().unwrap_or_default();
     sync.attempted_at = now;
     let name = store.name();
+    // A complete list with no games at all after a non-empty one is far more likely a changed
+    // page than an emptied account: it is treated as unreadable, so nothing is ever removed.
+    let empty = Err(FetchError::Invalid("the store returned no games."));
+    let outcome = match outcome {
+        Ok(list) if list.complete && list.owned_ids.is_empty() && !sync.ids.is_empty() => &empty,
+        other => other,
+    };
     let status = match outcome {
         Ok(list) => {
             let source = route_source(store);
@@ -522,16 +529,65 @@ mod tests {
         .unwrap();
         assert_eq!(db::game_count(&conn).unwrap(), 2);
         assert!(db::get_game(&conn, "gog:2").unwrap().unwrap().favorite);
-        // A small removal applies at once.
+        // A small removal applies at once (a list that still has a game: an empty one is
+        // not believed after a full one).
         apply_account(
             &mut conn,
             AccountStore::Gog,
-            &outcome(Vec::new(), true),
+            &outcome(vec![owned("99", "Newer", None)], true),
             4000 + PENDING_MIN_AGE_MS,
             None,
         )
         .unwrap();
         assert!(db::get_game(&conn, "gog:1").unwrap().is_none());
+    }
+
+    #[test]
+    fn an_empty_list_after_a_full_one_removes_nothing() {
+        let database = db::Db::memory().unwrap();
+        let mut conn = database.lock();
+        let many: Vec<OwnedGame> = (1..=30)
+            .map(|i| owned(&i.to_string(), &format!("Game {i}"), None))
+            .collect();
+        apply_account(
+            &mut conn,
+            AccountStore::Humble,
+            &outcome(many, true),
+            1000,
+            None,
+        )
+        .unwrap();
+        for at in [
+            2000,
+            2000 + PENDING_MIN_AGE_MS,
+            3000 + 2 * PENDING_MIN_AGE_MS,
+        ] {
+            let status = apply_account(
+                &mut conn,
+                AccountStore::Humble,
+                &outcome(Vec::new(), true),
+                at,
+                None,
+            )
+            .unwrap();
+            assert!(!status.ok);
+            assert!(
+                status.message.contains("returned no games"),
+                "{}",
+                status.message
+            );
+        }
+        assert_eq!(db::game_count(&conn).unwrap(), 30);
+        // A first sync of an empty account is fine.
+        let status = apply_account(
+            &mut conn,
+            AccountStore::Gog,
+            &outcome(Vec::new(), true),
+            1000,
+            None,
+        )
+        .unwrap();
+        assert!(status.ok);
     }
 
     #[test]
