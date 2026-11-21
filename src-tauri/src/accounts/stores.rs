@@ -21,6 +21,10 @@ use url::Url;
 
 /// The longest a whole sync may take (it holds the scan lock).
 pub const SYNC_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+/// The longest a token renewal may take (before the sync's own time limit starts).
+const REFRESH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+/// GOG's playtime requests stop this long before [`SYNC_TIMEOUT`], so the games are applied.
+const FETCH_MARGIN: std::time::Duration = std::time::Duration::from_secs(60);
 /// GOG's access token is renewed when it has less than this left.
 const TOKEN_MARGIN_MS: i64 = 5 * 60 * 1000;
 
@@ -133,10 +137,19 @@ async fn fetch(
     store: AccountStore,
     http: &StoreHttp,
     saved: &Session,
+    playtime_ages: &std::collections::HashMap<String, i64>,
 ) -> Result<FetchOutcome, FetchError> {
     match (store, saved) {
         (AccountStore::Gog, Session::Tokens { user_id, .. }) => {
-            gog::fetch(http, &gog::Endpoints::production(), user_id).await
+            let deadline = std::time::Instant::now() + (SYNC_TIMEOUT - FETCH_MARGIN);
+            gog::fetch(
+                http,
+                &gog::Endpoints::production(),
+                user_id,
+                playtime_ages,
+                deadline,
+            )
+            .await
         }
         (AccountStore::Battlenet, Session::Cookies { .. }) => battlenet::fetch(http).await,
         _ => Err(FetchError::Rejected),
@@ -164,20 +177,42 @@ pub async fn sync_store(
     let Some(saved) = loaded else {
         return Ok(None);
     };
-    let work = async {
-        let (http, renewed) = client_for(store, &saved).await?;
-        let outcome = fetch(store, &http, renewed.as_ref().unwrap_or(&saved)).await;
-        Ok::<_, FetchError>((http, renewed, outcome))
-    };
-    let attempt = tokio::time::timeout(SYNC_TIMEOUT, work)
+    // Renewing the token comes first, with its own time limit, and a renewed session is sealed
+    // at once: if GOG replaces the refresh token, the new one is never lost to a slow fetch.
+    let renewal = tokio::time::timeout(REFRESH_TIMEOUT, client_for(store, &saved))
         .await
         .unwrap_or(Err(FetchError::Network(
             "the store took too long to answer.",
         )));
-    let (outcome, http, renewed) = match attempt {
-        Ok((http, renewed, outcome)) => (outcome, Some(http), renewed),
-        Err(e) => (Err(e), None, None),
+    let (client, saved) = match renewal {
+        Ok((client, Some(renewed))) => {
+            let conn = state.db.lock();
+            if session::exists(&conn, store)? {
+                session::save(&conn, store, &renewed)?;
+            }
+            (client, renewed)
+        }
+        Ok((client, None)) => (client, saved),
+        Err(e) => {
+            let status = {
+                let mut conn = state.db.lock();
+                apply::apply_account(&mut conn, store, &Err(e), now_ms(), None)?
+            };
+            log::warn!("{} account: {}", store.name(), status.message);
+            return Ok(Some(status));
+        }
     };
+    let ages = if store == AccountStore::Gog {
+        crate::stats::store_playtime_ages(&state.db.lock(), crate::stats::GOG)?
+    } else {
+        Default::default()
+    };
+    let outcome = tokio::time::timeout(SYNC_TIMEOUT, fetch(store, &client, &saved, &ages))
+        .await
+        .unwrap_or(Err(FetchError::Network(
+            "the store took too long to answer.",
+        )));
+    let (http, renewed): (Option<StoreHttp>, Option<Session>) = (Some(client), None);
     let status = {
         let mut conn = state.db.lock();
         let retry_after = http.as_ref().and_then(StoreHttp::retry_after);
@@ -307,12 +342,16 @@ mod tests {
     fn a_sync_is_bounded_in_time_and_renews_tokens_first() {
         let source = include_str!("stores.rs");
         let sync = &source[source.find("pub async fn sync_store").unwrap()..];
-        assert!(sync.contains("tokio::time::timeout(SYNC_TIMEOUT, work)"));
-        let work = &sync[sync.find("let work = async").unwrap()..];
-        assert!(
-            work.find("client_for(store, &saved)").unwrap()
-                < work.find("fetch(store, &http").unwrap()
-        );
+        // The renewal has its own limit and is sealed before the fetch's limit starts.
+        let renew = sync
+            .find("tokio::time::timeout(REFRESH_TIMEOUT, client_for(store, &saved))")
+            .unwrap();
+        let seal = sync.find("session::save(&conn, store, &renewed)?").unwrap();
+        let fetch = sync
+            .find("tokio::time::timeout(SYNC_TIMEOUT, fetch(store, &client, &saved, &ages))")
+            .unwrap();
+        assert!(renew < seal && seal < fetch);
+        assert!(FETCH_MARGIN < SYNC_TIMEOUT);
         assert!(SYNC_TIMEOUT <= std::time::Duration::from_secs(300));
         // The bearer token only goes to GOG's API hosts; the token endpoint gets none.
         let client = &source[source.find("async fn client_for").unwrap()..];

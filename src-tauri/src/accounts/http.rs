@@ -471,6 +471,41 @@ pub(crate) mod tests {
         assert!(matches!(http.get(other).await, Err(FetchError::Invalid(_))));
     }
 
+    /// Token requests carry the client secret, the code or the refresh token in the query:
+    /// no error, `Debug` output or message may ever contain a request URL.
+    #[tokio::test]
+    async fn errors_and_debug_output_never_contain_the_request() {
+        let (base, _) = store_server(vec![]).await;
+        let http = StoreHttp::local(Default::default()).with_bearer("BEARERVALUE0123456789");
+        let secret = "client_secret=SECRETVALUE&code=CODEVALUE&refresh_token=REFRESHVALUE";
+        let closed = {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            l.local_addr().unwrap().port()
+        };
+        for url in [
+            format!("{base}/auth/token?{secret}"),
+            format!("http://127.0.0.1:{closed}/auth/token?{secret}"),
+        ] {
+            let e = http.get(url::Url::parse(&url).unwrap()).await.unwrap_err();
+            for shown in [format!("{e:?}"), e.message_for("GOG"), format!("{http:?}")] {
+                for value in [
+                    "SECRETVALUE",
+                    "CODEVALUE",
+                    "REFRESHVALUE",
+                    "BEARERVALUE",
+                    "/auth/token",
+                ] {
+                    assert!(!shown.contains(value), "{shown}");
+                }
+            }
+        }
+        // The GOG module never logs (it handles the code, the tokens and the secret).
+        let gog = include_str!("gog.rs");
+        for mac in ["info!", "warn!", "error!", "debug!", "trace!"] {
+            assert!(!gog.contains(&["log::", mac].concat()), "gog.rs logs");
+        }
+    }
+
     #[test]
     fn production_requests_need_https_and_a_listed_host() {
         let http = StoreHttp::new(&["www.gog.com"], Default::default(), "ua").unwrap();

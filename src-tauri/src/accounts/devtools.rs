@@ -1,11 +1,13 @@
-//! A diagnostic for the store sign-in window: page script errors, console errors and failed
-//! or refused requests are written to Game Lobby's log, so a sign-in page that doesn't work
-//! (Battle.net's form didn't render in the owner's test) shows why. The events come from the
-//! WebView2 DevTools protocol (`Runtime.exceptionThrown`, `Log.entryAdded`,
-//! `Network.requestWillBeSent` / `responseReceived` / `loadingFailed`).
+//! A diagnostic for the store sign-in window: console errors (uncaught script errors show up
+//! there too) and failed or refused requests are written to Game Lobby's log, so a sign-in page
+//! that doesn't work (Battle.net's form didn't render in the owner's test) shows why. The events
+//! come from the WebView2 DevTools protocol (`Log.entryAdded`, `Network.requestWillBeSent` /
+//! `responseReceived` / `loadingFailed`). The `Runtime` domain is deliberately not enabled: bot
+//! and captcha checks look for it.
 //!
-//! Only places are logged as host and path, never a query, fragment, cookie or form value;
-//! messages are cut to one short line with any URL query removed, and the log redacts again.
+//! What a page says is never logged, since it can contain what the user typed ("Invalid e-mail
+//! alice@…"): only the error's class or a few known browser messages ([`safe_text`]), the
+//! console source, and places as host and path (never a query, fragment, cookie or form value).
 //! At most [`MAX_LINES`] lines per sign-in.
 
 use regex::Regex;
@@ -16,21 +18,16 @@ use std::sync::LazyLock;
 /// Lines logged per sign-in window at most.
 pub const MAX_LINES: usize = 150;
 const MAX_REQUESTS: usize = 2000;
-const MAX_TEXT: usize = 200;
-
-static QUERY: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"\?[^\s"'<>)]*"#).expect("valid regex"));
 
 /// The events the window subscribes to.
-pub const EVENTS: [&str; 5] = [
-    "Runtime.exceptionThrown",
+pub const EVENTS: [&str; 4] = [
     "Log.entryAdded",
     "Network.requestWillBeSent",
     "Network.responseReceived",
     "Network.loadingFailed",
 ];
 /// The DevTools domains that must be enabled for them.
-pub const DOMAINS: [&str; 3] = ["Runtime.enable", "Log.enable", "Network.enable"];
+pub const DOMAINS: [&str; 2] = ["Log.enable", "Network.enable"];
 
 /// `host/path` of a URL, without query or fragment; `?` when it isn't one.
 pub fn place(raw: &str) -> String {
@@ -45,12 +42,58 @@ pub fn place(raw: &str) -> String {
     }
 }
 
-/// One short line of page text: first line, control characters dropped, URL queries removed.
-fn text(raw: &str) -> String {
-    let first = raw.lines().next().unwrap_or_default();
-    let clean: String = first.chars().filter(|c| !c.is_control()).collect();
-    let clean = QUERY.replace_all(&clean, "?…").into_owned();
-    clean.chars().take(MAX_TEXT).collect()
+static ERROR_CLASS: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^(Uncaught )?(\(in promise\) )?([A-Z][A-Za-z]{0,40}(Error|Exception))\b")
+        .expect("valid regex")
+});
+static NET_ERROR: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"net::ERR_[A-Z_]{1,60}").expect("valid regex"));
+static STATUS: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^Failed to load resource: the server responded with a status of (\d{3})")
+        .expect("valid regex")
+});
+static REFUSED: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^Refused to (load|connect|execute|frame|apply|evaluate|create|run)\b")
+        .expect("valid regex")
+});
+
+/// What may be logged of a page message: the error class (`TypeError`, `Uncaught (in promise)
+/// SyntaxError`), a network error code (`net::ERR_BLOCKED_BY_CLIENT`), "Failed to load resource
+/// (HTTP 403)", or "Refused to load (Content Security Policy)". Anything else, including the
+/// rest of those messages, is "(message hidden)".
+pub fn safe_text(raw: &str) -> String {
+    let first = raw.lines().next().unwrap_or_default().trim();
+    if let Some(c) = ERROR_CLASS.captures(first) {
+        return format!(
+            "{}{}{}",
+            c.get(1).map_or("", |m| m.as_str()),
+            c.get(2).map_or("", |m| m.as_str()),
+            &c[3]
+        );
+    }
+    if let Some(c) = STATUS.captures(first) {
+        return format!("Failed to load resource (HTTP {})", &c[1]);
+    }
+    if let Some(m) = NET_ERROR.find(first) {
+        return m.as_str().to_string();
+    }
+    if let Some(c) = REFUSED.captures(first) {
+        let csp = if first.contains("Content Security Policy") {
+            " (Content Security Policy)"
+        } else {
+            ""
+        };
+        return format!("Refused to {}{csp}", &c[1]);
+    }
+    "(message hidden)".into()
+}
+
+/// A short plain token from the protocol itself (types, reasons): letters, digits, `_`, `-`.
+fn token(raw: &str) -> String {
+    raw.chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-' || *c == ':')
+        .take(60)
+        .collect()
 }
 
 /// What one sign-in window has logged so far.
@@ -69,19 +112,12 @@ impl PageLog {
         let v: Value = serde_json::from_str(json).ok()?;
         let s = |p: &str| v.pointer(p).and_then(Value::as_str);
         let out = match event {
-            "Runtime.exceptionThrown" => {
-                let message = s("/exceptionDetails/exception/description")
-                    .or_else(|| s("/exceptionDetails/text"))
-                    .unwrap_or("unknown error");
-                let at = s("/exceptionDetails/url").map(place).unwrap_or_default();
-                Some(format!("script error: {} ({at})", text(message)))
-            }
             "Log.entryAdded" if s("/entry/level") == Some("error") => {
                 let at = s("/entry/url").map(place).unwrap_or_default();
                 Some(format!(
                     "console error [{}]: {} ({at})",
-                    text(s("/entry/source").unwrap_or("?")),
-                    text(s("/entry/text").unwrap_or(""))
+                    token(s("/entry/source").unwrap_or("?")),
+                    safe_text(s("/entry/text").unwrap_or(""))
                 ))
             }
             "Network.requestWillBeSent" => {
@@ -98,7 +134,7 @@ impl PageLog {
                     let at = s("/response/url").map(place).unwrap_or_default();
                     format!(
                         "HTTP {status} for {} ({at})",
-                        text(s("/type").unwrap_or("request"))
+                        token(s("/type").unwrap_or("request"))
                     )
                 })
             }
@@ -107,7 +143,7 @@ impl PageLog {
                     .and_then(|id| self.requests.get(id).cloned())
                     .unwrap_or_else(|| "?".into());
                 let blocked = s("/blockedReason")
-                    .map(|r| format!(", blocked: {}", text(r)))
+                    .map(|r| format!(", blocked: {}", token(r)))
                     .unwrap_or_default();
                 let canceled = if v.pointer("/canceled").and_then(Value::as_bool) == Some(true) {
                     ", canceled"
@@ -116,8 +152,8 @@ impl PageLog {
                 };
                 Some(format!(
                     "request failed: {} for {}{blocked}{canceled} ({at})",
-                    text(s("/errorText").unwrap_or("?")),
-                    text(s("/type").unwrap_or("request"))
+                    safe_text(s("/errorText").unwrap_or("?")),
+                    token(s("/type").unwrap_or("request"))
                 ))
             }
             _ => None,
@@ -144,26 +180,57 @@ mod tests {
     }
 
     #[test]
+    fn page_messages_are_reduced_to_safe_classes() {
+        for (raw, want) in [
+            ("Uncaught TypeError: Cannot assign to read only property 'toString' of object", "Uncaught TypeError"),
+            ("Uncaught (in promise) SyntaxError: Unexpected token < in JSON", "Uncaught (in promise) SyntaxError"),
+            ("Failed to load resource: the server responded with a status of 403 ()", "Failed to load resource (HTTP 403)"),
+            ("GET https://us.battle.net/login?x=1 net::ERR_BLOCKED_BY_CLIENT", "net::ERR_BLOCKED_BY_CLIENT"),
+            ("Refused to load the script 'https://x/y.js' because it violates the following Content Security Policy directive", "Refused to load (Content Security Policy)"),
+            ("Invalid email: alice@example.com", "(message hidden)"),
+            ("Error: alice@example.com is not registered", "(message hidden)"),
+            ("ValidationError for alice@example.com", "ValidationError"),
+            ("", "(message hidden)"),
+        ] {
+            let got = safe_text(raw);
+            assert_eq!(got, want, "{raw}");
+            assert!(!got.contains("alice"));
+        }
+    }
+
+    #[test]
     fn events_become_short_lines_without_secrets() {
         let mut log = PageLog::default();
+        // Uncaught errors arrive as console errors; the Runtime domain is not used.
+        assert!(!EVENTS
+            .iter()
+            .chain(DOMAINS.iter())
+            .any(|e| e.starts_with("Runtime")));
+        assert_eq!(
+            log.line(
+                "Runtime.exceptionThrown",
+                r#"{"exceptionDetails":{"text":"x"}}"#
+            ),
+            None
+        );
         let line = log
             .line(
-                "Runtime.exceptionThrown",
-                r#"{"exceptionDetails":{"text":"Uncaught","url":"https://account.battle.net/static/app.js?v=1&token=abc","exception":{"description":"TypeError: Cannot assign to read only property 'toString' of object '#<Object>'\n    at https://x/y.js?k=1"}}}"#,
+                "Log.entryAdded",
+                r#"{"entry":{"source":"javascript","level":"error","text":"Uncaught TypeError: Cannot read properties of undefined (reading 'alice@example.com')","url":"https://account.battle.net/static/app.js?v=1&token=abc"}}"#,
             )
             .unwrap();
         assert_eq!(
             line,
-            "script error: TypeError: Cannot assign to read only property 'toString' of object '#<Object>' (account.battle.net/static/app.js)"
+            "console error [javascript]: Uncaught TypeError (account.battle.net/static/app.js)"
         );
-        assert!(!line.contains("token=abc"));
+        assert!(!line.contains("alice") && !line.contains("token=abc"));
         assert_eq!(
             log.line(
                 "Log.entryAdded",
-                r#"{"entry":{"source":"security","level":"error","text":"Refused to load https://hcaptcha.com/x?sitekey=1","url":"https://account.battle.net/login"}}"#
+                r#"{"entry":{"source":"other","level":"error","text":"Invalid email: alice@example.com","url":"https://account.battle.net/login"}}"#
             )
             .unwrap(),
-            "console error [security]: Refused to load https://hcaptcha.com/x?… (account.battle.net/login)"
+            "console error [other]: (message hidden) (account.battle.net/login)"
         );
         assert_eq!(
             log.line(
@@ -212,8 +279,8 @@ mod tests {
         let n = (0..1000)
             .filter_map(|_| {
                 log.line(
-                    "Runtime.exceptionThrown",
-                    r#"{"exceptionDetails":{"text":"x"}}"#,
+                    "Log.entryAdded",
+                    r#"{"entry":{"level":"error","text":"x"}}"#,
                 )
             })
             .count();

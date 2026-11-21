@@ -105,6 +105,7 @@ function AccountRow({ status, accounts }: { status: AccountStatus; accounts: Acc
       <small>{line.label}</small>
       {status.last && status.signedIn && <small className={status.last.ok ? 'account-last' : 'key-row-problem'}>{status.last.ok ? '✓' : '✗'} {status.last.message} · {new Date(status.last.checkedAt).toLocaleString()}</small>}
       {status.notice && !status.notice.ok && <small className="key-row-problem" role="status">✗ {status.notice.message}</small>}
+      {status.store === 'gog' && status.signedIn && status.notice?.ok && status.notice.message.startsWith('Signed in to GOG as ') && <small className="account-last" role="status">{status.notice.message} <button type="button" className="link-button" onClick={() => setConfirming('out')}>Not you? Sign out</button></small>}
       {status.available && <>
         {(!status.signedIn || status.last?.needsSignIn) && <StoreSignIn accounts={accounts} status={status} />}
         {status.signedIn && <div className="account-actions">

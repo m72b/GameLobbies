@@ -106,8 +106,9 @@ pub struct FetchOutcome {
     pub owned_ids: HashSet<String>,
     /// Every page was read: only then may anything be removed.
     pub complete: bool,
-    /// Every playtime request was answered: only then is the store's playtime replaced.
-    pub playtime_complete: bool,
+    /// Games whose playtime was asked for and answered this time (GOG reads playtime a part at
+    /// a time, oldest first; the others keep what an earlier sync found).
+    pub playtime_checked: HashSet<String>,
 }
 
 /// What the account import did so far (kept in the `account:<store>` row).
@@ -239,23 +240,21 @@ pub fn apply_account(
                 new_games.push(account_game(store, game));
             }
             db::upsert_imported_games(conn, &new_games)?;
-            if let (Some(playtime_source), true) = (
-                playtime_source(store),
-                list.complete && list.playtime_complete,
-            ) {
-                let horizon = now.saturating_add(86_400_000);
-                let seconds: HashMap<String, i64> = list
+            if let Some(playtime_source) = playtime_source(store) {
+                let by_id: HashMap<&str, i64> = list
                     .games
                     .iter()
-                    .filter_map(|g| Some((g.store_id.clone(), g.playtime_seconds?)))
+                    .map(|g| (g.store_id.as_str(), g.playtime_seconds.unwrap_or(0)))
                     .collect();
-                let last: HashMap<String, i64> = list
-                    .games
+                let checked: HashMap<String, i64> = list
+                    .playtime_checked
                     .iter()
-                    .filter_map(|g| Some((g.store_id.clone(), g.last_played_ms?)))
-                    .filter(|(_, ms)| *ms <= horizon)
+                    .map(|id| (id.clone(), by_id.get(id.as_str()).copied().unwrap_or(0)))
                     .collect();
-                crate::stats::replace_store_playtime(conn, playtime_source, &seconds, &last, now)?;
+                crate::stats::merge_store_playtime(conn, playtime_source, &checked, now)?;
+                if list.complete {
+                    crate::stats::prune_store_playtime(conn, playtime_source, &list.owned_ids)?;
+                }
             }
             let gone: HashSet<String> = if list.complete {
                 previous
@@ -385,11 +384,12 @@ mod tests {
     }
 
     fn outcome(games: Vec<OwnedGame>, complete: bool) -> Result<FetchOutcome, FetchError> {
+        let ids: HashSet<String> = games.iter().map(|g| g.store_id.clone()).collect();
         Ok(FetchOutcome {
-            owned_ids: games.iter().map(|g| g.store_id.clone()).collect(),
+            owned_ids: ids.clone(),
             games,
             complete,
-            playtime_complete: complete,
+            playtime_checked: if complete { ids } else { HashSet::new() },
         })
     }
 
@@ -546,6 +546,45 @@ mod tests {
         )
         .unwrap();
         assert!(db::get_game(&conn, "gog:1").unwrap().is_none());
+    }
+
+    #[test]
+    fn gog_playtime_is_merged_part_by_part_and_pruned_when_complete() {
+        let database = db::Db::memory().unwrap();
+        let mut conn = database.lock();
+        let games = vec![
+            owned("1", "A", Some(10)),
+            owned("2", "B", Some(20)),
+            owned("3", "C", None),
+        ];
+        let mut first = outcome(games.clone(), true).unwrap();
+        first.playtime_checked = ["1".to_string(), "3".to_string()].into();
+        apply_account(&mut conn, AccountStore::Gog, &Ok(first), 1000, None).unwrap();
+        let ages = crate::stats::store_playtime_ages(&conn, "gog").unwrap();
+        assert_eq!(
+            ages.len(),
+            2,
+            "checked games only, a zero is kept as checked"
+        );
+        let mut second = outcome(games.clone(), true).unwrap();
+        second.playtime_checked = ["2".to_string()].into();
+        apply_account(&mut conn, AccountStore::Gog, &Ok(second), 2000, None).unwrap();
+        let ages = crate::stats::store_playtime_ages(&conn, "gog").unwrap();
+        assert_eq!((ages["1"], ages["2"], ages["3"]), (1000, 2000, 1000));
+        let times = crate::stats::store_times(&conn).unwrap();
+        assert_eq!(
+            (times["gog:1"].seconds, times["gog:2"].seconds),
+            (600, 1200)
+        );
+        assert!(!times.contains_key("gog:3"), "zero is never shown");
+        // A complete list without game 2 drops its figure.
+        let mut third =
+            outcome(vec![owned("1", "A", Some(10)), owned("3", "C", None)], true).unwrap();
+        third.playtime_checked = Default::default();
+        apply_account(&mut conn, AccountStore::Gog, &Ok(third), 3000, None).unwrap();
+        assert!(!crate::stats::store_playtime_ages(&conn, "gog")
+            .unwrap()
+            .contains_key("2"));
     }
 
     #[test]

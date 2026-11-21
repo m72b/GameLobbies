@@ -360,12 +360,16 @@ pub async fn probe(http: &StoreHttp, endpoints: &Endpoints) -> Result<String, Fe
     parse_basic(&http.get(join(&endpoints.embed, "userData.json")).await?)
 }
 
-/// The whole library. `complete` when the owned list and every titles batch were read;
-/// `playtime_complete` when every playtime request was answered.
+/// The whole library. `complete` when the owned list and every titles batch were read. Playtime
+/// is asked for game by game, the games checked longest ago (or never, `ages`) first, until
+/// [`MAX_PLAYTIME_GAMES`] or `deadline`: a large library is covered over several syncs, and the
+/// owned games and titles are returned in time either way.
 pub async fn fetch(
     http: &StoreHttp,
     endpoints: &Endpoints,
     user_id: &str,
+    ages: &HashMap<String, i64>,
+    deadline: std::time::Instant,
 ) -> Result<FetchOutcome, FetchError> {
     probe(http, endpoints).await?;
     let owned = parse_owned(&http.get(join(&endpoints.embed, "user/data/games")).await?)?;
@@ -390,11 +394,14 @@ pub async fn fetch(
         }
     }
     let mut playtime: HashMap<String, i64> = HashMap::new();
-    let mut playtime_complete = complete && titles.len() <= MAX_PLAYTIME_GAMES;
+    let mut checked: HashSet<String> = HashSet::new();
     if PRODUCT_ID.is_match(user_id) {
-        let mut games: Vec<&String> = titles.keys().collect();
-        games.sort();
-        for id in games.into_iter().take(MAX_PLAYTIME_GAMES) {
+        let mut queue: Vec<&String> = titles.keys().collect();
+        queue.sort_by_key(|id| (ages.get(*id).copied().unwrap_or(i64::MIN), (*id).clone()));
+        for id in queue.into_iter().take(MAX_PLAYTIME_GAMES) {
+            if std::time::Instant::now() >= deadline {
+                break;
+            }
             let url = join(
                 &endpoints.gameplay,
                 &format!("games/{id}/users/{user_id}/sessions"),
@@ -404,18 +411,16 @@ pub async fn fetch(
                     if let Some(minutes) = parse_time_sum(&body).filter(|m| *m > 0) {
                         playtime.insert(id.clone(), minutes * 60);
                     }
+                    checked.insert(id.clone());
                 }
                 // Never played: no sessions.
-                Err(FetchError::Status(404)) => {}
-                Err(FetchError::Rejected) => return Err(FetchError::Rejected),
-                Err(_) => {
-                    playtime_complete = false;
-                    break;
+                Err(FetchError::Status(404)) => {
+                    checked.insert(id.clone());
                 }
+                Err(FetchError::Rejected) => return Err(FetchError::Rejected),
+                Err(_) => break,
             }
         }
-    } else {
-        playtime_complete = false;
     }
     let mut games: Vec<OwnedGame> = titles
         .into_iter()
@@ -432,7 +437,7 @@ pub async fn fetch(
         games,
         owned_ids: owned,
         complete,
-        playtime_complete,
+        playtime_checked: checked,
     })
 }
 
@@ -616,10 +621,13 @@ mod tests {
         ])
         .await;
         let http = StoreHttp::local(Default::default()).with_bearer("ACCESSaccess0123456789");
-        let out = fetch(&http, &Endpoints::local(&base), "42").await.unwrap();
+        let far = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        let out = fetch(&http, &Endpoints::local(&base), "42", &HashMap::new(), far)
+            .await
+            .unwrap();
         assert!(out.complete);
-        // Gwent's sessions are a 404 (never played): still complete.
-        assert!(out.playtime_complete);
+        // Gwent's sessions are a 404 (never played): checked too.
+        assert_eq!(out.playtime_checked.len(), 2);
         assert_eq!(out.owned_ids.len(), 3);
         let titles: Vec<&str> = out.games.iter().map(|g| g.title.as_str()).collect();
         assert_eq!(titles, ["The Witcher", "Gwent"]);
@@ -633,6 +641,57 @@ mod tests {
         assert!(seen
             .iter()
             .all(|h| h.contains("authorization: bearer accessaccess0123456789")));
+    }
+
+    #[tokio::test]
+    async fn playtime_stops_at_the_deadline_and_goes_oldest_first() {
+        let (base, seen) = store_server(vec![
+            (
+                "/embed/userData.json",
+                ok(r#"{"isLoggedIn":true,"username":"gamer"}"#, ""),
+            ),
+            ("/embed/user/data/games", ok(r#"{"owned":[1,2,3]}"#, "")),
+            (
+                "/api/products?ids=1%2C2%2C3",
+                ok(
+                    r#"[{"id":1,"title":"A"},{"id":2,"title":"B"},{"id":3,"title":"C"}]"#,
+                    "",
+                ),
+            ),
+        ])
+        .await;
+        let http = StoreHttp::local(Default::default()).with_bearer("ACCESSaccess0123456789");
+        // Past the deadline: the games and titles still come back, no playtime is asked for.
+        let past = std::time::Instant::now();
+        let out = fetch(&http, &Endpoints::local(&base), "42", &HashMap::new(), past)
+            .await
+            .unwrap();
+        assert!(out.complete);
+        assert_eq!(out.games.len(), 3);
+        assert!(out.playtime_checked.is_empty());
+        assert!(!seen
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|h| h.contains("/gameplay/")));
+        // With time: never-checked games first, then the oldest.
+        seen.lock().unwrap().clear();
+        let ages: HashMap<String, i64> = [("1".to_string(), 500), ("2".to_string(), 100)].into();
+        let far = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        fetch(&http, &Endpoints::local(&base), "42", &ages, far)
+            .await
+            .unwrap();
+        let order: Vec<String> = seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|h| {
+                h.split("/gameplay/games/")
+                    .nth(1)
+                    .map(|r| r.split('/').next().unwrap().to_string())
+            })
+            .collect();
+        assert_eq!(order, ["3", "2", "1"]);
     }
 
     #[test]

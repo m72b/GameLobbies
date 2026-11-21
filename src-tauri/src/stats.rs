@@ -95,6 +95,60 @@ pub fn replace_store_playtime(
     Ok(())
 }
 
+/// Writes the figures of the apps in `checked` (app id to seconds; zero is kept as "checked,
+/// nothing played", which every reader ignores) and leaves every other row of `source` as it
+/// is. For stores whose playtime is read a part at a time (GOG). One transaction.
+pub fn merge_store_playtime(
+    conn: &mut Connection,
+    source: &str,
+    checked: &HashMap<String, i64>,
+    now: i64,
+) -> Result<()> {
+    let tx = conn.transaction()?;
+    {
+        let mut upsert = tx.prepare(
+            "INSERT INTO store_playtime(source,appId,seconds,updatedAt,lastPlayed) VALUES(?,?,?,?,NULL) ON CONFLICT(source,appId) DO UPDATE SET seconds=excluded.seconds,updatedAt=excluded.updatedAt",
+        )?;
+        for (app_id, seconds) in checked {
+            upsert.execute(params![source, app_id, (*seconds).max(0), now])?;
+        }
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+/// Drops the rows of `source` whose app is not in `keep` (games no longer owned).
+pub fn prune_store_playtime(
+    conn: &mut Connection,
+    source: &str,
+    keep: &HashSet<String>,
+) -> Result<()> {
+    let stored: Vec<String> = conn
+        .prepare("SELECT appId FROM store_playtime WHERE source=?")?
+        .query_map([source], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    let tx = conn.transaction()?;
+    for app_id in stored.iter().filter(|id| !keep.contains(*id)) {
+        tx.execute(
+            "DELETE FROM store_playtime WHERE source=? AND appId=?",
+            params![source, app_id],
+        )?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+/// When each app of `source` was last checked (app id to ms), to check the oldest first.
+pub fn store_playtime_ages(conn: &Connection, source: &str) -> Result<HashMap<String, i64>> {
+    let rows = conn
+        .prepare("SELECT appId,updatedAt FROM store_playtime WHERE source=?")?
+        .query_map([source], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(rows)
+}
+
 /// Forgets everything stored for `source`.
 pub fn clear_store_playtime(conn: &Connection, source: &str) -> Result<()> {
     conn.execute("DELETE FROM store_playtime WHERE source=?", [source])?;
