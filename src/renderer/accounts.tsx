@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import { LogIn, RefreshCw, ShieldCheck } from 'lucide-react'
 import type { AccountMode, AccountStatus, AccountStore } from '../shared/types'
 import { accountLine, canSync } from '../shared/accounts'
@@ -8,7 +8,7 @@ import { useKeysUi } from './api-keys'
 const errorText = (error: unknown, fallback: string) => error instanceof Error ? error.message : typeof error === 'string' ? error : fallback
 
 /** StoreIcon names for the account stores. */
-const iconName: Record<AccountStore, string> = { steam: 'Steam', gog: 'GOG', battlenet: 'Battle.net', humble: 'Humble', xbox: 'Xbox', epic: 'Epic Games' }
+const iconName: Record<AccountStore, string> = { steam: 'Steam', gog: 'GOG', battlenet: 'Battle.net', xbox: 'Xbox', epic: 'Epic Games' }
 
 /**
  * Store account statuses for the whole window (kept by App), with the calls that change them.
@@ -48,17 +48,19 @@ export function useAccounts(say: (text: string) => void, onChanged: () => void) 
     cancel: (store: AccountStore) => run(store, () => window.lobby.accounts.cancelSignIn(), 'Could not cancel the sign-in'),
     signOut: (store: AccountStore) => run(store, () => window.lobby.accounts.signOut(store), 'Could not sign out'),
     setMode: (store: AccountStore, mode: AccountMode) => run(store, () => window.lobby.accounts.setMode(store, mode), 'Could not change the mode'),
-    sync: (store: AccountStore) => run(store, () => window.lobby.accounts.sync(store), 'Sync failed')
+    sync: (store: AccountStore) => run(store, () => window.lobby.accounts.sync(store), 'Sync failed'),
+    submitCode: (store: AccountStore, code: string) => run(store, () => window.lobby.accounts.submitCode(store, code), 'The sign-in was not accepted')
   }
 }
 export type Accounts = ReturnType<typeof useAccounts>
 
 /** The note sign-in places show: where each sign-in happens and where the password goes. */
 const STEAM_NOTE = "Steam sign-in happens in your own web browser, on steamcommunity.com. Your password and Steam Guard approval go only to Steam; Game Lobby only receives your SteamID64 back, after Steam confirms it. You can close the browser tab afterwards."
-const WINDOW_NOTE = "GOG, Battle.net and Humble sign in in Game Lobby's own private window showing the store's real sign-in page. Your password goes only to the store; Game Lobby keeps only the store's session, encrypted by Windows, and nothing else from the window. These accounts are read the way the stores' own websites read them, not through an official interface, so a store can change something and stop it working; installed games are found either way."
+const GOG_NOTE = "GOG sign-in happens in your own web browser, on gog.com, with any way GOG offers (e-mail, Google, Discord and others). When GOG shows that you are signed in, copy the address from the browser's address bar (it starts with https://embed.gog.com/on_login_success) and paste it into Game Lobby. Unofficial: Game Lobby signs in with GOG Galaxy's public app id, as other open-source launchers do, and GOG could stop that at any time. Game Lobby keeps GOG's sign-in tokens encrypted by Windows; your password goes only to GOG."
+const WINDOW_NOTE = "Battle.net signs in in Game Lobby's own private window showing Battle.net's real sign-in page. Your password goes only to Battle.net; Game Lobby keeps only its session, encrypted by Windows. The account is read the way Battle.net's own website reads it, not through an official interface, so it can stop working; installed games are found either way."
 
 export function SignInNote({ store }: { store?: AccountStore }) {
-  const text = store === 'steam' ? STEAM_NOTE : store ? WINDOW_NOTE : STEAM_NOTE + ' ' + WINDOW_NOTE
+  const text = store === 'steam' ? STEAM_NOTE : store === 'gog' ? GOG_NOTE : store ? WINDOW_NOTE : [STEAM_NOTE, GOG_NOTE, WINDOW_NOTE].join(' ')
   return <p className="account-note"><ShieldCheck size={14} aria-hidden="true" /><span>{text}</span></p>
 }
 
@@ -66,9 +68,28 @@ export function SignInNote({ store }: { store?: AccountStore }) {
 export function StoreSignIn({ accounts, status }: { accounts: Accounts; status: AccountStatus }) {
   const busy = accounts.busy === status.store
   const steam = status.store === 'steam'
+  const gog = status.store === 'gog'
+  const [pasted, setPasted] = useState('')
+  const submit = (event: FormEvent) => {
+    event.preventDefault()
+    if (!pasted.trim()) return
+    void accounts.submitCode(status.store, pasted).then(done => { if (done) setPasted('') })
+  }
+  if (status.signingIn && gog) return <form className="account-paste" onSubmit={submit}>
+    <label className="field-label">Address GOG ends on after you sign in
+      <input type="text" value={pasted} onChange={event => setPasted(event.target.value)} placeholder="https://embed.gog.com/on_login_success?origin=client&code=…" autoComplete="off" spellCheck={false} maxLength={4096} aria-describedby="gog-paste-help" />
+    </label>
+    <small id="gog-paste-help" className="muted-text">Sign in on the GOG page your browser opened. GOG then shows a page saying you're signed in: copy its address from the address bar and paste it here.</small>
+    <div className="account-actions">
+      <button type="submit" className="primary-button" disabled={busy || !pasted.trim()}>Continue</button>
+      <button type="button" className="secondary-button" disabled={busy} onClick={() => void accounts.signIn('gog')}>Open GOG's page again</button>
+      <button type="button" className="secondary-button" disabled={busy} onClick={() => void accounts.cancel('gog')}>Cancel sign-in</button>
+    </div>
+  </form>
   if (status.signingIn) return <div className="account-actions"><span className="account-waiting" role="status">{steam ? 'Continue in your browser…' : 'Finish signing in in the ' + status.name + ' window…'}</span><button type="button" className="secondary-button" disabled={busy} onClick={() => void accounts.cancel(status.store)}>Cancel sign-in</button></div>
   const again = status.signedIn
-  return <div className="account-actions"><button type="button" className={again ? 'secondary-button' : 'primary-button'} disabled={busy} onClick={() => void accounts.signIn(status.store)}><LogIn size={14} /> {again ? 'Sign in again' : steam ? 'Sign in through Steam' : 'Sign in to ' + status.name}</button></div>
+  const label = again ? 'Sign in again' : steam ? 'Sign in through Steam' : gog ? 'Sign in to GOG in your browser' : 'Sign in to ' + status.name
+  return <div className="account-actions"><button type="button" className={again ? 'secondary-button' : 'primary-button'} disabled={busy} onClick={() => void accounts.signIn(status.store)}><LogIn size={14} /> {label}</button></div>
 }
 
 function AccountRow({ status, accounts }: { status: AccountStatus; accounts: Accounts }) {
@@ -109,7 +130,7 @@ function AccountRow({ status, accounts }: { status: AccountStatus; accounts: Acc
 export function AccountsSection({ accounts, onRunSetup }: { accounts: Accounts; onRunSetup(): void }) {
   return <>
     <div className="settings-card">
-      <div className="card-heading"><div><h3>Store accounts</h3><p>Optional. Without an account Game Lobby lists the games installed on this PC. Signed in, it also lists the games you own but haven't installed: Steam (with a free Web API key, and Steam's playtime), GOG (with GOG's playtime), Battle.net and Humble (owned only; Humble has no launcher). Signing out removes the not-installed games it added; games you played, rated or customized stay.</p></div></div>
+      <div className="card-heading"><div><h3>Store accounts</h3><p>Optional. Without an account Game Lobby lists the games installed on this PC. Signed in, it also lists the games you own but haven't installed: Steam (with a free Web API key, and Steam's playtime), GOG (unofficial, with GOG's playtime) and Battle.net. Signing out removes the not-installed games it added; games you played, rated or customized stay.</p></div></div>
       {accounts.statuses.map(status => <AccountRow key={status.store} status={status} accounts={accounts} />)}
       <SignInNote />
     </div>

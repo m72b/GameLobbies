@@ -614,3 +614,4 @@
 .setup-foot-space{flex:1}
 @media(max-width:900px){.setup-progress{display:none}.setup-content{padding:24px 20px 32px}}
 .setup-key{margin-top:16px;padding-top:14px;border-top:1px solid #ffffff0c}.setup-key h3{font-size:13px;margin:0 0 6px}
+.account-paste{display:flex;flex-direction:column;gap:6px;margin-top:8px}.account-paste input{font-size:11px}.account-paste small{font-size:10px}

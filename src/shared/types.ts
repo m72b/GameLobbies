@@ -590,7 +590,7 @@ export interface SteamOwnedAPI {
   remove(): Promise<SteamOwnedStatus>
 }
 /** A store with an account sign-in (now or later). Only `steam` signs in in this version. */
-export type AccountStore = 'steam' | 'gog' | 'battlenet' | 'humble' | 'xbox' | 'epic'
+export type AccountStore = 'steam' | 'gog' | 'battlenet' | 'xbox' | 'epic'
 /** `account`: owned games and store playtime come from the account; `installed`: only games installed on this PC. */
 export type AccountMode = 'account' | 'installed'
 /** One store account as the backend reports it. Never a credential: only flags and fixed-text messages. */
@@ -622,10 +622,12 @@ export interface AccountsAPI {
   setMode(store: AccountStore, mode: AccountMode): Promise<AccountStatus[]>
   /** Syncs now, ignoring the scan throttle. */
   sync(store: AccountStore): Promise<AccountStatus[]>
+  /** GOG: the address GOG showed after signing in in the browser (or its code). Checked in Rust; rejects with a fixed message. */
+  submitCode(store: AccountStore, code: string): Promise<AccountStatus[]>
   onChanged(callback: (statuses: AccountStatus[]) => void): () => void
 }
 /** A store the first-time setup asks about. */
-export type SetupStore = 'steam' | 'epic' | 'gog' | 'xbox' | 'battlenet' | 'humble' | 'ea' | 'ubisoft' | 'itch'
+export type SetupStore = 'steam' | 'epic' | 'gog' | 'xbox' | 'battlenet' | 'ea' | 'ubisoft' | 'itch'
 export type SetupChoice = 'signin' | 'installed' | 'skip'
 export interface SetupState { version: number; completedAt?: number; skippedAt?: number; choices: Partial<Record<SetupStore, SetupChoice>> }
 export interface SetupStoreInfo { id: SetupStore; name: string; signIn: boolean; note: string }

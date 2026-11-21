@@ -154,6 +154,7 @@ const api: LobbyAPI = {
     signOut: store => call('accounts_sign_out', { store }),
     setMode: (store, mode) => call('accounts_set_mode', { store, mode }),
     sync: store => call('accounts_sync', { store }),
+    submitCode: (store, code) => call('accounts_submit_code', { store, code }),
     onChanged: callback => subscribe<AccountStatus[]>('accounts:changed', callback)
   },
   setup: {

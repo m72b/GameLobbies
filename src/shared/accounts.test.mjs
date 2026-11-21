@@ -50,9 +50,10 @@ test('a running Steam sign-in points to the browser', () => {
 test('cookie stores: their own lines, sign in again, and the setup lists them', () => {
   const gog = { ...steam, store: 'gog', name: 'GOG' }
   assert.equal(accountLine(gog).label, 'Signed in · owned games and GOG playtime are synced')
-  assert.equal(accountLine({ ...gog, store: 'humble', name: 'Humble' }).label, 'Signed in · owned games are synced')
+  assert.equal(accountLine({ ...gog, store: 'battlenet', name: 'Battle.net' }).label, 'Signed in · owned games are synced')
   assert.equal(accountLine({ ...gog, last: { ok: false, message: 'x', checkedAt: 1, needsSignIn: true } }).pill, 'Sign in again')
-  assert.equal(accountLine({ ...gog, signingIn: true }).label, 'Finish signing in to GOG in its sign-in window')
+  assert.equal(accountLine({ ...gog, signingIn: true }).label, 'Sign in to GOG in your browser, then paste the address it ends on')
+  assert.equal(accountLine({ ...gog, store: 'battlenet', name: 'Battle.net', signingIn: true }).label, 'Finish signing in to Battle.net in its sign-in window')
   assert.equal(canSync({ ...gog, keySet: true }), true)
   const stores = [
     { id: 'steam', name: 'Steam', signIn: true, note: '' },

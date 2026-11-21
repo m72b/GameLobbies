@@ -17,7 +17,7 @@ const stepTitles: Record<SetupStep, string> = {
 }
 
 /** StoreIcon names for the setup's stores. */
-const iconName: Record<SetupStore, string> = { steam: 'Steam', epic: 'Epic Games', gog: 'GOG', xbox: 'Xbox', battlenet: 'Battle.net', humble: 'Humble', ea: 'EA app', ubisoft: 'Ubisoft', itch: 'itch.io' }
+const iconName: Record<SetupStore, string> = { steam: 'Steam', epic: 'Epic Games', gog: 'GOG', xbox: 'Xbox', battlenet: 'Battle.net', ea: 'EA app', ubisoft: 'Ubisoft', itch: 'itch.io' }
 
 /**
  * First-time setup, shown inside the main window in place of the library: Welcome → stores →
@@ -75,7 +75,7 @@ export function SetupView({ info, accounts, keys, say, onDone }: { info: SetupIn
 
         {step === 'welcome' && <>
           <p className="settings-description">Game Lobby puts the games from all your stores and folders in one library. It finds installed games on its own by reading each launcher's files on this PC; no account is needed for that.</p>
-          <p className="muted-text">The next steps let you choose your stores, sign in to Steam, GOG, Battle.net or Humble to also list the games you own but haven't installed, add game folders, and add optional keys for cover art and game details. Every step can be skipped, and everything can be changed later in Settings.</p>
+          <p className="muted-text">The next steps let you choose your stores, sign in to Steam, GOG or Battle.net to also list the games you own but haven't installed, add game folders, and add optional keys for cover art and game details. Every step can be skipped, and everything can be changed later in Settings.</p>
         </>}
 
         {step === 'stores' && <>
@@ -115,7 +115,9 @@ export function SetupView({ info, accounts, keys, say, onDone }: { info: SetupIn
                 ? <p className="setup-ok" role="status"><Check size={14} /> Signed in to {store.name}.</p>
                 : <p className="muted-text">{steamStore
                   ? 'Your web browser opens steamcommunity.com. Sign in there (approve with Steam Guard as usual); when Steam confirms, the tab says so and Game Lobby comes back to the front.'
-                  : 'A Game Lobby window opens with ' + store.name + "'s sign-in page. Sign in there; when the store's account page appears, the window closes by itself. If it never finishes, close it and choose Installed files only."}</p>}
+                  : store.id === 'gog'
+                    ? "Your web browser opens GOG's sign-in. Sign in any way GOG offers; then copy the address GOG ends on and paste it below."
+                    : 'A Game Lobby window opens with ' + store.name + "'s sign-in page. Sign in there; when the store's account page appears, the window closes by itself. If it never finishes, close it and choose Installed files only."}</p>}
               {status.notice && !status.notice.ok && <p className="key-row-problem" role="status">✗ {status.notice.message}</p>}
               <StoreSignIn accounts={accounts} status={status} />
               <SignInNote store={status.store} />
