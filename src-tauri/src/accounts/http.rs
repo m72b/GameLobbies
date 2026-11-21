@@ -87,7 +87,7 @@ pub async fn read_capped_to(
     Ok(body)
 }
 
-/// An account name a store reports (GOG user name, BattleTag, Humble e-mail), for the sign-in
+/// An account name a store reports (GOG user name, BattleTag), for the sign-in
 /// notice: plain one-line text of at most 64 characters, without markup characters.
 pub fn display_name(raw: &str) -> Option<String> {
     let name = clean_name(raw)?;
@@ -133,9 +133,23 @@ pub struct StoreHttp {
     pacing: std::time::Duration,
     last: tokio::sync::Mutex<Option<std::time::Instant>>,
     retry_after: std::sync::Mutex<Option<u64>>,
+    /// An OAuth access token sent as `Authorization: Bearer` (GOG), only to `hosts`.
+    bearer: Option<String>,
+}
+
+impl std::fmt::Debug for StoreHttp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "StoreHttp({:?}, secrets hidden)", self.hosts)
+    }
 }
 
 impl StoreHttp {
+    /// Sends `token` as a bearer token with every request (to the listed hosts only).
+    pub fn with_bearer(mut self, token: &str) -> Self {
+        self.bearer = Some(token.to_string());
+        self
+    }
+
     /// Production: https only, to exactly `hosts`.
     pub fn new(
         hosts: &'static [&'static str],
@@ -180,6 +194,7 @@ impl StoreHttp {
             pacing,
             last: tokio::sync::Mutex::new(None),
             retry_after: std::sync::Mutex::new(None),
+            bearer: None,
         })
     }
 
@@ -245,6 +260,9 @@ impl StoreHttp {
                 );
             if let Some(cookie) = super::lock(&self.jar).header_for(&url, now_s) {
                 request = request.header(reqwest::header::COOKIE, cookie);
+            }
+            if let Some(token) = &self.bearer {
+                request = request.bearer_auth(token);
             }
             let response = request.send().await.map_err(|e| network_error(&e))?;
             {
@@ -332,6 +350,39 @@ pub(crate) mod tests {
                             "HTTP/1.1 404 X\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
                                 .into()
                         });
+                    let _ = socket.write_all(out.as_bytes()).await;
+                    let _ = socket.shutdown().await;
+                });
+            }
+        });
+        (format!("http://127.0.0.1:{port}"), seen)
+    }
+
+    /// A local server that answers every request with `response`; request heads are kept
+    /// (lowercased).
+    pub(crate) async fn store_server_any(response: String) -> (String, Seen) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let seen: Seen = Arc::default();
+        let log = seen.clone();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    return;
+                };
+                let (log, out) = (log.clone(), response.clone());
+                tokio::spawn(async move {
+                    let mut raw = Vec::new();
+                    let mut buf = [0u8; 4096];
+                    while !raw.windows(4).any(|w| w == b"\r\n\r\n") {
+                        match socket.read(&mut buf).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(n) => raw.extend_from_slice(&buf[..n]),
+                        }
+                    }
+                    log.lock()
+                        .unwrap()
+                        .push(String::from_utf8_lossy(&raw).to_ascii_lowercase());
                     let _ = socket.write_all(out.as_bytes()).await;
                     let _ = socket.shutdown().await;
                 });

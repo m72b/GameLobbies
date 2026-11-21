@@ -29,20 +29,18 @@ pub enum SetupStore {
     Gog,
     Xbox,
     Battlenet,
-    Humble,
     Ea,
     Ubisoft,
     Itch,
 }
 
 impl SetupStore {
-    pub const ALL: [SetupStore; 9] = [
+    pub const ALL: [SetupStore; 8] = [
         Self::Steam,
         Self::Epic,
         Self::Gog,
         Self::Xbox,
         Self::Battlenet,
-        Self::Humble,
         Self::Ea,
         Self::Ubisoft,
         Self::Itch,
@@ -55,7 +53,6 @@ impl SetupStore {
             Self::Gog => "GOG",
             Self::Xbox => "Xbox",
             Self::Battlenet => "Battle.net",
-            Self::Humble => "Humble",
             Self::Ea => "EA app",
             Self::Ubisoft => "Ubisoft Connect",
             Self::Itch => "itch.io",
@@ -70,7 +67,6 @@ impl SetupStore {
             Self::Gog => Some(AccountStore::Gog),
             Self::Xbox => Some(AccountStore::Xbox),
             Self::Battlenet => Some(AccountStore::Battlenet),
-            Self::Humble => Some(AccountStore::Humble),
             Self::Ea | Self::Ubisoft | Self::Itch => None,
         }
     }
@@ -83,9 +79,8 @@ impl SetupStore {
     fn note(self) -> &'static str {
         match self {
             Self::Steam => "Sign in through Steam, then add a free Steam Web API key to list the games you own.",
-            Self::Gog => "Sign in to GOG to list the games you own, with GOG's playtime. Installed games are found on this PC either way.",
+            Self::Gog => "Sign in to GOG in your browser (any way GOG offers) to list the games you own, with GOG's playtime. Unofficial: uses GOG Galaxy's public app id. Installed games are found on this PC either way.",
             Self::Battlenet => "Sign in to Battle.net to list the games on your account. Installed games are found on this PC either way.",
-            Self::Humble => "Sign in to Humble to list the Windows games and Steam keys of your orders (owned only: Humble has no launcher).",
             Self::Epic | Self::Xbox => {
                 "Sign-in is coming in a later version. Installed games are found on this PC."
             }
@@ -172,7 +167,12 @@ pub fn load(conn: &Connection) -> Result<Option<SetupState>> {
 }
 
 fn parse_stored(text: &str) -> Result<SetupState> {
-    let state: SetupState = serde_json::from_str(text)?;
+    let mut value: serde_json::Value = serde_json::from_str(text)?;
+    // Phase B builds also listed Humble, which is gone: drop that one choice, keep the rest.
+    if let Some(choices) = value.get_mut("choices").and_then(|c| c.as_object_mut()) {
+        choices.remove("humble");
+    }
+    let state: SetupState = serde_json::from_value(value)?;
     if state.version != VERSION {
         bail!("unknown version {}", state.version);
     }
@@ -305,6 +305,7 @@ mod tests {
         assert_eq!(state.choices[&SetupStore::Steam], SetupChoice::Signin);
         assert_eq!(state.completed_at, None);
         for store in ["epic", "xbox", "ea", "ubisoft", "itch"] {
+            // (Humble is no longer a setup store at all.)
             let p = patch(&format!(r#"{{"choices":{{"{store}":"signin"}}}}"#)).unwrap();
             assert!(apply_patch(Some(state.clone()), p, 6).is_err(), "{store}");
         }
@@ -326,6 +327,16 @@ mod tests {
         let state = apply_patch(None, patch(r#"{"skipped":true}"#).unwrap(), 3).unwrap();
         save(&conn, &state).unwrap();
         assert_eq!(load(&conn).unwrap(), Some(state));
+        // A choice for Humble (phase B builds) is dropped; the rest of the row stays.
+        conn.execute(
+            "UPDATE settings SET value=? WHERE key='setup'",
+            [r#"{"version":1,"skippedAt":3,"choices":{"humble":"signin","steam":"installed"}}"#],
+        )
+        .unwrap();
+        let kept = load(&conn).unwrap().unwrap();
+        assert_eq!(kept.skipped_at, Some(3));
+        assert_eq!(kept.choices.len(), 1);
+        assert!(patch(r#"{"choices":{"humble":"skip"}}"#).is_err());
         for bad in [
             r#"{"version":2,"choices":{}}"#,
             r#"{"version":1,"choices":{"amazon":"skip"}}"#,
@@ -369,15 +380,10 @@ mod tests {
         )
         .unwrap();
         assert!(!is_fresh(&conn).unwrap());
-        // Steam, GOG, Battle.net and Humble offer sign-in; every store has a note.
+        // Steam, GOG and Battle.net offer sign-in; every store has a note.
         let stores = info(None, true).stores;
         assert_eq!(stores.len(), SetupStore::ALL.len());
-        let signs_in = [
-            SetupStore::Steam,
-            SetupStore::Gog,
-            SetupStore::Battlenet,
-            SetupStore::Humble,
-        ];
+        let signs_in = [SetupStore::Steam, SetupStore::Gog, SetupStore::Battlenet];
         assert!(stores
             .iter()
             .all(|s| s.sign_in == signs_in.contains(&s.id) && !s.note.is_empty()));

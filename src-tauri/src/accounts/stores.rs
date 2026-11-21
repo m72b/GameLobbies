@@ -1,15 +1,18 @@
-//! The cookie-based store accounts (GOG, Battle.net, Humble): which hosts each uses, the probe
-//! that decides whether a session works, and syncing (on scans, on "Sync now", after sign-in).
+//! The store accounts synced from Rust (GOG, Battle.net): which hosts each uses, the probe that
+//! decides whether a session works, and syncing (on scans, on "Sync now", after sign-in).
 //!
-//! A sync loads the sealed session, fetches with [`StoreHttp`] (host allowlist, redirect policy,
-//! caps, pacing), applies the result ([`super::apply::apply_account`]) and seals the cookies
-//! again (the store may have refreshed them). It runs under the scan lock, like the Steam import
-//! and sign-out, so the library is never written twice at once.
+//! GOG signs in in the browser and uses OAuth tokens (GOG Galaxy's public client, see
+//! [`super::gog`]); Battle.net signs in in Game Lobby's window and uses the store's cookies.
+//! A sync loads the sealed session (refreshing GOG's token when it is about to expire), fetches
+//! with [`StoreHttp`] (host allowlist, redirect policy, caps, pacing), applies the result
+//! ([`super::apply::apply_account`]) and seals the session again (cookies or tokens may have
+//! changed). It runs under the scan lock, like the Steam import and sign-out, so the library is
+//! never written twice at once.
 
 use super::apply::{self, FetchOutcome};
 use super::http::{FetchError, StoreHttp};
 use super::session::{self, Session};
-use super::{battlenet, gog, humble, AccountMode, AccountStore, SyncStatus};
+use super::{battlenet, gog, AccountMode, AccountStore, SyncStatus};
 use crate::state::AppState;
 use crate::types::now_ms;
 use anyhow::Result;
@@ -18,16 +21,14 @@ use url::Url;
 
 /// The longest a whole sync may take (it holds the scan lock).
 pub const SYNC_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+/// GOG's access token is renewed when it has less than this left.
+const TOKEN_MARGIN_MS: i64 = 5 * 60 * 1000;
 
-/// Stores whose account works through a cookie session.
-pub const COOKIE_STORES: [AccountStore; 3] = [
-    AccountStore::Gog,
-    AccountStore::Battlenet,
-    AccountStore::Humble,
-];
+/// Stores whose account is synced here.
+pub const SYNCED_STORES: [AccountStore; 2] = [AccountStore::Gog, AccountStore::Battlenet];
 
-pub fn is_cookie_store(store: AccountStore) -> bool {
-    COOKIE_STORES.contains(&store)
+pub fn is_synced_store(store: AccountStore) -> bool {
+    SYNCED_STORES.contains(&store)
 }
 
 /// The hosts requests may go to (exact names).
@@ -35,29 +36,19 @@ pub fn api_hosts(store: AccountStore) -> &'static [&'static str] {
     match store {
         AccountStore::Gog => gog::API_HOSTS,
         AccountStore::Battlenet => battlenet::API_HOSTS,
-        AccountStore::Humble => humble::API_HOSTS,
         _ => &[],
     }
 }
 
-/// The URLs whose cookies are read from the sign-in window: every API host's root and the
-/// store's own request URLs (a cookie set for a path is only sent there).
+/// The URLs whose cookies are read from the sign-in window (Battle.net): every API host's root
+/// and the store's own request URLs (a cookie set for a path is only sent there).
 pub fn cookie_urls(store: AccountStore) -> Vec<String> {
     let requests: &[&str] = match store {
-        AccountStore::Gog => &[
-            "https://menu.gog.com/v1/account/basic",
-            "https://embed.gog.com/user/data/games",
-            "https://www.gog.com/u/",
-        ],
         AccountStore::Battlenet => &[
             "https://account.battle.net/api/games-and-subs",
             "https://account.battle.net/api/classic-games",
         ],
-        AccountStore::Humble => &[
-            "https://www.humblebundle.com/home/library",
-            "https://www.humblebundle.com/api/v1/orders",
-        ],
-        _ => &[],
+        _ => return Vec::new(),
     };
     let mut urls: Vec<String> = api_hosts(store)
         .iter()
@@ -70,50 +61,85 @@ pub fn cookie_urls(store: AccountStore) -> Vec<String> {
 /// The domains (and their subdomains) whose cookies are kept.
 pub fn cookie_domains(store: AccountStore) -> &'static [&'static str] {
     match store {
-        AccountStore::Gog => gog::COOKIE_DOMAINS,
         AccountStore::Battlenet => battlenet::COOKIE_DOMAINS,
-        AccountStore::Humble => humble::COOKIE_DOMAINS,
         _ => &[],
     }
 }
 
-/// The first page of the store's sign-in window.
+/// The first page of the store's sign-in window (Battle.net).
 pub fn start_url(store: AccountStore) -> Option<Url> {
-    let url = match store {
-        AccountStore::Gog => gog::START_URL,
-        AccountStore::Battlenet => battlenet::START_URL,
-        AccountStore::Humble => humble::START_URL,
-        _ => return None,
-    };
-    Url::parse(url).ok()
+    match store {
+        AccountStore::Battlenet => Url::parse(battlenet::START_URL).ok(),
+        _ => None,
+    }
 }
 
 /// Whether the sign-in window shows the store's signed-in page (time to take the cookies).
 pub fn signed_in_page(store: AccountStore, url: &Url) -> bool {
     match store {
-        AccountStore::Gog => gog::signed_in_page(url),
         AccountStore::Battlenet => battlenet::signed_in_page(url),
-        AccountStore::Humble => humble::signed_in_page(url),
         _ => false,
     }
 }
 
-/// Checks a session; the account name when the store gives one (GOG).
+/// Checks a window session; the account name when the store gives one.
 pub async fn probe(store: AccountStore, http: &StoreHttp) -> Result<Option<String>, FetchError> {
     match store {
-        AccountStore::Gog => gog::probe(http).await.map(Some),
         AccountStore::Battlenet => battlenet::probe(http).await,
-        AccountStore::Humble => humble::probe(http).await,
-        _ => Err(FetchError::Invalid("this store has no account sign-in.")),
+        _ => Err(FetchError::Invalid("this store has no sign-in window.")),
     }
 }
 
-async fn fetch(store: AccountStore, http: &StoreHttp) -> Result<FetchOutcome, FetchError> {
-    match store {
-        AccountStore::Gog => gog::fetch(http).await,
-        AccountStore::Battlenet => battlenet::fetch(http).await,
-        AccountStore::Humble => humble::fetch(http).await,
-        _ => Err(FetchError::Invalid("this store has no account sign-in.")),
+/// The client for a session, with GOG's tokens renewed first when they are about to expire
+/// (then `Some(new session)` to seal).
+async fn client_for(
+    store: AccountStore,
+    saved: &Session,
+) -> Result<(StoreHttp, Option<Session>), FetchError> {
+    match saved {
+        Session::Cookies { .. } => {
+            let (jar, user_agent) = saved.jar(cookie_domains(store));
+            Ok((StoreHttp::new(api_hosts(store), jar, &user_agent)?, None))
+        }
+        Session::Tokens {
+            access,
+            refresh,
+            expires_at,
+            user_id,
+            account,
+            ..
+        } => {
+            if *expires_at - now_ms() > TOKEN_MARGIN_MS {
+                let http = StoreHttp::new(api_hosts(store), Default::default(), "")?;
+                return Ok((http.with_bearer(access), None));
+            }
+            let auth = StoreHttp::new(gog::TOKEN_HOSTS, Default::default(), "")?;
+            let mut tokens = gog::refresh(&auth, &gog::Endpoints::production(), refresh).await?;
+            if tokens.user_id != *user_id {
+                // A refresh never changes the account; refuse an answer that does.
+                return Err(FetchError::Invalid(
+                    "the renewed sign-in is for another account.",
+                ));
+            }
+            tokens.user_id = user_id.clone();
+            let renewed = Session::tokens(&tokens, account.clone(), now_ms());
+            let http = StoreHttp::new(api_hosts(store), Default::default(), "")?;
+            Ok((http.with_bearer(&tokens.access), Some(renewed)))
+        }
+    }
+}
+
+async fn fetch(
+    store: AccountStore,
+    http: &StoreHttp,
+    saved: &Session,
+) -> Result<FetchOutcome, FetchError> {
+    match (store, saved) {
+        (AccountStore::Gog, Session::Tokens { user_id, .. }) => {
+            gog::fetch(http, &gog::Endpoints::production(), user_id).await
+        }
+        (AccountStore::Battlenet, Session::Cookies { .. }) => battlenet::fetch(http).await,
+        _ => Err(FetchError::Rejected),
     }
 }
 
@@ -138,27 +164,39 @@ pub async fn sync_store(
     let Some(saved) = loaded else {
         return Ok(None);
     };
-    let (jar, user_agent) = saved.jar(cookie_domains(store));
-    let http = StoreHttp::new(api_hosts(store), jar, &user_agent)
-        .map_err(|e| anyhow::anyhow!(e.message_for(store.name())))?;
-    let outcome = tokio::time::timeout(SYNC_TIMEOUT, fetch(store, &http))
+    let work = async {
+        let (http, renewed) = client_for(store, &saved).await?;
+        let outcome = fetch(store, &http, renewed.as_ref().unwrap_or(&saved)).await;
+        Ok::<_, FetchError>((http, renewed, outcome))
+    };
+    let attempt = tokio::time::timeout(SYNC_TIMEOUT, work)
         .await
         .unwrap_or(Err(FetchError::Network(
             "the store took too long to answer.",
         )));
+    let (outcome, http, renewed) = match attempt {
+        Ok((http, renewed, outcome)) => (outcome, Some(http), renewed),
+        Err(e) => (Err(e), None, None),
+    };
     let status = {
         let mut conn = state.db.lock();
-        let status =
-            apply::apply_account(&mut conn, store, &outcome, now_ms(), http.retry_after())?;
-        // The store may have refreshed cookies: seal the jar again (only while signed in).
+        let retry_after = http.as_ref().and_then(StoreHttp::retry_after);
+        let status = apply::apply_account(&mut conn, store, &outcome, now_ms(), retry_after)?;
+        // Seal what changed (only while still signed in): renewed tokens, refreshed cookies.
         if session::exists(&conn, store)? {
-            let refreshed = Session::cookies(
-                &http.cookies(),
-                http.user_agent(),
-                saved.account().map(str::to_string),
-                now_ms(),
-            );
-            session::save(&conn, store, &refreshed)?;
+            let next = match (&saved, renewed, &http) {
+                (_, Some(renewed), _) => Some(renewed),
+                (Session::Cookies { account, .. }, None, Some(http)) => Some(Session::cookies(
+                    &http.cookies(),
+                    http.user_agent(),
+                    account.clone(),
+                    now_ms(),
+                )),
+                _ => None,
+            };
+            if let Some(next) = next {
+                session::save(&conn, store, &next)?;
+            }
         }
         status
     };
@@ -176,7 +214,7 @@ pub async fn sync_store(
 /// Called by the library scan (the scan lock is held). Error lines for the scan summary.
 pub async fn run_for_scan(app: &AppHandle) -> Vec<String> {
     let mut errors = Vec::new();
-    for store in COOKIE_STORES {
+    for store in SYNCED_STORES {
         if store_disabled(app, store) {
             continue;
         }
@@ -252,55 +290,57 @@ mod tests {
 
     #[test]
     fn cookies_are_read_for_the_roots_and_the_request_urls_of_listed_hosts_only() {
-        for store in COOKIE_STORES {
-            let urls = cookie_urls(store);
-            assert!(urls.len() > api_hosts(store).len());
-            for url in urls {
-                let url = Url::parse(&url).unwrap();
-                assert_eq!(url.scheme(), "https");
-                assert!(api_hosts(store).contains(&url.host_str().unwrap()), "{url}");
-            }
+        let urls = cookie_urls(AccountStore::Battlenet);
+        assert!(urls.len() > api_hosts(AccountStore::Battlenet).len());
+        for url in urls {
+            let url = Url::parse(&url).unwrap();
+            assert_eq!(url.scheme(), "https");
+            assert!(api_hosts(AccountStore::Battlenet).contains(&url.host_str().unwrap()));
         }
+        // GOG uses tokens, not cookies; Steam neither.
+        assert!(cookie_urls(AccountStore::Gog).is_empty());
+        assert!(cookie_domains(AccountStore::Gog).is_empty());
         assert!(cookie_urls(AccountStore::Steam).is_empty());
     }
 
     #[test]
-    fn a_sync_is_bounded_in_time() {
+    fn a_sync_is_bounded_in_time_and_renews_tokens_first() {
         let source = include_str!("stores.rs");
         let sync = &source[source.find("pub async fn sync_store").unwrap()..];
-        assert!(sync.contains("tokio::time::timeout(SYNC_TIMEOUT, fetch(store, &http))"));
+        assert!(sync.contains("tokio::time::timeout(SYNC_TIMEOUT, work)"));
+        let work = &sync[sync.find("let work = async").unwrap()..];
+        assert!(
+            work.find("client_for(store, &saved)").unwrap()
+                < work.find("fetch(store, &http").unwrap()
+        );
         assert!(SYNC_TIMEOUT <= std::time::Duration::from_secs(300));
+        // The bearer token only goes to GOG's API hosts; the token endpoint gets none.
+        let client = &source[source.find("async fn client_for").unwrap()..];
+        let client = &client[..client.find("\nasync fn fetch").unwrap()];
+        assert!(client.contains("StoreHttp::new(gog::TOKEN_HOSTS, Default::default(), \"\")?"));
+        assert_eq!(client.matches(".with_bearer(").count(), 2);
+        assert!(client.matches("StoreHttp::new(api_hosts(store)").count() >= 2);
     }
 
     #[test]
-    fn each_store_has_its_own_hosts_and_pages() {
-        for store in COOKIE_STORES {
-            assert!(!api_hosts(store).is_empty());
-            let start = start_url(store).unwrap();
-            // The first page is allowed in the sign-in window, and every API host's cookies are
-            // kept by the cookie filter.
-            assert!(super::super::signin::navigation_allowed(
-                &start,
-                super::super::signin::login_hosts(store)
+    fn the_battlenet_window_starts_on_an_allowed_page() {
+        let store = AccountStore::Battlenet;
+        let start = start_url(store).unwrap();
+        assert!(super::super::signin::navigation_allowed(
+            &start,
+            super::super::signin::login_hosts(store)
+        ));
+        for host in api_hosts(store) {
+            assert!(crate::accounts::cookies::domain_allowed(
+                host,
+                cookie_domains(store)
             ));
-            for host in api_hosts(store) {
-                assert!(crate::accounts::cookies::domain_allowed(
-                    host,
-                    cookie_domains(store)
-                ));
-                assert!(
-                    super::super::signin::host_allowed(
-                        host,
-                        super::super::signin::login_hosts(store)
-                    ),
-                    "{host}"
-                );
-            }
-            // GOG and Battle.net start on the signed-in page itself (it sends a signed-out user
-            // to the sign-in); Humble starts on its sign-in page.
-            assert_eq!(signed_in_page(store, &start), store != AccountStore::Humble);
         }
-        assert!(!is_cookie_store(AccountStore::Steam));
+        // Battle.net starts on the signed-in page itself (it sends a signed-out user to the
+        // sign-in).
+        assert!(signed_in_page(store, &start));
+        assert!(start_url(AccountStore::Gog).is_none());
         assert!(start_url(AccountStore::Epic).is_none());
+        assert!(is_synced_store(AccountStore::Gog) && !is_synced_store(AccountStore::Steam));
     }
 }

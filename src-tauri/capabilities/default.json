@@ -156,6 +156,7 @@
     "allow-accounts-sign-out",
     "allow-accounts-set-mode",
     "allow-accounts-sync",
+    "allow-accounts-submit-code",
     "allow-setup-get",
     "allow-setup-save"
   ]

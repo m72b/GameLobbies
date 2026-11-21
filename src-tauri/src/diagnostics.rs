@@ -206,7 +206,7 @@ pub fn render(
         yes_no(flags.steam_owned_steam_id)
     ));
     // Store sign-ins: yes/no only, never a cookie.
-    for store in crate::accounts::stores::COOKIE_STORES {
+    for store in crate::accounts::stores::SYNCED_STORES {
         line(format!(
             "{} signed in: {}",
             store.name(),

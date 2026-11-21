@@ -149,6 +149,7 @@ pub const COMMANDS: &[&str] = &[
     "accounts_sign_out",
     "accounts_set_mode",
     "accounts_sync",
+    "accounts_submit_code",
     "setup_get",
     "setup_save",
 ];

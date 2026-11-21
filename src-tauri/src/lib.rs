@@ -201,6 +201,12 @@ pub fn run() {
                 ),
             }
             let hours = db::get_settings(&database.lock())?.scan_interval_hours;
+            // Phase B builds had a Humble account; clean up what it left (once).
+            match accounts::retire_humble(&mut database.lock()) {
+                Ok(0) => {}
+                Ok(n) => log::info!("Removed {n} games of the retired Humble account."),
+                Err(e) => log::warn!("Could not clean up the retired Humble account: {e:#}"),
+            }
             // Decided before any scan can add games: the first-time setup shows only then.
             let fresh_install = accounts::setup::is_fresh(&database.lock())?;
             app.manage(AppState {
@@ -388,6 +394,7 @@ pub fn run() {
             accounts::accounts_sign_out,
             accounts::accounts_set_mode,
             accounts::accounts_sync,
+            accounts::accounts_submit_code,
             accounts::setup::setup_get,
             accounts::setup::setup_save,
         ]))

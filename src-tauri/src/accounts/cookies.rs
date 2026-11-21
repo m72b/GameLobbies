@@ -1,4 +1,4 @@
-//! The cookie jar of a cookie-based store account (GOG, Battle.net, Humble): the cookies the
+//! The cookie jar of a cookie-based store account (Battle.net): the cookies the
 //! sign-in window held when the user reached the store's signed-in page, filtered to the store's
 //! own domains, sent by [`super::http::StoreHttp`] with each request and updated from the
 //! responses' `Set-Cookie` headers (again only for the store's domains). The jar is sealed with

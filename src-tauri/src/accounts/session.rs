@@ -16,13 +16,25 @@ const MAX_USER_AGENT: usize = 512;
 #[derive(Serialize, Deserialize, Clone, PartialEq)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 pub enum Session {
-    /// GOG, Battle.net, Humble: the store's cookies from the sign-in window.
+    /// Battle.net: the store's cookies from the sign-in window.
     #[serde(rename_all = "camelCase")]
     Cookies {
         cookies: Vec<StoredCookie>,
         /// The sign-in window's user agent, sent with every request (stores tie sessions to it).
         user_agent: String,
-        /// The account name the store reported (GOG's user name), for status lines.
+        /// The account name the store reported, for the sign-in notice.
+        #[serde(default)]
+        account: Option<String>,
+        saved_at: i64,
+    },
+    /// GOG: OAuth tokens (GOG Galaxy's public client).
+    #[serde(rename_all = "camelCase")]
+    Tokens {
+        access: String,
+        refresh: String,
+        /// Unix ms.
+        expires_at: i64,
+        user_id: String,
         #[serde(default)]
         account: Option<String>,
         saved_at: i64,
@@ -38,6 +50,9 @@ impl std::fmt::Debug for Session {
                     "Session::Cookies({} cookies, values hidden)",
                     cookies.len()
                 )
+            }
+            Self::Tokens { user_id, .. } => {
+                write!(f, "Session::Tokens(user {user_id}, values hidden)")
             }
         }
     }
@@ -58,7 +73,19 @@ impl Session {
         }
     }
 
-    /// The jar (filtered again to the store's domains) and the user agent.
+    pub fn tokens(tokens: &super::gog::Tokens, account: Option<String>, saved_at: i64) -> Self {
+        Self::Tokens {
+            access: tokens.access.clone(),
+            refresh: tokens.refresh.clone(),
+            expires_at: tokens.expires_at,
+            user_id: tokens.user_id.clone(),
+            account,
+            saved_at,
+        }
+    }
+
+    /// The jar (filtered again to the store's domains) and the user agent (a token session has
+    /// an empty jar and Game Lobby's own user agent).
     pub fn jar(&self, allowed: &'static [&'static str]) -> (CookieJar, String) {
         match self {
             Self::Cookies {
@@ -69,12 +96,14 @@ impl Session {
                 CookieJar::new(allowed, cookies.clone()),
                 clean_user_agent(user_agent),
             ),
+            Self::Tokens { .. } => (CookieJar::default(), clean_user_agent("")),
         }
     }
 
+    #[cfg(test)]
     pub fn account(&self) -> Option<&str> {
         match self {
-            Self::Cookies { account, .. } => account.as_deref(),
+            Self::Cookies { account, .. } | Self::Tokens { account, .. } => account.as_deref(),
         }
     }
 }
@@ -166,7 +195,23 @@ mod tests {
         assert!(!exists(&conn, AccountStore::Gog).unwrap());
         save(&conn, AccountStore::Gog, &session()).unwrap();
         assert!(exists(&conn, AccountStore::Gog).unwrap());
-        assert!(!exists(&conn, AccountStore::Humble).unwrap());
+        assert!(!exists(&conn, AccountStore::Battlenet).unwrap());
+        // Token sessions are sealed the same way.
+        let tokens = crate::accounts::gog::Tokens {
+            access: "ACCESSVALUE0123456789".into(),
+            refresh: "REFRESHVALUE0123456789".into(),
+            expires_at: 9,
+            user_id: "42".into(),
+        };
+        let t = Session::tokens(&tokens, Some("gamer".into()), 1);
+        save(&conn, AccountStore::Battlenet, &t).unwrap();
+        let raw = db::read_secret(&conn, "account-battlenet-session-dpapi")
+            .unwrap()
+            .unwrap();
+        assert!(!String::from_utf8_lossy(&raw).contains("ACCESSVALUE"));
+        assert_eq!(load(&conn, AccountStore::Battlenet).unwrap().unwrap(), t);
+        assert!(!format!("{t:?}").contains("ACCESSVALUE") && !format!("{t:?}").contains("REFRESH"));
+        delete(&conn, AccountStore::Battlenet).unwrap();
         // Sealed: the stored bytes don't contain the value.
         let raw = db::read_secret(&conn, "account-gog-session-dpapi")
             .unwrap()

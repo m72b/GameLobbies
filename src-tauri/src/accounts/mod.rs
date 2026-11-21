@@ -6,16 +6,18 @@
 //! [`AccountStatus`] values. Every command here checks that it was called from the main window.
 //!
 //! Steam signs in through OpenID in the browser ([`steam_openid`]); the SteamID64 goes into the
-//! existing owned-games import ([`crate::steam_owned`]). GOG, Battle.net and Humble sign in in
-//! Game Lobby's locked-down window and are then read from Rust with the store's cookies
-//! ([`stores`]). Xbox and Epic are listed as coming later and refuse sign-in.
+//! existing owned-games import ([`crate::steam_owned`]). GOG signs in in the browser too (GOG
+//! Galaxy's public OAuth client; the user pastes the address GOG ends on), Battle.net in Game
+//! Lobby's locked-down window; both are then read from Rust ([`stores`]). Xbox and Epic are
+//! listed as coming later and refuse sign-in.
 
 pub mod apply;
 pub mod battlenet;
 pub mod cookies;
+pub mod devtools;
 pub mod gog;
 pub mod http;
-pub mod humble;
+pub mod launcher_clients;
 pub mod session;
 pub mod setup;
 pub mod signin;
@@ -47,17 +49,15 @@ pub enum AccountStore {
     Steam,
     Gog,
     Battlenet,
-    Humble,
     Xbox,
     Epic,
 }
 
 impl AccountStore {
-    pub const ALL: [AccountStore; 6] = [
+    pub const ALL: [AccountStore; 5] = [
         Self::Steam,
         Self::Gog,
         Self::Battlenet,
-        Self::Humble,
         Self::Xbox,
         Self::Epic,
     ];
@@ -67,7 +67,6 @@ impl AccountStore {
             Self::Steam => "steam",
             Self::Gog => "gog",
             Self::Battlenet => "battlenet",
-            Self::Humble => "humble",
             Self::Xbox => "xbox",
             Self::Epic => "epic",
         }
@@ -78,7 +77,6 @@ impl AccountStore {
             Self::Steam => "Steam",
             Self::Gog => "GOG",
             Self::Battlenet => "Battle.net",
-            Self::Humble => "Humble",
             Self::Xbox => "Xbox",
             Self::Epic => "Epic Games",
         }
@@ -86,10 +84,7 @@ impl AccountStore {
 
     /// Whether this build can sign in to the store.
     pub fn available(self) -> bool {
-        matches!(
-            self,
-            Self::Steam | Self::Gog | Self::Battlenet | Self::Humble
-        )
+        matches!(self, Self::Steam | Self::Gog | Self::Battlenet)
     }
 
     fn unavailable(self) -> String {
@@ -316,7 +311,7 @@ pub fn statuses(state: &AppState) -> Result<Vec<AccountStatus>> {
                     needs_sign_in: s.needs_new_credentials,
                 }),
             ),
-            store if stores::is_cookie_store(store) => (
+            store if stores::is_synced_store(store) => (
                 session::exists(&conn, store)?,
                 true,
                 account.sync.as_ref().and_then(|s| s.status.clone()),
@@ -381,6 +376,55 @@ pub async fn accounts_sign_in(
     statuses(&app.state::<AppState>()).map_err(err)
 }
 
+/// GOG: the address (or code) the user pasted after signing in in the browser. Checked strictly
+/// in Rust; never logged or echoed back.
+#[tauri::command]
+pub async fn accounts_submit_code(
+    app: AppHandle,
+    window: WebviewWindow,
+    store: AccountStore,
+    code: String,
+) -> CmdResult<Vec<AccountStatus>> {
+    require_main(&window)?;
+    if !store.available() {
+        return Err(store.unavailable());
+    }
+    signin::submit_code(&app, store, &code).await?;
+    statuses(&app.state::<AppState>()).map_err(err)
+}
+
+/// Phase B builds had a Humble account; it is gone. Its sealed session, its `account:humble`
+/// row and the not-installed games it added that hold no user data are removed (games you put
+/// something into keep their entry, which never launches). Runs at start-up; nothing happens
+/// when there is nothing. The number of games removed.
+pub fn retire_humble(conn: &mut Connection) -> Result<usize> {
+    let row: Option<String> = conn
+        .query_row(
+            "SELECT value FROM library_connections WHERE key='account:humble'",
+            [],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let ids: std::collections::HashSet<String> = row
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|v| {
+            v.pointer("/sync/ids")
+                .and_then(|ids| ids.as_array())
+                .cloned()
+        })
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|id| id.as_str().map(str::to_string))
+        .collect();
+    let deleted = crate::db::drop_owned(conn, "humble-account", &ids)?;
+    conn.execute(
+        "DELETE FROM library_connections WHERE key='account:humble'",
+        [],
+    )?;
+    crate::db::delete_secret(conn, "account-humble-session-dpapi")?;
+    Ok(deleted)
+}
+
 /// Stops the running sign-in, if any (closes its window or stops its loopback listener).
 #[tauri::command]
 pub async fn accounts_cancel_sign_in(
@@ -439,7 +483,7 @@ pub async fn accounts_set_mode(
         return Err(store.unavailable());
     }
     let state = app.state::<AppState>();
-    if stores::is_cookie_store(store) {
+    if stores::is_synced_store(store) {
         match mode {
             AccountMode::Installed => {
                 let deleted = stores::set_installed(&app, store).await.map_err(err)?;
@@ -517,7 +561,7 @@ pub async fn accounts_sync(
             store.name()
         ));
     }
-    if stores::is_cookie_store(store) {
+    if stores::is_synced_store(store) {
         stores::sync_now(&app, store).await.map_err(err)?;
     } else if crate::steam_owned::sync_now(&app)
         .await
@@ -546,7 +590,7 @@ mod tests {
                 store
             );
         }
-        for bad in ["amazon", "Steam", "steam ", "", "origin"] {
+        for bad in ["amazon", "humble", "Steam", "steam ", "", "origin"] {
             assert!(
                 serde_json::from_value::<AccountStore>(bad.into()).is_err(),
                 "{bad}"
@@ -554,17 +598,67 @@ mod tests {
         }
         assert!(serde_json::from_value::<AccountMode>("account".into()).is_ok());
         assert!(serde_json::from_value::<AccountMode>("skip".into()).is_err());
-        // Steam, GOG, Battle.net and Humble sign in in this version; Xbox and Epic don't.
+        // Steam, GOG and Battle.net sign in in this version; Xbox and Epic don't. Humble's
+        // account (phase B builds only) is gone.
         let available: Vec<_> = AccountStore::ALL.iter().filter(|s| s.available()).collect();
         assert_eq!(
             available,
             [
                 &AccountStore::Steam,
                 &AccountStore::Gog,
-                &AccountStore::Battlenet,
-                &AccountStore::Humble
+                &AccountStore::Battlenet
             ]
         );
+    }
+
+    #[test]
+    fn the_retired_humble_account_is_cleaned_up_once() {
+        use crate::types::{Game, GameRoute};
+        let database = crate::db::Db::memory().unwrap();
+        let mut conn = database.lock();
+        let humble = |id: &str| {
+            crate::importers::single_route_game(
+                format!("humble:{id}"),
+                id.into(),
+                "Humble",
+                None,
+                GameRoute {
+                    source_id: "humble-account".into(),
+                    store: "Humble".into(),
+                    app_id: Some(id.into()),
+                    launch_target: format!("owned-only:humble:{id}"),
+                    owned: Some(true),
+                    installed: Some(false),
+                    ..Default::default()
+                },
+            )
+        };
+        let games: Vec<Game> = vec![humble("plain"), humble("loved")];
+        crate::db::upsert_imported_games(&mut conn, &games).unwrap();
+        conn.execute("UPDATE games SET favorite=1 WHERE id='humble:loved'", [])
+            .unwrap();
+        conn.execute(
+            "INSERT INTO library_connections(key,value) VALUES('account:humble','{\"sync\":{\"ids\":[\"plain\",\"loved\"]}}')",
+            [],
+        )
+        .unwrap();
+        crate::db::write_secret(&conn, "account-humble-session-dpapi", b"sealed").unwrap();
+        assert_eq!(retire_humble(&mut conn).unwrap(), 1);
+        assert!(crate::db::get_game(&conn, "humble:plain")
+            .unwrap()
+            .is_none());
+        // A game with user data stays; its entry never launches (owned-only), and saves still
+        // validate (Humble stays a store name).
+        let kept = crate::db::get_game(&conn, "humble:loved").unwrap().unwrap();
+        assert!(kept.favorite);
+        assert!(crate::validation::game(&serde_json::to_value(&kept).unwrap()).is_ok());
+        assert!(
+            crate::db::read_secret(&conn, "account-humble-session-dpapi")
+                .unwrap()
+                .is_none()
+        );
+        // Twice is harmless.
+        assert_eq!(retire_humble(&mut conn).unwrap(), 0);
     }
 
     #[test]

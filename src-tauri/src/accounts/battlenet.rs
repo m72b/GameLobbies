@@ -148,6 +148,7 @@ pub fn outcome(accounts: &[Value], classic: Option<&[Value]>) -> FetchOutcome {
         games,
         owned_ids,
         complete: classic.is_some(),
+        playtime_complete: false,
     }
 }
 

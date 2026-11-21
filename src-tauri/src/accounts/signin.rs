@@ -74,7 +74,6 @@ pub fn login_hosts(store: AccountStore) -> &'static [&'static str] {
         AccountStore::Steam => &["steamcommunity.com"],
         AccountStore::Gog => &["gog.com", "login.gog.com", "auth.gog.com"],
         AccountStore::Battlenet => &["battle.net", "blizzard.com"],
-        AccountStore::Humble => &["humblebundle.com"],
         AccountStore::Xbox => &[
             "login.live.com",
             "login.microsoftonline.com",
@@ -89,18 +88,21 @@ pub fn login_hosts(store: AccountStore) -> &'static [&'static str] {
 enum Method {
     /// In the user's default web browser, back to a loopback listener (Steam).
     Browser,
-    /// In Game Lobby's locked-down sign-in window (stores of later versions).
+    /// In the user's default web browser; the user pastes the address GOG ends on (GOG).
+    Paste,
+    /// In Game Lobby's locked-down sign-in window (Battle.net).
     Window,
 }
 
 fn method(store: AccountStore) -> Method {
     match store {
         AccountStore::Steam => Method::Browser,
+        AccountStore::Gog => Method::Paste,
         _ => Method::Window,
     }
 }
 
-/// The first page of a store's sign-in window (GOG, Battle.net, Humble).
+/// The first page of a store's sign-in window (Battle.net).
 fn window_start_url(store: AccountStore) -> Option<Url> {
     super::stores::start_url(store)
 }
@@ -111,12 +113,13 @@ const CAPTURE_EVERY: Duration = Duration::from_secs(2);
 /// The only URL the browser sign-in may hand to the system browser: Steam's OpenID endpoint
 /// over https, built by Rust.
 fn browser_url_ok(url: &Url) -> bool {
-    url.scheme() == "https"
+    let steam = url.scheme() == "https"
         && url.host_str() == Some("steamcommunity.com")
         && url.port().is_none()
         && url.username().is_empty()
         && url.password().is_none()
-        && url.path() == "/openid/login"
+        && url.path() == "/openid/login";
+    steam || super::gog::is_auth_url(url)
 }
 
 /// Whether `host` (already lowercase ASCII, as `url` returns it) is one of `hosts` or a
@@ -229,8 +232,103 @@ pub async fn start(app: &AppHandle, store: AccountStore) -> Result<(), String> {
     }
     match method(store) {
         Method::Browser => start_browser(app, store).await,
+        Method::Paste => start_paste(app, store).await,
         Method::Window => start_window(app, store).await,
     }
+}
+
+/// GOG: opens GOG's sign-in in the default web browser and waits (up to [`FLIGHT_TIMEOUT`]) for
+/// the user to paste the address GOG ends on ([`submit_code`]).
+async fn start_paste(app: &AppHandle, store: AccountStore) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let start = super::gog::auth_url();
+    let id = reserve(&state, store, None, true)?;
+    if let Some(flight) = lock(&state.accounts.flight).as_mut().filter(|f| f.id == id) {
+        flight.browser_url = Some(start.clone());
+    }
+    spawn_timeout(app, id);
+    if !open_in_browser(&start).await {
+        let e = SignInError::Window("Windows could not open your web browser.");
+        finish(app, id, Err(e.clone()));
+        return Err(e.message());
+    }
+    log::info!(
+        "{} sign-in opened in the web browser; waiting for the pasted address.",
+        store.name()
+    );
+    notify(app);
+    Ok(())
+}
+
+/// Why a pasted GOG sign-in was not accepted. Fixed text.
+fn code_error(e: &super::http::FetchError) -> String {
+    match e {
+        super::http::FetchError::Rejected => "GOG did not accept that sign-in. Each address works once and only for a few minutes: open GOG's page again, sign in, and paste the new address.".into(),
+        other => other.message_for("GOG"),
+    }
+}
+
+/// GOG: takes the address (or code) the user pasted while the GOG sign-in runs, checks it
+/// strictly, exchanges the code once for tokens, checks them with GOG and saves them. A refused
+/// paste or exchange keeps the sign-in open so the user can try again; nothing pasted is logged.
+pub async fn submit_code(app: &AppHandle, store: AccountStore, input: &str) -> Result<(), String> {
+    if method(store) != Method::Paste {
+        return Err(store.unavailable());
+    }
+    let code = super::gog::parse_pasted(input).map_err(|e| e.message().to_string())?;
+    let state = app.state::<AppState>();
+    let taken = {
+        let mut slot = lock(&state.accounts.flight);
+        match slot.as_mut() {
+            Some(f) if f.store == store && !f.verifying => {
+                f.verifying = true;
+                Ok(f.id)
+            }
+            Some(f) if f.store == store => {
+                Err("Game Lobby is already checking a sign-in.".to_string())
+            }
+            _ => Err(format!("Start the {} sign-in first.", store.name())),
+        }
+    };
+    let id = taken?;
+    let endpoints = super::gog::Endpoints::production();
+    let result = async {
+        let auth = super::http::StoreHttp::new(super::gog::TOKEN_HOSTS, Default::default(), "")?;
+        let tokens = super::gog::exchange(&auth, &endpoints, &code).await?;
+        let http = super::http::StoreHttp::new(super::gog::API_HOSTS, Default::default(), "")?
+            .with_bearer(&tokens.access);
+        let account = super::gog::probe(&http, &endpoints).await?;
+        Ok::<_, super::http::FetchError>((tokens, account))
+    }
+    .await;
+    let (tokens, account) = match result {
+        Ok(found) => found,
+        Err(e) => {
+            if let Some(f) = lock(&state.accounts.flight).as_mut().filter(|f| f.id == id) {
+                f.verifying = false;
+            }
+            log::info!(
+                "{} sign-in: the pasted sign-in was not accepted.",
+                store.name()
+            );
+            return Err(code_error(&e));
+        }
+    };
+    let Some(flight) = end_flight(app, id) else {
+        return Err("The sign-in was cancelled meanwhile; nothing was saved.".into());
+    };
+    let session = super::session::Session::tokens(&tokens, Some(account.clone()), now_ms());
+    let saved = save_store_sign_in(app, store, flight.generation, session, Some(account)).await;
+    if saved == Saved::Yes {
+        let handle = app.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Err(e) = super::stores::sync_now(&handle, store).await {
+                log::warn!("{} account: {e:#}", store.name());
+            }
+            notify(&handle);
+        });
+    }
+    Ok(())
 }
 
 /// Reserves the one flight slot; the new flight's id.
@@ -468,8 +566,14 @@ async fn watch_window(app: &AppHandle, store: AccountStore, id: u64) {
                 let Some(flight) = end_flight(app, id) else {
                     return;
                 };
+                let session = super::session::Session::cookies(
+                    &http.cookies(),
+                    http.user_agent(),
+                    account.clone(),
+                    now_ms(),
+                );
                 let saved =
-                    save_cookie_sign_in(app, store, flight.generation, &http, account).await;
+                    save_store_sign_in(app, store, flight.generation, session, account).await;
                 if saved == Saved::Yes {
                     let handle = app.clone();
                     tauri::async_runtime::spawn(async move {
@@ -510,13 +614,13 @@ fn jar_fingerprint(jar: &super::cookies::CookieJar) -> u64 {
     hasher.finish()
 }
 
-/// Saves a cookie sign-in under the scan lock, unless the store was signed out since the
-/// sign-in started: seals the session, lifts "Installed files only" and resets the sync state.
-async fn save_cookie_sign_in(
+/// Saves a store sign-in (Battle.net cookies, GOG tokens) under the scan lock, unless the store
+/// was signed out since the sign-in started: seals the session, lifts "Installed files only" and resets the sync state.
+async fn save_store_sign_in(
     app: &AppHandle,
     store: AccountStore,
     generation: u64,
-    http: &super::http::StoreHttp,
+    session: super::session::Session,
     account: Option<String>,
 ) -> Saved {
     let state = app.state::<AppState>();
@@ -524,12 +628,6 @@ async fn save_cookie_sign_in(
         let _guard = state.scan_lock.lock().await;
         if still_wanted(generation, state.accounts.generation_of(store)) {
             let conn = state.db.lock();
-            let session = super::session::Session::cookies(
-                &http.cookies(),
-                http.user_agent(),
-                account.clone(),
-                now_ms(),
-            );
             Some(
                 super::session::save(&conn, store, &session)
                     .and_then(|_| super::clear_mode(&conn, store))
@@ -810,6 +908,12 @@ fn guard(app: &AppHandle, id: u64, store: AccountStore, url: &Url) -> bool {
         return blank_ok(app, id);
     }
     if navigation_allowed(url, login_hosts(store)) {
+        // Where the sign-in goes (host and path only), so a stuck sign-in shows its last page.
+        log::info!(
+            "{} sign-in window: page {}",
+            store.name(),
+            super::devtools::place(url.as_str())
+        );
         return true;
     }
     log::info!(
@@ -1054,10 +1158,11 @@ fn harden_webview2(
         COREWEBVIEW2_PERMISSION_STATE_DENY,
     };
     use webview2_com::{
-        take_pwstr, LaunchingExternalUriSchemeEventHandler, NavigationStartingEventHandler,
-        PermissionRequestedEventHandler,
+        take_pwstr, CallDevToolsProtocolMethodCompletedHandler,
+        DevToolsProtocolEventReceivedEventHandler, LaunchingExternalUriSchemeEventHandler,
+        NavigationStartingEventHandler, PermissionRequestedEventHandler,
     };
-    use windows_core::Interface;
+    use windows_core::{Interface, HSTRING};
     const OLD_RUNTIME: SignInError = SignInError::Window(
         "the Microsoft Edge WebView2 Runtime is too old for a private sign-in window. Update it and try again.",
     );
@@ -1124,6 +1229,39 @@ fn harden_webview2(
             &mut token,
         )
         .map_err(|_| OLD_RUNTIME)?;
+        // Diagnostics (best effort, never a reason to refuse the window): script errors,
+        // console errors and failed or refused requests go to the log as host and path only
+        // (see `devtools`). Subscribed before the domains are enabled, so nothing is missed.
+        let page_log =
+            std::sync::Arc::new(std::sync::Mutex::new(super::devtools::PageLog::default()));
+        for event in super::devtools::EVENTS {
+            let Ok(receiver) = core.GetDevToolsProtocolEventReceiver(&HSTRING::from(event)) else {
+                continue;
+            };
+            let page_log = page_log.clone();
+            let mut token = 0i64;
+            let _ = receiver.add_DevToolsProtocolEventReceived(
+                &DevToolsProtocolEventReceivedEventHandler::create(Box::new(move |_, args| {
+                    if let Some(args) = args {
+                        let mut json = windows_core::PWSTR::null();
+                        args.ParameterObjectAsJson(&mut json)?;
+                        let json = take_pwstr(json);
+                        if let Some(line) = lock(&page_log).line(event, &json) {
+                            log::info!("{} sign-in page: {line}", store.name());
+                        }
+                    }
+                    Ok(())
+                })),
+                &mut token,
+            );
+        }
+        for method in super::devtools::DOMAINS {
+            let _ = core.CallDevToolsProtocolMethod(
+                &HSTRING::from(method),
+                &HSTRING::from("{}"),
+                &CallDevToolsProtocolMethodCompletedHandler::create(Box::new(|_, _| Ok(()))),
+            );
+        }
         let settings = core.Settings().map_err(|_| OLD_RUNTIME)?;
         // No browser context menu (Back, Reload, Inspect, Save as...). Browser shortcuts (find,
         // print, reload, zoom, devtools) are off; WebView2 keeps editing keys such as Ctrl+C,
@@ -1295,6 +1433,8 @@ mod tests {
         let harden = &source[source.find("fn harden_webview2").unwrap()..];
         let harden = &harden[..harden.find("#[cfg(not(windows))]").unwrap()];
         for needed in [
+            "GetDevToolsProtocolEventReceiver(",
+            "super::devtools::DOMAINS",
             "core.add_NavigationStarting(",
             "native_nav_ok(&uri, hosts, blank_ok(&app, id))",
             "core.add_PermissionRequested(",
@@ -1328,17 +1468,24 @@ mod tests {
     #[test]
     fn steam_signs_in_in_the_browser_with_a_rust_built_url() {
         assert_eq!(method(AccountStore::Steam), Method::Browser);
+        assert_eq!(method(AccountStore::Gog), Method::Paste);
         for store in AccountStore::ALL
             .iter()
-            .filter(|s| **s != AccountStore::Steam)
+            .filter(|s| !matches!(**s, AccountStore::Steam | AccountStore::Gog))
         {
             assert_eq!(method(*store), Method::Window);
-            // GOG, Battle.net and Humble open a window; Xbox and Epic have none yet.
+            // Battle.net opens a window; GOG signs in in the browser; Xbox and Epic have none.
             assert_eq!(
                 window_start_url(*store).is_some(),
-                super::super::stores::is_cookie_store(*store)
+                *store == AccountStore::Battlenet
             );
         }
+        assert!(window_start_url(AccountStore::Gog).is_none());
+        // The browser may get Steam's OpenID page or GOG's Galaxy sign-in, nothing else.
+        assert!(browser_url_ok(&super::super::gog::auth_url()));
+        assert!(!browser_url_ok(
+            &Url::parse("https://auth.gog.com/auth?client_id=1").unwrap()
+        ));
         let e = Expected::new("http://127.0.0.1:50123", "a".repeat(64));
         let url = e.start_url();
         assert!(browser_url_ok(&url));
@@ -1390,6 +1537,28 @@ mod tests {
         assert!(timeout
             .find("finish(&handle, id, Err(SignInError::TimedOut))")
             .is_some());
+    }
+
+    #[test]
+    fn a_pasted_gog_sign_in_needs_a_running_gog_sign_in_and_is_checked_before_use() {
+        let source = include_str!("signin.rs").replace("\r\n", "\n");
+        let submit = &source[source.find("pub async fn submit_code").unwrap()..];
+        let submit = &submit[..submit.find("\n}\n").unwrap()];
+        let at = |needle: &str| submit.find(needle).unwrap_or_else(|| panic!("{needle}"));
+        // Checked first, then the running GOG sign-in is taken, then the code is exchanged once,
+        // the tokens are checked with GOG and only then saved.
+        assert!(at("parse_pasted(input)") < at("f.verifying = true"));
+        assert!(at("f.verifying = true") < at("gog::exchange("));
+        assert!(at("gog::exchange(") < at("gog::probe(&http"));
+        assert!(at("gog::probe(&http") < at("save_store_sign_in("));
+        // A failure keeps the sign-in open for another try; nothing pasted is logged.
+        assert!(at("f.verifying = false") < at("return Err(code_error(&e))"));
+        assert!(!submit.contains("{code}") && !submit.contains("{input}"));
+        // The bearer token goes to the API hosts only, never to the token endpoint.
+        assert!(
+            submit.contains("StoreHttp::new(super::gog::TOKEN_HOSTS, Default::default(), \"\")?;")
+        );
+        assert_eq!(method(AccountStore::Gog), Method::Paste);
     }
 
     #[test]

@@ -1,6 +1,6 @@
 //! Shared rules for applying a store's list of owned games to the library: the mass-removal
 //! guard (also used by the Steam owned-games import) and the apply step of the cookie-based
-//! store accounts (GOG, Battle.net, Humble).
+//! store accounts (GOG, Battle.net).
 //!
 //! Account games are added only when the library has nothing for them yet: a game with the same
 //! id, a route of the same store with the same id (an installed game the store's own scan found),
@@ -77,7 +77,7 @@ pub fn plan_removal(
 }
 
 // ---------------------------------------------------------------------------
-// Cookie-based store accounts (GOG, Battle.net, Humble)
+// Store accounts synced from Rust (GOG, Battle.net)
 
 /// After a good sync, scans don't ask the store again for this long.
 pub const REFRESH_AFTER_MS: i64 = 6 * 60 * 60 * 1000;
@@ -89,7 +89,7 @@ pub const MAX_BACKOFF_MS: i64 = 60 * 60 * 1000;
 /// One owned game from a store.
 #[derive(Debug, Clone, PartialEq)]
 pub struct OwnedGame {
-    /// The store's id, already validated (GOG product id, Battle.net code, Humble machine name).
+    /// The store's id, already validated (GOG product id, Battle.net code).
     pub store_id: String,
     pub title: String,
     /// A validated store link, or an `owned-only:` target.
@@ -104,8 +104,10 @@ pub struct FetchOutcome {
     pub games: Vec<OwnedGame>,
     /// Every owned id, titled or not: what is gone is decided against this.
     pub owned_ids: HashSet<String>,
-    /// Every page was read: only then may anything be removed or playtime replaced.
+    /// Every page was read: only then may anything be removed.
     pub complete: bool,
+    /// Every playtime request was answered: only then is the store's playtime replaced.
+    pub playtime_complete: bool,
 }
 
 /// What the account import did so far (kept in the `account:<store>` row).
@@ -141,7 +143,7 @@ pub fn is_due(sync: &SyncState, now: i64) -> bool {
     now >= sync.next_at
 }
 
-/// The library id of a store's game: `gog:<id>`, `battlenet:<code>`, `humble:<machine_name>`.
+/// The library id of a store's game: `gog:<id>`, `battlenet:<code>`.
 pub fn game_id(store: AccountStore, store_id: &str) -> String {
     format!("{}:{store_id}", store.id())
 }
@@ -237,7 +239,10 @@ pub fn apply_account(
                 new_games.push(account_game(store, game));
             }
             db::upsert_imported_games(conn, &new_games)?;
-            if let (Some(playtime_source), true) = (playtime_source(store), list.complete) {
+            if let (Some(playtime_source), true) = (
+                playtime_source(store),
+                list.complete && list.playtime_complete,
+            ) {
                 let horizon = now.saturating_add(86_400_000);
                 let seconds: HashMap<String, i64> = list
                     .games
@@ -384,6 +389,7 @@ mod tests {
             owned_ids: games.iter().map(|g| g.store_id.clone()).collect(),
             games,
             complete,
+            playtime_complete: complete,
         })
     }
 
@@ -551,7 +557,7 @@ mod tests {
             .collect();
         apply_account(
             &mut conn,
-            AccountStore::Humble,
+            AccountStore::Battlenet,
             &outcome(many, true),
             1000,
             None,
@@ -564,7 +570,7 @@ mod tests {
         ] {
             let status = apply_account(
                 &mut conn,
-                AccountStore::Humble,
+                AccountStore::Battlenet,
                 &outcome(Vec::new(), true),
                 at,
                 None,
@@ -676,7 +682,7 @@ mod tests {
         // Another store's data is untouched.
         apply_account(
             &mut conn,
-            AccountStore::Humble,
+            AccountStore::Battlenet,
             &outcome(vec![owned("cool_game", "Cool", None)], true),
             1000,
             None,
@@ -699,11 +705,13 @@ mod tests {
             )
             .unwrap();
         assert_eq!(rows, 0);
-        assert!(db::get_game(&conn, "humble:cool_game").unwrap().is_some());
+        assert!(db::get_game(&conn, "battlenet:cool_game")
+            .unwrap()
+            .is_some());
         // Installed files only: the same removal, but the session and the mode stay.
-        crate::accounts::session::save(&conn, AccountStore::Humble, &session).unwrap();
-        assert_eq!(undo_account(&mut conn, AccountStore::Humble).unwrap(), 1);
-        assert!(crate::accounts::session::exists(&conn, AccountStore::Humble).unwrap());
+        crate::accounts::session::save(&conn, AccountStore::Battlenet, &session).unwrap();
+        assert_eq!(undo_account(&mut conn, AccountStore::Battlenet).unwrap(), 1);
+        assert!(crate::accounts::session::exists(&conn, AccountStore::Battlenet).unwrap());
     }
 
     #[test]
@@ -719,15 +727,18 @@ mod tests {
         };
         apply_account(
             &mut conn,
-            AccountStore::Humble,
+            AccountStore::Battlenet,
             &outcome(vec![game], true),
             1000,
             None,
         )
         .unwrap();
-        let entry = db::get_game(&conn, "humble:cool_game").unwrap().unwrap();
-        assert_eq!(entry.store, "Humble");
-        assert_eq!(entry.routes[0].launch_target, "owned-only:humble:cool_game");
+        let entry = db::get_game(&conn, "battlenet:cool_game").unwrap().unwrap();
+        assert_eq!(entry.store, "Battle.net");
+        assert_eq!(
+            entry.routes[0].launch_target,
+            "owned-only:battlenet:cool_game"
+        );
         assert!(crate::launch::is_owned_only(&entry.routes[0].launch_target));
         // The library (and backups) accept it as a route.
         let value = serde_json::to_value(&entry).unwrap();
