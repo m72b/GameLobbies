@@ -1,6 +1,6 @@
 # Store account sign-in and first-time setup — design
 
-Status: **Phases A and B implemented** (designed 2026-11-19 against v0.6.0; phase A built on v0.7.0, see [Phase A as built](#phase-a-as-built) and [Phase B as built](#phase-b-as-built); phases C and D not started). Owner decisions: Steam official sign-in; GOG, Battle.net, Humble web sign-in; Xbox via an owner-created Azure app; Epic opt-in (unofficial). Ubisoft, itch.io, EA and others: installed files only.
+Status: **Phases A and B implemented, B revised after the owner's test** (see [Phase B revised](#phase-b-revised)) (designed 2026-11-19 against v0.6.0; phase A built on v0.7.0, see [Phase A as built](#phase-a-as-built) and [Phase B as built](#phase-b-as-built); phases C and D not started). Owner decisions: Steam official sign-in; GOG, Battle.net, Humble web sign-in; Xbox via an owner-created Azure app; Epic opt-in (unofficial). Ubisoft, itch.io, EA and others: installed files only.
 
 ## 0. Fix first
 
@@ -16,7 +16,7 @@ Status: **Phases A and B implemented** (designed 2026-11-19 against v0.6.0; phas
 - Renderer calls only `accounts_sign_in(store: AccountStore)` (enum: steam, gog, battlenet, humble, xbox, epic). URLs, hosts and labels are Rust constants.
 - `WebviewWindowBuilder::new(app, "signin-<store>", WebviewUrl::External(start_url))`, parented to `main`, ~520×720, title "Sign in to <Store> – <current host>" (updated from `on_page_load`).
 - `.incognito(true)` (WebView2 InPrivate) for every store: no profile on disk, no session fixation; users re-enter credentials on each sign-in. Fallback only if InPrivate is unusable: `.data_directory(<app_local_data_dir>\signin\<store>)`, deleted by exact path after the window is destroyed; failed deletes retried at startup (`accounts.pendingProfileDeletes`).
-- No `initialization_script` of ours, devtools off in release, `.disable_drag_drop_handler()`. (As built: Tauri still injects its core scripts — `__TAURI_INTERNALS__`, the IPC bridge and, with `freezePrototype`, the prototype freeze — into every webview, the sign-in window included; every IPC call from it is refused by the ACL and the main-window check.)
+- No `initialization_script` of ours, devtools off in release, `.disable_drag_drop_handler()`. (As built: Tauri still injects its core scripts — `__TAURI_INTERNALS__`, the IPC bridge and, with `freezePrototype`, the prototype freeze — into every webview, the sign-in window included; every IPC call from it is refused by the ACL and the main-window check.) (Revised: `freezePrototype` is now off app-wide and Game Lobby's own page freezes `Object.prototype` from its first script, so sign-in pages run without it; see Phase B revised.)
 - `.on_navigation(guard)`: https only, no userinfo/port, ASCII host equal to or a subdomain of the store's `LOGIN_HOSTS`, reject `xn--` labels. Third-party IdP buttons blocked ("Use your store email and password").
   - Steam `steamcommunity.com`; GOG `gog.com`, `login.gog.com`, `auth.gog.com`; Battle.net `battle.net`, `blizzard.com`; Humble `humblebundle.com`; Xbox `login.live.com`, `login.microsoftonline.com`, `account.live.com`; Epic `epicgames.com`.
 - Popups denied (`on_new_window` → Deny, or `NewWindowRequested.Handled`), downloads denied, `LaunchingExternalUriScheme` cancelled.
@@ -180,3 +180,43 @@ GOG, Battle.net and Humble, built on the phase A window framework. Differences f
   7. Battle.net dedupe: the installed-games scan uses `battlenet-registry:<id>` routes without a shared id, so Battle.net account games dedupe by same-store title only. Battle.net ids come from `localizedGameName`, so a language change or a renamed game changes an id: the old entry goes and a new one comes, behind the mass-removal guard, and only games without user data are removed.
 - **Tests added.** StoreHttp against a local server (on-list redirect followed with cookies, off-list and sign-in redirects not followed, redirect loop, 429 with `Retry-After`, 401, oversized body, unlisted host never contacted; production host and https rules); cookie jar (domain filter incl. look-alikes and `xn--`, host-only/domain/path/`Secure` matching, `Set-Cookie` updates, deletions, foreign domains, caps, HTTP dates, no value in `Debug`); sealed sessions (no plaintext in the stored bytes, redaction); parsers with hostile and oversized input (GOG basic/owned/stats incl. page caps and odd ids; Battle.net codes and unknown games; Humble block extraction incl. two blocks, cut-off, huge block, signed out; orders filtering); launch link shapes (`validate_launch_uri`, `renderer_link_ok`; owned-only refused); apply (no overwrite and same-title dedupe, GOG playtime incl. Galaxy games, incomplete lists, the mass-removal guard, backoff and rejected sign-ins, sign-out and installed-only cleanup, other stores untouched); GOG store-time in Statistics and activity.
 - **Not verified here** (never run from the development sandbox): each store's real sign-in in the embedded window and the live endpoints. Most at risk: Battle.net (its sign-in and authenticator approval may need hosts or steps the window doesn't allow, and the account API may sit behind bot protection) and Humble (Cloudflare checks on requests made outside the browser). The owner's test log shows each blocked top-level host (scheme and host only) so the allowlist can be extended deliberately.
+
+## Phase B revised
+
+The owner's test of Phase B: nothing worked. The GOG window opened, but GOG's Google, Discord and other sign-in methods are other sites, which the window blocks by design. Battle.net's and Humble's windows never rendered their sign-in forms. Nothing was logged as blocked and there were no probe errors. Owner decisions and what was built:
+
+- **GOG signs in in the default browser.** GOG does not redirect to a loopback address, so this uses the OAuth code flow of GOG Galaxy's public client, as the open-source launchers Heroic, Lutris and minigalaxy do. Parameters checked against minigalaxy's source, not copied: client id `46899977096215655`, redirect `https://embed.gog.com/on_login_success?origin=client`, `response_type=code`, `layout=client2`, token endpoint `https://auth.gog.com/token` called with `GET`, `grant_type=authorization_code` / `refresh_token`.
+  - The client id and secret live in `accounts/launcher_clients.rs`, with their origin. They are public values, but using them is unofficial and GOG could stop it.
+  - `accounts_sign_in(gog)` opens exactly `gog::auth_url()`; the browser opener now also allows that URL. The user signs in any way GOG offers, then pastes the address GOG ends on, or the code alone.
+  - `accounts_submit_code(store, text)` (manifest-listed, `require_main`) checks the text in Rust. It must be https, exactly `embed.gog.com/on_login_success`, with no port, user info or fragment, only `origin=client` and exactly one `code` (`^[A-Za-z0-9_-]{16,1024}$`); the text is capped at 4 KiB. The code is then exchanged once.
+  - The token answer is checked (token shapes, numeric `user_id`, lifetime clamped), then the tokens are probed with `embed.gog.com/userData.json` and saved under the scan lock with the generation check, as `Session::Tokens{access, refresh, expires_at, user_id, account}` (DPAPI).
+  - A refused paste or exchange keeps the sign-in open, so the user can reopen the page. Nothing pasted or received is logged.
+  - There is no `state` or PKCE in this flow (GOG's Galaxy client doesn't use them). The residual risk is a user tricked into pasting someone else's code, which signs them in to that other account; the account name is shown in the sign-in notice.
+  - Sync: the token is renewed when less than 5 minutes are left; an answer for another user is refused. The bearer token goes only to `embed.gog.com`, `api.gog.com` and `gameplay.gog.com`; the token endpoint gets none.
+  - Data read: owned ids from `embed.gog.com/user/data/games`; titles from `api.gog.com/products?ids=…` (50 per request, `game_type` game only); minutes from `gameplay.gog.com/games/<id>/users/<user>/sessions` (`time_sum`, what Heroic reads, treated as minutes; a 404 means never played). At most 500 games get playtime per sync.
+  - Playtime is replaced only when every playtime request was answered (`FetchOutcome.playtime_complete`). There is no last-played time any more.
+  - The cookie-based GOG code (window, `www.gog.com/account` capture, stats pages) is gone.
+- **Humble is removed.** Removed: `humble.rs`, `AccountStore::Humble`, `SetupStore::Humble`, its UI and docs.
+  - `accounts::retire_humble` runs at start-up: it deletes `account-humble-session-dpapi` and the `account:humble` row, and drops the `humble-account` games that row lists that hold no user data.
+  - Games with user data keep their entry. It is owned-only and refuses Play with a message, and "Humble" stays in `STORES` so saves and backups of it still validate.
+  - A stored setup row that names Humble drops only that choice.
+  - This is the safe option: nothing else refers to Humble any more, and no entry is left broken.
+- **Battle.net (form didn't render).** Hypotheses, in order:
+  - **(a) Tauri's `freezePrototype`.** It injects `Object.freeze(Object.prototype)` into every webview (`tauri/src/manager/webview.rs`, `scripts/freeze_prototype.js`), the sign-in window included. After that, any page script that assigns an inherited property on a plain object (`obj.toString = …`, `obj.constructor = …`, the "override mistake") throws in strict code. Such assignments are common in bundled site code and polyfills.
+    - Tauri 2.12 has no per-webview switch for its init scripts.
+    - So `freezePrototype` is turned off in `tauri.conf.json`, and the main window's `index.html` loads `/freeze-prototype.js` as its first, classic script. That script runs before the module bundle and is allowed by `script-src 'self'`, so Game Lobby's own window keeps the same freeze before any app code runs. A test checks the order and the config.
+    - This is the most likely cause, but not proven, because the app is not run here.
+  - **(b)** Permission denial and the disabled context menu and browser shortcuts don't affect rendering; kept.
+  - **(c)/(d)** Blocked subresources, CSP, popups or InPrivate storage: the window now logs them.
+    - Through the WebView2 DevTools protocol (`Runtime.exceptionThrown`, `Log.entryAdded` errors, `Network.responseReceived` ≥ 400, `Network.loadingFailed` with blocked reason), at most 150 lines, host and path only, messages one short line with URL queries removed.
+    - Every allowed top-level page is logged as host and path too, so the owner's next test log shows where it stops and why.
+    - Whether the DevTools protocol answers while devtools are disabled (`devtools(false)`) is untested; the subscriptions are best effort and never block the window.
+- **Tests added.**
+  - GOG: auth URL exactness; strict paste parsing (hosts, scheme, port, user info, path, extra or duplicate keys, fragment, charset, length; errors never repeat the input); token answers (shapes, user id, lifetime); exchange and refresh against a local token server (parameters, no bearer to the token endpoint, 400 → rejected); the library from local fixtures (bearer on every API request, titles, DLC skipped, playtime, 404 never played); hostile JSON; launch links.
+  - Sessions: token sessions sealed.
+  - Battle.net window: DevTools log lines (no queries, capped, unknown events ignored).
+  - Humble retirement: games with and without user data, run twice.
+  - Setup: a row naming Humble keeps its other choices.
+  - Prototype freeze: script order and config.
+  - Source tests: the paste path's order (check, take the sign-in, exchange, probe, save) and the bearer only on API hosts.
+- **Not verified here** (never run from the development sandbox): GOG's live sign-in, token exchange, products and gameplay endpoints with the Galaxy client; whether turning off `freezePrototype` lets Battle.net's form render; and the DevTools diagnostics in the real window.

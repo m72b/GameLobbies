@@ -22,8 +22,8 @@ When Game Lobby starts with an empty library (no games and no library folders), 
 
 1. **Welcome**: what Game Lobby does without any account.
 2. **Your stores**: pick the stores you use.
-3. **How to use each store**: for Steam, GOG, Battle.net and Humble, **Sign in**, **Installed files only** or **Skip**. Xbox and Epic Games are marked *sign-in coming soon* and can be set to installed files only; EA app, Ubisoft Connect and itch.io are installed files only (Humble has no installed-games scan). Amazon Games, emulators and other launchers need no setup.
-4. **Sign in** (only when you chose to sign in somewhere): one card per store. Steam: sign in through Steam, then add a free Steam Web API key in the same form as under **Settings → API keys** (see [Steam games you own](#steam-games-you-own-but-havent-installed)). GOG, Battle.net, Humble: see [Signing in to GOG, Battle.net and Humble](#signing-in-to-gog-battlenet-and-humble).
+3. **How to use each store**: for Steam, GOG and Battle.net, **Sign in**, **Installed files only** or **Skip**. Xbox and Epic Games are marked *sign-in coming soon* and can be set to installed files only; EA app, Ubisoft Connect and itch.io are installed files only. Amazon Games, emulators and other launchers need no setup.
+4. **Sign in** (only when you chose to sign in somewhere): one card per store. Steam: sign in through Steam, then add a free Steam Web API key in the same form as under **Settings → API keys** (see [Steam games you own](#steam-games-you-own-but-havent-installed)). GOG: see [Signing in to GOG](#signing-in-to-gog). Battle.net: see [Signing in to Battle.net](#signing-in-to-battlenet).
 5. **Library folders**: add folders with PC games, ROMs or emulators.
 6. **Optional keys**: SteamGridDB and IGDB, as in [API keys](#api-keys).
 7. **All set**: **Finish and scan** scans your stores and folders.
@@ -32,7 +32,7 @@ A library that already has games shows an **Add store accounts** banner above th
 
 ### Accounts
 
-**Settings → Accounts** lists the store accounts. Steam shows whether you are signed in, the last sync, and **Sign in through Steam**, **Sync now**, **Sign out** and **Use**: **Account** (owned games and Steam playtime) or **Installed files only** (asks first; keeps the sign-in, removes the not-installed games it added and stops asking Steam until you choose Account again). Signing in to a different Steam account than before removes the previous account's not-installed games first. **Sign out** forgets the SteamID and the Steam Web API key and removes the not-installed games they added; games you favourited, played, rated or customized stay. GOG, Battle.net and Humble work the same way with **Sign in to …** (below); if a saved sign-in stops working, the row says **Sign in again**. Xbox and Epic Games are listed as coming in a later version; their installed games are found as before.
+**Settings → Accounts** lists the store accounts. Steam shows whether you are signed in, the last sync, and **Sign in through Steam**, **Sync now**, **Sign out** and **Use**: **Account** (owned games and Steam playtime) or **Installed files only** (asks first; keeps the sign-in, removes the not-installed games it added and stops asking Steam until you choose Account again). Signing in to a different Steam account than before removes the previous account's not-installed games first. **Sign out** forgets the SteamID and the Steam Web API key and removes the not-installed games they added; games you favourited, played, rated or customized stay. GOG and Battle.net work the same way with **Sign in to …** (below); if a saved sign-in stops working, the row says **Sign in again**. Xbox and Epic Games are listed as coming in a later version; their installed games are found as before.
 
 ### Signing in through Steam
 
@@ -42,19 +42,27 @@ A library that already has games shows an **Add store accounts** banner above th
 - Steam sends the browser back to Game Lobby on this PC only (`127.0.0.1` with a random port that is open just for this sign-in). Game Lobby checks Steam's answer (it must come from Steam, for this sign-in, recently, and only once) and asks Steam to confirm it, then stops listening. The browser's history keeps that one-time address; it can't be used again.
 - Only one sign-in runs at a time. **Cancel sign-in** stops it; after 10 minutes it stops by itself. If the tab says the link is not for the sign-in Game Lobby is waiting for, start the sign-in again from Game Lobby.
 
-### Signing in to GOG, Battle.net and Humble
+### Signing in to GOG
 
-**Sign in to GOG** (or Battle.net, Humble) opens a small Game Lobby window titled *Sign in to GOG – <site>* with the store's own sign-in page. Sign in as usual, with the store's two-step check if you use it. When the store's signed-in page appears (GOG's account page, Battle.net's account overview, Humble's library), Game Lobby checks the session with the store, closes the window, says **Signed in** and lists your games. Use the store's e-mail and password: buttons for signing in with Google, Apple, Facebook and others are blocked, because the window only shows the store's own sites.
+**Sign in to GOG in your browser** opens GOG's own sign-in page in your default web browser. Sign in any way GOG offers: e-mail and password, Google, Discord, and the others. GOG then shows a page saying you are signed in; its address starts with `https://embed.gog.com/on_login_success`. Copy that whole address from the browser's address bar, paste it into the field Game Lobby shows (Settings → Accounts, or the setup) and choose **Continue**. Game Lobby checks it with GOG, says **Signed in to GOG as …** and lists your games.
 
-- **What is read**, from Rust, never from the page:
-  - GOG: your user name, the games you own, their titles, and GOG's playtime and last session per game (counted like Steam's: the larger of GOG's and Game Lobby's own time; the difference shows as **Added from GOG** in the activity). Play opens the game in GOG Galaxy.
-  - Battle.net: the games on your account and its classic games. Well-known Blizzard and Activision games get a Battle.net launch link; others are listed as owned without one.
-  - Humble: the games of your orders that have a Windows download, and your Steam keys. Humble has no launcher, so they are listed as owned; Play explains that they start from the store's own app or website.
-- Games you already have (installed games found on this PC, or a game of the same store with the same title) are left exactly as they are. New ones are added as not installed. Games that leave your account later are removed again unless you played, rated or customized them; a sudden much shorter list is held back until a second sync agrees.
-- Accounts are synced with library scans at most every 6 hours (30 minutes after an error, up to an hour when the store asks to slow down), and at once with **Sync now**.
-- **Unofficial**: these stores have no public interface for this. Game Lobby reads the same pages and data the stores' own websites use, with your session, so a store can change them, ask you to sign in again, or block it at any time; **Installed files only** keeps everything that is found on this PC.
-- **Your sign-in**: the window is private (InPrivate) and keeps nothing after it closes. Game Lobby keeps only the store's session cookies, encrypted for your Windows user (never in backups, logs or **Copy diagnostics**, which only says whether you are signed in). The password goes only to the store. **Sign out** deletes the session and removes the not-installed games it added.
-- **If the sign-in doesn't finish** (the window keeps showing the store's page after you signed in, or the store refuses the embedded window): close the window or wait; after 10 minutes the sign-in stops with a message. Choose **Installed files only** for that store.
+- Each address works once and only for a few minutes. If Game Lobby says GOG did not accept it, choose **Open GOG's page again**, sign in, and paste the new address. **Cancel sign-in** stops; after 10 minutes the sign-in stops by itself.
+- **Unofficial**: GOG has no sign-in for other apps, so Game Lobby signs in as GOG Galaxy does, with Galaxy's public app id (the same way open-source launchers such as Heroic and Lutris do). GOG has not approved this and could stop it at any time; **Installed files only** keeps everything found on this PC.
+- **What is read**: the games you own and their titles, and GOG's playtime per game (for up to 500 games per sync), counted like Steam's: the larger of GOG's and Game Lobby's own time, with the difference shown as **Added from GOG** in the activity. Play opens the game in GOG Galaxy.
+- **Your sign-in**: your password goes only to GOG. Game Lobby keeps GOG's sign-in tokens, encrypted for your Windows user (never in backups, logs or **Copy diagnostics**, which only says whether you are signed in), and renews them on its own. **Sign out** deletes them and removes the not-installed games they added.
+
+### Signing in to Battle.net
+
+**Sign in to Battle.net** opens a small Game Lobby window titled *Sign in to Battle.net – <site>* with Battle.net's own sign-in page. Sign in as usual, with Battle.net's two-step check if you use it. When the account overview appears, Game Lobby checks the session with Battle.net, closes the window, says **Signed in** and lists your games. Use your Battle.net e-mail and password: buttons for signing in with Google, Apple, Facebook and others are blocked, because the window only shows Battle.net's and Blizzard's sites.
+
+- **What is read**, from Rust, never from the page: the games on your account and its classic games. Well-known Blizzard and Activision games get a Battle.net launch link; others are listed as owned without one (Play explains why).
+- **Unofficial**: Battle.net has no public interface for this; Game Lobby reads the data Battle.net's own account pages use, with your session, so it can stop working or ask you to sign in again at any time.
+- **Your sign-in**: the window is private (InPrivate) and keeps nothing after it closes. Game Lobby keeps only Battle.net's session cookies, encrypted for your Windows user. **Sign out** deletes them and removes the not-installed games it added.
+- **If the sign-in doesn't finish** (the page doesn't show its sign-in form, or stays on a page after you signed in): close the window; after 10 minutes the sign-in stops by itself. Game Lobby's log lists the pages the window showed and any errors the page ran into (sites and paths only, never what you typed), which helps find the cause. Choose **Installed files only** for Battle.net meanwhile.
+
+### What the GOG and Battle.net accounts add
+
+Games you already have (installed games found on this PC, or a game of the same store with the same title) are left exactly as they are; new ones are added as not installed. Games that leave your account later are removed again unless you played, rated or customized them; a sudden much shorter list is held back until a second sync agrees, and an empty list after a full one is never believed. Accounts are synced with library scans at most every 6 hours (30 minutes after an error, up to an hour when the store asks to slow down), and at once with **Sync now**.
 
 ## Store libraries
 
