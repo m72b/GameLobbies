@@ -30,13 +30,11 @@ use url::Url;
 pub const API_HOSTS: &[&str] = &["embed.gog.com", "api.gog.com", "gameplay.gog.com"];
 /// The token endpoint's host (no bearer token is sent there).
 pub const TOKEN_HOSTS: &[&str] = &["auth.gog.com"];
-/// Product ids per titles request.
 const TITLE_BATCH: usize = 50;
 /// Games whose playtime is asked for per sync (one request each, 300 ms apart).
 pub const MAX_PLAYTIME_GAMES: usize = 500;
 /// A minute count above this (about 19 years) is not believable.
 const MAX_MINUTES: u64 = 10_000_000;
-/// The longest pasted text looked at.
 const MAX_PASTE: usize = 4096;
 
 static USERNAME: LazyLock<Regex> =

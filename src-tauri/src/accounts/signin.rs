@@ -508,7 +508,6 @@ async fn browser_return(app: &AppHandle, id: u64, url: Url) -> ReturnReply {
     reply
 }
 
-/// The page the browser gets for a saved, skipped or failed save.
 fn page_for(saved: Saved) -> ReturnReply {
     match saved {
         Saved::Yes => ReturnReply::SignedIn,
@@ -1058,7 +1057,6 @@ fn end_flight(app: &AppHandle, id: u64) -> Option<Flight> {
     Some(flight)
 }
 
-/// What [`save_sign_in`] did.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Saved {
     Yes,

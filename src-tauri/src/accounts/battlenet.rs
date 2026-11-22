@@ -80,7 +80,6 @@ fn store_id(name: &str) -> Option<(String, Option<String>)> {
     (!slug.is_empty()).then(|| (format!("title-{slug}"), None))
 }
 
-/// The games named in `list` (objects with `localizedGameName`).
 fn games_of(list: &[Value], out: &mut HashMap<String, OwnedGame>) {
     for entry in list.iter().take(MAX_GAMES) {
         let Some(title) = entry

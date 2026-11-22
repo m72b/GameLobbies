@@ -22,7 +22,6 @@ const MAX_VALUE: usize = 4096;
 pub struct StoredCookie {
     pub name: String,
     pub value: String,
-    /// Lowercase, without a leading dot.
     pub domain: String,
     /// Sent only to `domain` itself, not to its subdomains.
     pub host_only: bool,

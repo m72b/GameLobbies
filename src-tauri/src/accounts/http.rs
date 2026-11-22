@@ -7,7 +7,6 @@
 /// Largest response body read by default. A large Steam library is about 150 bytes per game;
 /// this allows far more than any real account.
 pub const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
-/// Longest title kept from a store response.
 pub const MAX_NAME_CHARS: usize = 200;
 
 /// Why a request to a store failed. Every message is fixed text.
@@ -106,13 +105,10 @@ pub fn clean_name(raw: &str) -> Option<String> {
 // ---------------------------------------------------------------------------
 // StoreHttp: requests of the cookie-based store accounts
 
-/// Pages a store sync may request.
 pub const MAX_PAGES: usize = 200;
-/// Games a store sync may list.
 pub const MAX_GAMES: usize = 50_000;
 /// Redirects followed per request (each to a listed host over https).
 pub const MAX_REDIRECTS: usize = 3;
-/// Pause between two requests of one sync.
 pub const PACING: std::time::Duration = std::time::Duration::from_millis(300);
 const STORE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 const STORE_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
@@ -198,7 +194,6 @@ impl StoreHttp {
         })
     }
 
-    /// Whether a request may go to `url`.
     pub fn url_ok(&self, url: &url::Url) -> bool {
         let host = url.host_str().unwrap_or_default();
         let listed = self.hosts.contains(&host);
@@ -223,7 +218,6 @@ impl StoreHttp {
         &self.user_agent
     }
 
-    /// Seconds a 429 asked to wait, if one did.
     pub fn retry_after(&self) -> Option<u64> {
         *super::lock(&self.retry_after)
     }
@@ -239,7 +233,6 @@ impl StoreHttp {
         *last = Some(std::time::Instant::now());
     }
 
-    /// GETs `url` (JSON or HTML) and returns the body.
     pub async fn get(&self, url: url::Url) -> Result<Vec<u8>, FetchError> {
         let mut url = url;
         for _ in 0..=MAX_REDIRECTS {

@@ -75,7 +75,6 @@ impl SetupStore {
         self.account().is_some_and(AccountStore::available)
     }
 
-    /// What the setup says about the store in this version.
     fn note(self) -> &'static str {
         match self {
             Self::Steam => "Sign in through Steam, then add a free Steam Web API key to list the games you own.",
@@ -127,7 +126,6 @@ pub struct SetupPatch {
     pub skipped: Option<bool>,
 }
 
-/// One store row of the setup screen.
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SetupStoreInfo {
@@ -141,14 +139,12 @@ pub struct SetupStoreInfo {
 #[serde(rename_all = "camelCase")]
 pub struct SetupInfo {
     pub state: Option<SetupState>,
-    /// Show the full-window setup now (fresh install, setup not finished).
     pub show: bool,
     /// Show the dismissible "Add store accounts" banner (existing library, setup never done).
     pub banner: bool,
     pub stores: Vec<SetupStoreInfo>,
 }
 
-/// The stored setup, or `None` when there is none or it is unreadable.
 pub fn load(conn: &Connection) -> Result<Option<SetupState>> {
     let stored: Option<String> = conn
         .query_row(

@@ -422,12 +422,10 @@ const MAX_REQUEST_HEAD: usize = 64 * 1024;
 /// How long one connection may take to send its request head (a browser sends it at once; an
 /// idle pre-opened socket is dropped quickly).
 const HEAD_TIMEOUT: Duration = Duration::from_secs(3);
-/// How long one connection may take to take the reply.
 const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 /// Connections handled at once; more are closed straight away.
 const MAX_CONNECTIONS: usize = 8;
 
-/// What the flight made of a return request.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReturnReply {
     /// Not this sign-in's answer (no, another or two nonces; or one is already being checked):
@@ -459,7 +457,6 @@ fn reply(status: &str, page: &str) -> String {
     )
 }
 
-/// One request head as read from a connection.
 enum Head {
     Complete(Vec<u8>),
     TooLarge,
@@ -634,7 +631,6 @@ mod tests {
         Expected::new("http://localhost", "a".repeat(64))
     }
 
-    /// A positive assertion as Steam sends it, with `edit` applied to the fields.
     fn response(edit: impl FnOnce(&mut Vec<(String, String)>)) -> Url {
         let e = expected();
         let claimed = format!("https://steamcommunity.com/openid/id/{STEAM_ID}");
@@ -1049,7 +1045,6 @@ mod tests {
         ));
     }
 
-    /// Sends one raw request to the listener and returns the whole response.
     async fn ask(port: u16, request: String) -> String {
         let mut s = tokio::net::TcpStream::connect(("127.0.0.1", port))
             .await
@@ -1104,7 +1099,6 @@ mod tests {
         }
     }
 
-    /// A positive assertion for a listener on `port`, as Steam would send it there.
     fn browser_response(port: u16, nonce: &str) -> (Expected, String) {
         let e = Expected::new(&format!("http://127.0.0.1:{port}"), nonce.to_string());
         let claimed = format!("https://steamcommunity.com/openid/id/{STEAM_ID}");

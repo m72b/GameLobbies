@@ -28,7 +28,6 @@ const FETCH_MARGIN: std::time::Duration = std::time::Duration::from_secs(60);
 /// GOG's access token is renewed when it has less than this left.
 const TOKEN_MARGIN_MS: i64 = 5 * 60 * 1000;
 
-/// Stores whose account is synced here.
 pub const SYNCED_STORES: [AccountStore; 2] = [AccountStore::Gog, AccountStore::Battlenet];
 
 pub fn is_synced_store(store: AccountStore) -> bool {
@@ -312,7 +311,6 @@ pub async fn set_account(app: &AppHandle, store: AccountStore) -> Result<Option<
     sync_store(app, store, true).await
 }
 
-/// "Sync now".
 pub async fn sync_now(app: &AppHandle, store: AccountStore) -> Result<Option<SyncStatus>> {
     let state = app.state::<AppState>();
     let _guard = state.scan_lock.lock().await;

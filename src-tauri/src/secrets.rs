@@ -91,7 +91,6 @@ pub fn get_steamgriddb_api_key(state: &AppState) -> Result<Option<String>> {
     read(state, STEAMGRIDDB_API_KEY, "SteamGridDB")
 }
 
-/// Saves the key, or clears it when the input is empty.
 pub fn set_steamgriddb_api_key(state: &AppState, value: &str) -> Result<()> {
     match validate_steamgriddb_key(value)? {
         Some(key) => write(state, STEAMGRIDDB_API_KEY, "SteamGridDB", &key),
@@ -235,7 +234,6 @@ pub fn set_steam_owned_credentials(state: &AppState, key: &str, steam_id: &str) 
     Ok(())
 }
 
-/// Removes both the key and the SteamID64.
 pub fn clear_steam_owned_credentials(state: &AppState) -> Result<()> {
     let conn = state.db.lock();
     db::delete_secret(&conn, STEAM_OWNED_API_KEY)?;

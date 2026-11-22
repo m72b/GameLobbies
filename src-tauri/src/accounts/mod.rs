@@ -207,7 +207,6 @@ pub struct AccountsState {
     /// Bumped (under the scan lock) every time the Steam account is forgotten. A sign-in that
     /// started before a sign-out saves nothing.
     pub(crate) steam_generation: AtomicU64,
-    /// The same for the other stores.
     generations: Mutex<HashMap<AccountStore, u64>>,
     /// Steam `response_nonce` values already accepted (replay protection).
     pub(crate) seen_nonces: Mutex<steam_openid::NonceCache>,
@@ -261,7 +260,6 @@ pub(crate) fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// The last sync of a store's account.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SyncStatus {

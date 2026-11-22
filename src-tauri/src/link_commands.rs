@@ -117,7 +117,6 @@ pub async fn library_link(
     Ok(games)
 }
 
-/// What splitting `route` off `gameId` would do.
 #[tauri::command]
 pub async fn library_unlink_preview(
     state: State<'_, AppState>,
@@ -174,7 +173,6 @@ pub async fn library_unlink(
     })
 }
 
-/// Names one route (display only; empty clears the name).
 #[tauri::command]
 pub async fn library_route_rename(
     app: AppHandle,

@@ -55,15 +55,10 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
-/// Longest route name, in characters.
 pub const MAX_ROUTE_NAME: usize = 60;
-/// Most entries linked in one go.
 pub const MAX_LINK_GAMES: usize = 16;
-/// Longest launch options text, in characters.
 pub const MAX_ARGS_CHARS: usize = 1_000;
-/// Most launch options (argv entries) on one route.
 pub const MAX_ARGS: usize = 24;
-/// Longest single launch option, in characters.
 pub const MAX_ARG_CHARS: usize = 200;
 /// Longest launcher command line with launch options that can be confirmed: the program, every
 /// argument (template, target and options) and the working folder, as the native dialog shows
@@ -85,7 +80,6 @@ pub fn migrate(db: &Connection) -> Result<()> {
 // ---------------------------------------------------------------------------
 // Records
 
-/// What a linked entry brought into the combined game (see the module docs).
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct LinkSnapshot {
@@ -138,7 +132,6 @@ const SNAPSHOT_FIELDS: [&str; 14] = [
     "took",
 ];
 
-/// One `game_links` row.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct LinkRecord {
@@ -345,7 +338,6 @@ pub fn restore_records(conn: &Connection, records: &[LinkRecord]) -> Result<Hash
     Ok(restored)
 }
 
-/// The entries linked into `game_id`, oldest first (`linkedAt`, then `rowid`).
 fn ordered_records(conn: &Connection, game_id: &str) -> Result<Vec<LinkRecord>> {
     let mut list = records_of(conn, game_id)?;
     list.reverse();
@@ -457,7 +449,6 @@ pub(crate) fn delete_members(conn: &Connection, game_id: &str) -> Result<()> {
 // ---------------------------------------------------------------------------
 // Detail parts (one row per game)
 
-/// Per-game details with one value, chosen in the review.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Part {
     /// `game_page_custom`: hero, logo and their layout.
@@ -518,7 +509,6 @@ fn has_user_igdb(conn: &Connection, id: &str) -> Result<bool> {
         .is_some())
 }
 
-/// Exchanges the rows of `a` and `b` in `part`'s table (either may have none).
 fn swap(conn: &Connection, part: Part, a: &str, b: &str) -> Result<()> {
     let table = part.table();
     let temp = format!("\u{1}link-swap:{a}");
@@ -540,7 +530,6 @@ fn swap(conn: &Connection, part: Part, a: &str, b: &str) -> Result<()> {
 // ---------------------------------------------------------------------------
 // Route names and edition detection
 
-/// Characters trimmed around an edition name taken from a longer title.
 fn edition_trim(c: char) -> bool {
     c.is_whitespace() || ":-–—|·,/()[]".contains(c)
 }
@@ -576,7 +565,6 @@ pub fn edition_name(original: &str, shared: &str) -> Option<String> {
     validation::stored_route_name(&original)
 }
 
-/// Known Xbox / Microsoft Store packages whose package name says which edition they are.
 const XBOX_EDITIONS: [(&str, &str); 4] = [
     ("microsoft.minecraftuwp", "Bedrock Edition"),
     ("microsoft.4297127d64ec6", "Java Edition"),
@@ -703,7 +691,6 @@ impl RouteRef {
         Ok(())
     }
 
-    /// The stored route this names in `game`.
     pub fn find<'a>(&self, game: &'a Game) -> Result<&'a GameRoute> {
         self.check()?;
         game.routes
@@ -773,20 +760,17 @@ pub fn args_exe(route: &GameRoute) -> Result<&str> {
 ///   options), so a change to any of them needs a new confirmation.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ArgsHost {
-    /// The program that gets the options.
     pub program: String,
     /// The arguments before the options.
     pub base: Vec<String>,
     /// The working folder.
     pub cwd: String,
-    /// The launcher's name (cleaned), for a launcher route.
     pub launcher: Option<String>,
     /// What a confirmation is for besides the argv (see above).
     key: String,
 }
 
 impl ArgsHost {
-    /// The whole argv a launch runs with `options`.
     pub fn argv(&self, options: &[String]) -> Vec<String> {
         self.base.iter().chain(options).cloned().collect()
     }
@@ -1253,7 +1237,6 @@ pub fn route_args_prompt(
     }
 }
 
-/// Stores `argv` (or none) on the route, as a JSON list.
 pub fn set_args(
     conn: &Connection,
     game_id: &str,
@@ -1275,7 +1258,6 @@ pub fn set_args(
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LinkChoices {
-    /// The game that stays (its id is the combined game's id).
     pub keep: String,
     pub title_from: String,
     #[serde(default)]
@@ -1290,9 +1272,7 @@ pub struct LinkChoices {
 /// Choices after checking (`None` = the default rule, as `db::merge_games` uses).
 #[derive(Debug, Default, Clone)]
 struct Resolved {
-    /// The game whose title is used.
     title_from: Option<String>,
-    /// A title the user typed (wins over `title_from`).
     custom_title: Option<String>,
     cover: Option<String>,
     hero: Option<String>,
@@ -1651,7 +1631,6 @@ pub struct PreviewGame {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub igdb_name: Option<String>,
     pub igdb_chosen: bool,
-    /// Entries linked into this game earlier.
     pub linked: usize,
 }
 
@@ -1670,7 +1649,6 @@ pub struct Conflicts {
 #[serde(rename_all = "camelCase")]
 pub struct LinkPreview {
     pub games: Vec<PreviewGame>,
-    /// Every route of the combined game, in order, with its (suggested) name.
     pub routes: Vec<PreviewRoute>,
     pub conflicts: Conflicts,
     /// What linking does without other choices (the first id is kept).
@@ -1844,15 +1822,11 @@ pub fn preview(conn: &Connection, ids: &[String], title: Option<&str>) -> Result
 // ---------------------------------------------------------------------------
 // Unlinking
 
-/// What [`unlink`] would do.
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct UnlinkPreview {
-    /// The new game's title.
     pub title: String,
-    /// The routes that leave, as "store · name".
     pub routes: Vec<String>,
-    /// The game the routes leave keeps these.
     pub remaining: Vec<String>,
     /// The entry comes back as it was linked (its own id, details and sessions).
     pub restores: bool,
@@ -1862,7 +1836,6 @@ pub struct UnlinkPreview {
 
 struct Plan {
     game: Game,
-    /// The routes (indexes) that leave the game.
     moving: Vec<usize>,
     /// Routes the game keeps that the entry also had when it was linked: the entry gets a copy.
     copies: Vec<usize>,
@@ -2364,7 +2337,6 @@ mod tests {
         ids(list)
     }
 
-    /// Two entries of one game with everything a user puts into a game.
     fn rich(conn: &mut Connection) {
         let a = Game {
             favorite: false,
@@ -3158,7 +3130,6 @@ mod tests {
         .unwrap()
     }
 
-    /// The route of `game_id` that launches `target`.
     fn route_to(conn: &Connection, game_id: &str, target: &str) -> RouteRef {
         let g = db::get_game(conn, game_id).unwrap().unwrap();
         let index = g
@@ -3174,7 +3145,6 @@ mod tests {
         unlink(conn, game_id, &r).unwrap()
     }
 
-    /// Choices that keep `keep` and take its page art, IGDB match and notes from `from`.
     fn take_from(keep: &str, from: &str) -> LinkChoices {
         LinkChoices {
             hero_from: from.into(),

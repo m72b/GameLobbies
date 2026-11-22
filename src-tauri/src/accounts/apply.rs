@@ -23,7 +23,6 @@ pub const MASS_REMOVAL_MIN: usize = 20;
 /// How long a held-back removal must stand before a later fetch may apply it.
 pub const PENDING_MIN_AGE_MS: i64 = 6 * 60 * 60 * 1000;
 
-/// What a fetch may take out of the library now, and what it holds back.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct RemovalPlan {
     pub to_drop: HashSet<String>,
@@ -86,7 +85,6 @@ pub const RETRY_AFTER_MS: i64 = 30 * 60 * 1000;
 /// The longest wait after the store asked to slow down.
 pub const MAX_BACKOFF_MS: i64 = 60 * 60 * 1000;
 
-/// One owned game from a store.
 #[derive(Debug, Clone, PartialEq)]
 pub struct OwnedGame {
     /// The store's id, already validated (GOG product id, Battle.net code).
@@ -98,7 +96,6 @@ pub struct OwnedGame {
     pub last_played_ms: Option<i64>,
 }
 
-/// One fetch of a store's library.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct FetchOutcome {
     pub games: Vec<OwnedGame>,
@@ -133,7 +130,6 @@ pub struct SyncState {
     pub status: Option<SyncStatus>,
 }
 
-/// Whether a scan should sync the store now.
 pub fn is_due(sync: &SyncState, now: i64) -> bool {
     if sync.attempted_at <= 0 || sync.attempted_at > now {
         return true;
@@ -149,7 +145,6 @@ pub fn game_id(store: AccountStore, store_id: &str) -> String {
     format!("{}:{store_id}", store.id())
 }
 
-/// The route source of games an account added: `<store>-account`.
 pub fn route_source(store: AccountStore) -> String {
     format!("{}-account", store.id())
 }
@@ -339,7 +334,6 @@ pub fn apply_account(
     Ok(status)
 }
 
-/// The playtime source of a store's account, if it reports playtime.
 fn playtime_source(store: AccountStore) -> Option<&'static str> {
     (store == AccountStore::Gog).then_some(crate::stats::GOG)
 }
