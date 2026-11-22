@@ -152,18 +152,68 @@ pub fn navigation_allowed(url: &Url, hosts: &[&str]) -> bool {
         && matches!(url.host(), Some(url::Host::Domain(host)) if host_allowed(host, hosts))
 }
 
+/// Identity providers a store's own sign-in page sends the user to ("Sign in with Google" and
+/// so on), allowed as top-level pages of that store's window only. Exact host names: no
+/// subdomains of these third parties. The session is still saved only after the store's own
+/// signed-in page is reached and the store's probe accepts it; an identity provider's page
+/// is never a signed-in page.
+///
+/// Battle.net, from its `/login/signin/<provider>` redirects (owner's test log, 2026-11-21):
+/// Google, Facebook, Discord, Steam, Nintendo and PlayStation (Sony's sign-in starts on
+/// `auth.api.sonyentertainmentnetwork.com` and shows its form on `my.account.sony.com`;
+/// `ca.account.sony.com` is Sony's account API host, listed in case a step goes there), plus
+/// Apple and Xbox (Microsoft account), which Battle.net also offers.
+pub fn idp_hosts(store: AccountStore) -> &'static [&'static str] {
+    match store {
+        AccountStore::Battlenet => &[
+            "accounts.google.com",
+            "www.facebook.com",
+            "m.facebook.com",
+            "discord.com",
+            "steamcommunity.com",
+            "accounts.nintendo.com",
+            "auth.api.sonyentertainmentnetwork.com",
+            "my.account.sony.com",
+            "ca.account.sony.com",
+            "appleid.apple.com",
+            "login.live.com",
+            "login.microsoftonline.com",
+            "account.live.com",
+        ],
+        _ => &[],
+    }
+}
+
+/// Whether `url` is one of `store`'s identity-provider pages: https, no user name, password or
+/// port, a domain name equal to a listed host (exact), without punycode labels.
+pub fn idp_page(url: &Url, store: AccountStore) -> bool {
+    url.scheme() == "https"
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.port().is_none()
+        && matches!(url.host(), Some(url::Host::Domain(host))
+            if !host.split('.').any(|l| l.starts_with("xn--"))
+                && idp_hosts(store).contains(&host))
+}
+
+/// Top-level pages `store`'s sign-in window may show: its own sign-in hosts (and their
+/// subdomains), or one of its identity providers (exact hosts).
+pub fn page_allowed(url: &Url, store: AccountStore) -> bool {
+    navigation_allowed(url, login_hosts(store)) || idp_page(url, store)
+}
+
 /// The decision of the native WebView2 navigation handler, which sees every top-level navigation
 /// even when Tauri's own handler lets one through unchecked (it allows URIs that `url` cannot
 /// parse). Allowed: `about:blank` before the store page was requested, and pages
-/// [`navigation_allowed`] accepts. Everything else is cancelled.
-pub fn native_nav_ok(uri: &str, hosts: &[&str], blank_ok: bool) -> bool {
+/// [`page_allowed`] accepts. Everything else is cancelled.
+pub fn native_nav_ok(uri: &str, store: AccountStore, blank_ok: bool) -> bool {
     let Ok(url) = Url::parse(uri) else {
         return false;
     };
     if uri == "about:blank" {
         return blank_ok;
     }
-    navigation_allowed(&url, hosts)
+    page_allowed(&url, store)
 }
 
 /// Whether flight `id` may still show `about:blank` (only before its store page was requested).
@@ -907,7 +957,7 @@ fn guard(app: &AppHandle, id: u64, store: AccountStore, url: &Url) -> bool {
     if url.as_str() == "about:blank" {
         return blank_ok(app, id);
     }
-    if navigation_allowed(url, login_hosts(store)) {
+    if page_allowed(url, store) {
         // Where the sign-in goes (host and path only), so a stuck sign-in shows its last page.
         log::info!(
             "{} sign-in window: page {}",
@@ -1200,7 +1250,6 @@ fn harden_webview2(
         // A second navigation check on WebView2 itself, added after Tauri's: Tauri lets a URI
         // through unchecked when `url` cannot parse it; this one cancels it (it only ever
         // cancels, so it never overrides Tauri's own cancel of Steam's return address).
-        let hosts = login_hosts(store);
         let mut token = 0i64;
         core.add_NavigationStarting(
             &NavigationStartingEventHandler::create(Box::new(move |_, args| {
@@ -1208,7 +1257,7 @@ fn harden_webview2(
                     let mut uri = windows_core::PWSTR::null();
                     args.Uri(&mut uri)?;
                     let uri = take_pwstr(uri);
-                    if !native_nav_ok(&uri, hosts, blank_ok(&app, id)) {
+                    if !native_nav_ok(&uri, store, blank_ok(&app, id)) {
                         args.SetCancel(true)?;
                     }
                 }
@@ -1436,7 +1485,7 @@ mod tests {
             "GetDevToolsProtocolEventReceiver(",
             "super::devtools::DOMAINS",
             "core.add_NavigationStarting(",
-            "native_nav_ok(&uri, hosts, blank_ok(&app, id))",
+            "native_nav_ok(&uri, store, blank_ok(&app, id))",
             "core.add_PermissionRequested(",
             "COREWEBVIEW2_PERMISSION_STATE_DENY",
             "SetAreDefaultContextMenusEnabled(false)",
@@ -1631,7 +1680,7 @@ mod tests {
 
     #[test]
     fn the_native_navigation_check_refuses_what_url_cannot_parse() {
-        let hosts = login_hosts(AccountStore::Steam);
+        let store = AccountStore::Steam;
         for bad in [
             "https://exa mple.com",
             "https://a|b.com/",
@@ -1641,16 +1690,94 @@ mod tests {
             "",
             "about:blank#x",
         ] {
-            assert!(!native_nav_ok(bad, hosts, true), "{bad}");
+            assert!(!native_nav_ok(bad, store, true), "{bad}");
         }
         assert!(native_nav_ok(
             "https://steamcommunity.com/openid/login?x=1",
-            hosts,
+            store,
             false
         ));
         // about:blank only before the store page was requested.
-        assert!(native_nav_ok("about:blank", hosts, true));
-        assert!(!native_nav_ok("about:blank", hosts, false));
+        assert!(native_nav_ok("about:blank", store, true));
+        assert!(!native_nav_ok("about:blank", store, false));
+    }
+
+    #[test]
+    fn battlenet_may_show_its_identity_providers_and_nobody_else_may() {
+        let bnet = AccountStore::Battlenet;
+        let from_log = [
+            "https://accounts.google.com/o/oauth2/auth?client_id=x&redirect_uri=y",
+            "https://www.facebook.com/v17.0/dialog/oauth?client_id=x",
+            "https://discord.com/oauth2/authorize?client_id=x",
+            "https://steamcommunity.com/openid/login?openid.mode=checkid_setup",
+            "https://accounts.nintendo.com/connect/1.0.0/authorize?client_id=x",
+            "https://auth.api.sonyentertainmentnetwork.com/2.0/oauth/authorize?client_id=x",
+        ];
+        let others = [
+            "https://m.facebook.com/dialog/oauth",
+            "https://my.account.sony.com/central/signin/",
+            "https://ca.account.sony.com/api/v1/oauth/authorize",
+            "https://appleid.apple.com/auth/authorize",
+            "https://login.live.com/oauth20_authorize.srf",
+            "https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize",
+            "https://account.live.com/proofs/Verify",
+        ];
+        for url in from_log.iter().chain(others.iter()) {
+            let parsed = Url::parse(url).unwrap();
+            assert!(page_allowed(&parsed, bnet), "{url}");
+            assert!(native_nav_ok(url, bnet, false), "{url}");
+            // Never for another store's window.
+            for store in AccountStore::ALL.iter().filter(|s| **s != bnet) {
+                assert!(!idp_page(&parsed, *store), "{url} for {store:?}");
+                if navigation_allowed(&parsed, login_hosts(*store)) {
+                    continue; // That store's own sign-in host (Steam, Xbox's Microsoft account).
+                }
+                assert!(!native_nav_ok(url, *store, false), "{url} for {store:?}");
+            }
+        }
+        // Exact hosts only, https only, no port or user info, no look-alikes.
+        for bad in [
+            "https://accounts.google.com.evil.com/o/oauth2/auth",
+            "https://evil.accounts.google.com/",
+            "https://google.com/",
+            "https://mail.google.com/",
+            "https://discord.com.evil/oauth2/authorize",
+            "https://www.discord.com/",
+            "https://facebook.com/",
+            "https://xn--80ak6aa92e.google.com/",
+            "https://xn--80ak6aa92e.com/",
+            "http://accounts.google.com/o/oauth2/auth",
+            "https://accounts.google.com:8443/",
+            "https://user@accounts.google.com/",
+            "https://evil.my.account.sony.com/",
+            "https://apple.com/",
+        ] {
+            let parsed = Url::parse(bad).unwrap();
+            assert!(!page_allowed(&parsed, bnet), "{bad}");
+            assert!(!native_nav_ok(bad, bnet, false), "{bad}");
+        }
+        // Battle.net's own hosts still work, and the guard uses the same rule as the native check.
+        assert!(native_nav_ok(
+            "https://eu.account.battle.net/login/en/",
+            bnet,
+            false
+        ));
+        let source = include_str!("signin.rs");
+        let guard = &source[source.find("fn guard(").unwrap()..];
+        let guard = &guard[..guard.find("\n}").unwrap()];
+        assert!(guard.contains("page_allowed(url, store)"));
+        // An identity provider's page is never Battle.net's signed-in page.
+        for url in from_log.iter().chain(others.iter()) {
+            assert!(!super::super::stores::signed_in_page(
+                bnet,
+                &Url::parse(url).unwrap()
+            ));
+        }
+        // Every listed host is plain lowercase ASCII without wildcards.
+        for host in idp_hosts(bnet) {
+            assert_eq!(host.to_ascii_lowercase(), *host);
+            assert!(!host.contains('*') && !host.starts_with('.') && host.contains('.'));
+        }
     }
 
     fn flight(id: u64, verifying: bool) -> Flight {
