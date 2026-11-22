@@ -1,9 +1,16 @@
 //! A diagnostic for the store sign-in window: console errors (uncaught script errors show up
-//! there too) and failed or refused requests are written to Game Lobby's log, so a sign-in page
-//! that doesn't work (Battle.net's form didn't render in the owner's test) shows why. The events
-//! come from the WebView2 DevTools protocol (`Log.entryAdded`, `Network.requestWillBeSent` /
-//! `responseReceived` / `loadingFailed`). The `Runtime` domain is deliberately not enabled: bot
-//! and captcha checks look for it.
+//! there too), failed or refused requests and HTTP errors are written to Game Lobby's log, so a
+//! sign-in page that doesn't work (Battle.net's form didn't render in the owner's test) shows
+//! why. The events come from the WebView2 DevTools protocol: `Log.entryAdded`,
+//! `Network.responseReceived` and `Network.loadingFailed`. The pages themselves are logged by
+//! the navigation guard.
+//!
+//! Form data never reaches Game Lobby: `Network.requestWillBeSent` (the only network event that
+//! carries a request, with its `postData`, which holds what the user typed, passwords included)
+//! is not subscribed, and `Network.enable` is called with `maxPostDataSize: 0` and no buffers,
+//! so request and response bodies are not kept either. `responseReceived` carries the response
+//! (status and URL), `loadingFailed` only an error text, a reason and a type. The `Runtime`
+//! domain is deliberately not enabled: bot and captcha checks look for it.
 //!
 //! What a page says is never logged, since it can contain what the user typed ("Invalid e-mail
 //! alice@…"): only the error's class or a few known browser messages ([`safe_text`]), the
@@ -12,22 +19,25 @@
 
 use regex::Regex;
 use serde_json::Value;
-use std::collections::HashMap;
 use std::sync::LazyLock;
 
 /// Lines logged per sign-in window at most.
 pub const MAX_LINES: usize = 150;
-const MAX_REQUESTS: usize = 2000;
 
-/// The events the window subscribes to.
-pub const EVENTS: [&str; 4] = [
+/// The events the window subscribes to. Never `Network.requestWillBeSent` (it carries the
+/// request body).
+pub const EVENTS: [&str; 3] = [
     "Log.entryAdded",
-    "Network.requestWillBeSent",
     "Network.responseReceived",
     "Network.loadingFailed",
 ];
-/// The DevTools domains that must be enabled for them.
-pub const DOMAINS: [&str; 2] = ["Log.enable", "Network.enable"];
+
+/// `Network.enable` without any body: no post data in events, no response buffering.
+pub const NETWORK_ENABLE: &str =
+    r#"{"maxPostDataSize":0,"maxTotalBufferSize":0,"maxResourceBufferSize":0}"#;
+
+/// The DevTools domains enabled for [`EVENTS`], with their parameters.
+pub const DOMAINS: [(&str, &str); 2] = [("Log.enable", "{}"), ("Network.enable", NETWORK_ENABLE)];
 
 /// `host/path` of a URL, without query or fragment; `?` when it isn't one.
 pub fn place(raw: &str) -> String {
@@ -99,14 +109,13 @@ fn token(raw: &str) -> String {
 /// What one sign-in window has logged so far.
 #[derive(Default, Debug)]
 pub struct PageLog {
-    requests: HashMap<String, String>,
     lines: usize,
 }
 
 impl PageLog {
     /// The log line for one DevTools event (`json` is its parameter object), if it is worth one.
     pub fn line(&mut self, event: &str, json: &str) -> Option<String> {
-        if self.lines >= MAX_LINES {
+        if self.lines >= MAX_LINES || !EVENTS.contains(&event) {
             return None;
         }
         let v: Value = serde_json::from_str(json).ok()?;
@@ -120,14 +129,6 @@ impl PageLog {
                     safe_text(s("/entry/text").unwrap_or(""))
                 ))
             }
-            "Network.requestWillBeSent" => {
-                if let (Some(id), Some(url)) = (s("/requestId"), s("/request/url")) {
-                    if self.requests.len() < MAX_REQUESTS {
-                        self.requests.insert(id.to_string(), place(url));
-                    }
-                }
-                None
-            }
             "Network.responseReceived" => {
                 let status = v.pointer("/response/status").and_then(Value::as_f64)? as i64;
                 (status >= 400).then(|| {
@@ -138,10 +139,9 @@ impl PageLog {
                     )
                 })
             }
+            // No URL here (that would need requestWillBeSent, which carries the request
+            // body); the console usually names the place of a failed request.
             "Network.loadingFailed" => {
-                let at = s("/requestId")
-                    .and_then(|id| self.requests.get(id).cloned())
-                    .unwrap_or_else(|| "?".into());
                 let blocked = s("/blockedReason")
                     .map(|r| format!(", blocked: {}", token(r)))
                     .unwrap_or_default();
@@ -151,7 +151,7 @@ impl PageLog {
                     ""
                 };
                 Some(format!(
-                    "request failed: {} for {}{blocked}{canceled} ({at})",
+                    "request failed: {} for {}{blocked}{canceled}",
                     safe_text(s("/errorText").unwrap_or("?")),
                     token(s("/type").unwrap_or("request"))
                 ))
@@ -180,6 +180,38 @@ mod tests {
     }
 
     #[test]
+    fn form_data_never_reaches_the_diagnostic() {
+        // The only network event carrying the request (and its postData) is not subscribed.
+        assert!(!EVENTS.contains(&"Network.requestWillBeSent"));
+        assert!(EVENTS
+            .iter()
+            .all(|e| !e.contains("WillBeSent") && !e.contains("Intercept")));
+        // Network.enable keeps no post data and buffers no bodies.
+        let (method, params) = DOMAINS
+            .iter()
+            .find(|(m, _)| *m == "Network.enable")
+            .unwrap();
+        assert_eq!(*method, "Network.enable");
+        let params: Value = serde_json::from_str(params).unwrap();
+        assert_eq!(params["maxPostDataSize"], 0);
+        assert_eq!(params["maxTotalBufferSize"], 0);
+        assert_eq!(params["maxResourceBufferSize"], 0);
+        // Even if such an event were handed over, it is ignored.
+        let mut log = PageLog::default();
+        assert_eq!(
+            log.line(
+                "Network.requestWillBeSent",
+                r#"{"requestId":"7","request":{"url":"https://us.battle.net/login","postData":"password=hunter2"}}"#
+            ),
+            None
+        );
+        // The sign-in window enables exactly these, with these parameters.
+        let signin = include_str!("signin.rs");
+        assert!(signin.contains("for (method, params) in super::devtools::DOMAINS"));
+        assert!(signin.contains("&HSTRING::from(params)"));
+    }
+
+    #[test]
     fn page_messages_are_reduced_to_safe_classes() {
         for (raw, want) in [
             ("Uncaught TypeError: Cannot assign to read only property 'toString' of object", "Uncaught TypeError"),
@@ -204,7 +236,7 @@ mod tests {
         // Uncaught errors arrive as console errors; the Runtime domain is not used.
         assert!(!EVENTS
             .iter()
-            .chain(DOMAINS.iter())
+            .chain(DOMAINS.iter().map(|(m, _)| m))
             .any(|e| e.starts_with("Runtime")));
         assert_eq!(
             log.line(
@@ -241,18 +273,11 @@ mod tests {
         );
         assert_eq!(
             log.line(
-                "Network.requestWillBeSent",
-                r#"{"requestId":"7","request":{"url":"https://us.battle.net/login/srp?csrf=abc"}}"#
-            ),
-            None
-        );
-        assert_eq!(
-            log.line(
                 "Network.loadingFailed",
                 r#"{"requestId":"7","errorText":"net::ERR_BLOCKED_BY_CLIENT","blockedReason":"inspector","type":"XHR"}"#
             )
             .unwrap(),
-            "request failed: net::ERR_BLOCKED_BY_CLIENT for XHR, blocked: inspector (us.battle.net/login/srp)"
+            "request failed: net::ERR_BLOCKED_BY_CLIENT for XHR, blocked: inspector"
         );
         assert_eq!(
             log.line(

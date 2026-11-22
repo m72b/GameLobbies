@@ -1304,10 +1304,11 @@ fn harden_webview2(
                 &mut token,
             );
         }
-        for method in super::devtools::DOMAINS {
+        // No request bodies: `Network.enable` keeps no post data (see `devtools`).
+        for (method, params) in super::devtools::DOMAINS {
             let _ = core.CallDevToolsProtocolMethod(
                 &HSTRING::from(method),
-                &HSTRING::from("{}"),
+                &HSTRING::from(params),
                 &CallDevToolsProtocolMethodCompletedHandler::create(Box::new(|_, _| Ok(()))),
             );
         }
