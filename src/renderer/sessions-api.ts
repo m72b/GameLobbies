@@ -18,10 +18,8 @@ export const sessionsApi = {
   update: (id: number, startedAt: number, endedAt: number) => call<SessionEntry>('sessions_update', { id, startedAt, endedAt }),
   /** Deletes a finished session and takes its time off the game's playtime. Emits `library:changed`. */
   remove: (id: number) => call<void>('sessions_delete', { id }),
-  /** Replaces the note (empty clears it) and the linked screenshots (the game's own). */
   setJournal: (id: number, note: string, screenshotIds: string[]) => call<SessionEntry>('sessions_set_journal', { id, note, screenshotIds }),
   /** The share summary text. */
   shareText: (id: number, utcOffsetMinutes: number, format: ShareFormat) => call<string>('sessions_share_text', { id, utcOffsetMinutes, format }),
-  /** Saves the summary through the native save dialog; the path, or null when cancelled. */
   export: (id: number, utcOffsetMinutes: number, format: ShareFormat) => call<string | null>('sessions_export', { id, utcOffsetMinutes, format })
 }

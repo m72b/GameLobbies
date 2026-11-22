@@ -9,7 +9,6 @@ import './game-notes.css'
 const empty: GameNotes = { rating: null, notes: '', updatedAt: 0, memories: [] }
 const errorText = (error: unknown) => error instanceof Error ? error.message : 'Could not save'
 
-/** Today as YYYY-MM-DD in the local time zone. */
 export function todayIso() {
   const d = new Date()
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
@@ -73,7 +72,6 @@ export function YourScore({ gameId }: { gameId: string }) {
 
 type SaveState = 'idle' | 'saving' | 'saved' | 'error'
 
-/** Quick notes (autosaved) and the list of memories. */
 export function GameNotesSection({ gameId, shots }: { gameId: string; shots: Screenshot[] }) {
   const { data, setData, loaded } = useGameNotes(gameId)
   const [text, setText] = useState('')

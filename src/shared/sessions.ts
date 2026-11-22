@@ -11,7 +11,6 @@ export interface SessionShot { id: string; src: string }
  * closed unexpectedly (crash, shutdown); the end is the last time the game was seen running.
  */
 export interface SessionEntry { id: number; gameId: string; gameTitle: string; startedAt: number; endedAt?: number; seconds: number; source: PlaySource; edited: boolean; interrupted: boolean; note?: string; screenshots: SessionShot[] }
-/** Keyset position for the next page. */
 export interface SessionCursor { startedAt: number; id: number }
 /**
  * The read-only "Added from Steam" entry: the hours Steam has that Game Lobby did not track
@@ -73,7 +72,6 @@ export const noteLength = (note: string) => Array.from(note).length
 /** The viewer's UTC offset at `ms`, in minutes east of UTC (what the share summary uses). */
 export const utcOffsetMinutes = (ms: number) => -new Date(ms).getTimezoneOffset()
 
-/** Backloggd's game search for a title (opened in the browser). */
 export function backloggdSearchUrl(title: string): string {
   const query = title.trim().slice(0, 200)
   return 'https://backloggd.com/search/games/' + encodeURIComponent(query)

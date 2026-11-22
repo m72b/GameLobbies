@@ -49,7 +49,6 @@ export function coverLayerStyle(src: string): CSSProperties {
 export type CoverStatus = 'none' | 'loading' | 'loaded' | 'error'
 
 const RETRY_AFTER_MS = 30_000
-/** Loaded images kept referenced so the CSS background is served from memory. */
 const MAX_RETAINED = 300
 
 const states = new Map<string, { status: 'loading' | 'loaded' | 'error'; at: number }>()
@@ -87,7 +86,6 @@ function load(src: string) {
   image.src = src
 }
 
-/** The load state of a cover URL; starts loading it when first used. */
 export function useCoverStatus(src?: string): CoverStatus {
   const subscribe = useCallback((listener: () => void) => {
     if (!src) return () => {}

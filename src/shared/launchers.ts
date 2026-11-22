@@ -5,9 +5,7 @@ import type { AssignTarget, CustomLauncher, Game, GameRoute, LauncherStartMode, 
  * mirror its rules so the editor can explain problems before saving.
  */
 
-/** `GameRoute.sourceId` prefix of a launcher's games. */
 export const LAUNCHER_SOURCE_PREFIX = 'launcher:'
-/** Library filter value for a launcher (`store` state in the main window). */
 export const LAUNCHER_FILTER_PREFIX = 'launcher:'
 export const TARGET_PLACEHOLDER = '{target}'
 export const MAX_IDENTIFIER_CHARS = 200
@@ -20,14 +18,12 @@ export const LAUNCHER_ICONS = [
 ] as const
 export type LauncherIconName = typeof LAUNCHER_ICONS[number]
 
-/** Swatches offered in the editor (any `#rrggbb` can be typed). */
 export const LAUNCHER_SWATCHES = ['#4f8cff', '#75d18a', '#f2b84b', '#ef6b6b', '#b07cff', '#3fc6c6', '#ff8ac2', '#9aa3ad']
 
 export function isHexColor(value: string): boolean {
   return /^#[0-9a-fA-F]{6}$/.test(value)
 }
 
-/** The launcher id of a launcher route, or undefined. */
 export function launcherIdOf(route: Pick<GameRoute, 'sourceId'>): string | undefined {
   if (!route.sourceId.startsWith(LAUNCHER_SOURCE_PREFIX)) return undefined
   const id = route.sourceId.slice(LAUNCHER_SOURCE_PREFIX.length)
@@ -46,12 +42,10 @@ export function launcherFilter(id: string): string {
   return LAUNCHER_FILTER_PREFIX + id
 }
 
-/** The launcher a library filter value names, or undefined for a store filter. */
 export function filterLauncherId(filter: string): string | undefined {
   return filter.startsWith(LAUNCHER_FILTER_PREFIX) ? filter.slice(LAUNCHER_FILTER_PREFIX.length) || undefined : undefined
 }
 
-/** Whether a game shows under a library filter: a store name, `All Games`, or a launcher. */
 export function gameMatchesFilter(game: Pick<Game, 'store' | 'routes'>, filter: string): boolean {
   if (filter === 'All Games') return true
   const launcher = filterLauncherId(filter)
@@ -59,7 +53,6 @@ export function gameMatchesFilter(game: Pick<Game, 'store' | 'routes'>, filter: 
   return game.store === filter
 }
 
-/** The launcher of a route (running or labelling it), when it still exists. */
 export function launcherOfRoute(route: Pick<GameRoute, 'sourceId'> & { launcherId?: string }, launchers: readonly CustomLauncher[]): CustomLauncher | undefined {
   const id = routeLauncherId(route)
   return id ? launchers.find(item => item.id === id) : undefined
@@ -95,7 +88,6 @@ export function startModeOf(launcher: Pick<CustomLauncher, 'executable'> & { sta
   return !isLabelOnly(launcher) && launcher.startMode === 'openFirst' ? 'openFirst' : 'through'
 }
 
-/** Whether a launcher is opened first, with its games then started directly from their own file. */
 export function opensFirst(launcher: Pick<CustomLauncher, 'executable'> & { startMode?: LauncherStartMode }): boolean {
   return startModeOf(launcher) === 'openFirst'
 }
@@ -145,7 +137,6 @@ export function scanSummaryLines(summary: LocalScanSummary): Array<[string, stri
   ]
 }
 
-/** The launcher a game is shown under: its first launcher route's (existing) launcher. */
 export function gameLauncher(game: Pick<Game, 'routes'>, launchers: readonly CustomLauncher[]): CustomLauncher | undefined {
   for (const route of game.routes) {
     const launcher = launcherOfRoute(route, launchers)
@@ -154,7 +145,6 @@ export function gameLauncher(game: Pick<Game, 'routes'>, launchers: readonly Cus
   return undefined
 }
 
-/** The store name to show for a game: the launcher's name for a Custom game run by a launcher. */
 export function displayStore(game: Pick<Game, 'store' | 'routes'>, launchers: readonly CustomLauncher[]): string {
   if (game.store !== 'Custom') return game.store
   return gameLauncher(game, launchers)?.name ?? game.store
@@ -227,27 +217,22 @@ export function previewArgv(template: string, target: string): string[] | null {
   return argv
 }
 
-/** One argument per entry, quoted when it has spaces, for showing a preview command line. */
 export function formatArgv(argv: readonly string[]): string {
   return argv.map(arg => arg === '' || /[\s"]/.test(arg) ? '"' + arg.replace(/"/g, '\\"') + '"' : arg).join(' ')
 }
 
-/** The target kinds' labels, in canonical order. */
 export function kindLabel(kind: LauncherTargetKind): string {
   return kind === 'file' ? 'File' : kind === 'folder' ? 'Folder' : 'Identifier'
 }
 
-/** An example target for the preview, by target kind. */
 export function sampleTarget(kind: CustomLauncher['targetKind']): string {
   return kind === 'identifier' ? 'game-id' : kind === 'folder' ? 'D:\\Games\\My Game' : 'D:\\Games\\My Game\\game.file'
 }
 
-/** Whether a route (or its launcher label) was added on the game page (`launchers.assign`). */
 export function isAssignedRoute(route: Pick<GameRoute, 'assigned'>): boolean {
   return route.assigned === true
 }
 
-/** The launchers a game page assigned (their ids, in route order, without repeats). */
 export function assignedLauncherIds(game: Pick<Game, 'routes'>): string[] {
   const ids: string[] = []
   for (const route of game.routes) {
@@ -275,7 +260,6 @@ export function linkedMessage(launcher: Pick<CustomLauncher, 'name' | 'executabl
       : 'Linked to ' + name + '. Play now starts it through ' + name + '.'
 }
 
-/** How a game linked to a launcher with a program starts, in a few words for its row. */
 export function playsWithText(launcher: Pick<CustomLauncher, 'name' | 'executable'> & { startMode?: LauncherStartMode }): string {
   return opensFirst(launcher) ? 'Opens ' + launcher.name + ' first' : 'Plays through ' + launcher.name
 }

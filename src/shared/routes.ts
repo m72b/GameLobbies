@@ -32,13 +32,11 @@ export function routeLabel(route: GameRoute, allRoutes: GameRoute[] = [route]): 
   return route.store + ' · ' + emulatorSuffix(route, clash)
 }
 
-/** Tooltip for a route label: the full (untruncated) label, plus the system name when known. */
 export function routeTitle(route: GameRoute, allRoutes: GameRoute[] = [route], systemName?: string): string {
   const label = routeLabel(route, allRoutes)
   return isEmulatorRoute(route) && systemName ? label + ' (' + systemName + ')' : label
 }
 
-/** Whether a game has a Steam route with a numeric app id (Steam screenshots can be imported). */
 export function isSteamGame(game: Pick<Game, 'routes'>): boolean {
   return game.routes.some(route => route.sourceId === 'steam' && /^\d{1,12}$/.test(route.appId ?? ''))
 }

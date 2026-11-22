@@ -9,7 +9,6 @@ const formatWhen = (time?: number) => time ? new Date(time).toLocaleString() : '
 const truncatePath = (path: string, max = 70) => path.length <= max ? path : path.slice(0, 24) + '…' + path.slice(path.length - (max - 25))
 export const alreadyRunning = (text: string) => /scan is already running/i.test(text) ? 'A scan is already running. Wait for it to finish, then try again.' : text
 
-/** Scan state that outlives the settings sections, so progress isn't lost when switching pages. */
 export function useLocalScan() {
   const [progress, setProgress] = useState<LocalScanProgress | null>(null)
   const [summary, setSummary] = useState<LocalScanSummary | null>(null)

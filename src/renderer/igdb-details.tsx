@@ -43,7 +43,6 @@ function TimeToBeat({ time, title }: { time: IgdbTimeToBeat; title: string }) {
 /** A picture the lightbox can show; `igdb` adds the IGDB attribution. */
 export interface LightboxImage { full: string; alt: string; igdb: boolean }
 
-/** Full-size picture with Esc to close and the arrow keys to move. */
 export function Lightbox({ images, index, onIndex, onClose }: { images: LightboxImage[]; index: number; onIndex(index: number): void; onClose(): void }) {
   const image = images[index]
   const src = coverSrc(image?.full)
@@ -77,7 +76,6 @@ export function Lightbox({ images, index, onIndex, onClose }: { images: Lightbox
   </div>
 }
 
-/** Cached metadata for a game, updated live when a background fetch stores new data. */
 export function useIgdb(gameId: string) {
   const [view, setView] = useState<IgdbMetadataView>(emptyView)
   useEffect(() => {
@@ -198,7 +196,6 @@ export function GenreBlock({ game, view, wiki }: { game: Game; view: IgdbMetadat
   </div>
 }
 
-/** "Wrong game? Search IGDB": search by title or free text and pick the right entry. */
 export function IgdbPicker({ game, view, onClose, onChosen }: { game: Game; view: IgdbMetadataView; onClose(): void; onChosen(view: IgdbMetadataView): void }) {
   const { openSheet } = useKeysUi()
   const [query, setQuery] = useState('')

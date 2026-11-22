@@ -114,7 +114,6 @@ export function firstHole(placed: Placement[], columns: number): [number, number
   return null
 }
 
-/** Tallest and widest a tile may grow to while filling gaps. */
 const MAX_GROWN_ROWS = 3
 
 /**

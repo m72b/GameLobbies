@@ -22,7 +22,6 @@ function DownloadProgress({ progress }: { progress: UpdateProgress | null }) {
   </div>
 }
 
-/** Copies text with the async clipboard API, falling back to a hidden textarea. */
 async function copyText(text: string) {
   try { await navigator.clipboard.writeText(text); return }
   catch { /* fall through */ }

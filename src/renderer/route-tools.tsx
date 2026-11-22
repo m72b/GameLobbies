@@ -8,7 +8,6 @@ const errorText = (error: unknown, fallback: string) => error instanceof Error ?
 
 export type RouteTool = 'name' | 'args' | 'unlink'
 
-/** An argv as one line of text, quoted where needed (the way the editor reads it back). */
 export function commandText(argv: readonly string[]): string {
   return argsText(JSON.stringify(argv))
 }
@@ -48,7 +47,6 @@ export function LaunchOptionsField({ value, onChange, check, checkKey, launcher,
   check(text: string): Promise<ArgsPreview>
   /** Changes when what the options are checked against changes (route, launcher, target). */
   checkKey: string
-  /** The launcher's name when the options go to a custom launcher. */
   launcher?: string
   autoFocus?: boolean
   disabled?: boolean
@@ -115,7 +113,6 @@ export function LaunchOptionsEditor({ route, support, pending, autoFocus, onSave
   </form>
 }
 
-/** The game page's "Launch options" dialog (opened from under Play from). */
 export function LaunchOptionsDialog({ title, routeLabel, ...editor }: Parameters<typeof LaunchOptionsEditor>[0] & { title: string; routeLabel: string }) {
   return <div className="modal-scrim" onMouseDown={event => { if (event.target === event.currentTarget) editor.onClose() }}>
     <div className="modal lo-dialog" role="dialog" aria-modal="true" aria-labelledby="lo-dialog-title">

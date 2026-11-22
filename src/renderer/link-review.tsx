@@ -10,7 +10,6 @@ const errorText = (error: unknown, fallback: string) => error instanceof Error ?
 
 type ChoiceKey = 'coverFrom' | 'heroFrom' | 'notesFrom' | 'igdbFrom'
 
-/** One detail where the entries differ: a radio per entry that has it. */
 function ChoiceGroup({ legend, games, value, onChange, describe, name }: { legend: string; games: LinkPreviewGame[]; value: string; onChange(id: string): void; describe(game: LinkPreviewGame): string; name: string }) {
   return <fieldset className="review-choices"><legend>{legend}</legend>
     {games.map(game => <label key={game.id}><input type="radio" name={name} checked={value === game.id} onChange={() => onChange(game.id)} /> {describe(game)}</label>)}

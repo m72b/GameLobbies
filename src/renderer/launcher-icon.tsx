@@ -31,7 +31,6 @@ export function RouteIcon({ route, launchers, size = 12, className }: { route: P
   return launcher ? <LauncherIcon launcher={launcher} size={size} className={className} /> : <StoreIcon store={route.store} size={size} className={className} />
 }
 
-/** The custom launchers, kept current (`launchers:changed`). */
 export function useLaunchers(): CustomLauncher[] {
   const [launchers, setLaunchers] = useState<CustomLauncher[]>([])
   useEffect(() => {

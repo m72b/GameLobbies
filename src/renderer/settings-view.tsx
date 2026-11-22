@@ -34,7 +34,6 @@ const sgdbStyleLabels: Record<SteamGridDbStyle, string> = { alternate: 'Alternat
 
 type Section = typeof sections[number][0]
 
-/** Sections `settings.open(id)` can show. */
 const sectionIds: Record<SettingsSection, Section> = { updates: 'About and Updates', 'cover-art': 'Appearance', metadata: 'Playtime and Stats', 'api-keys': 'API keys', accounts: 'Accounts' }
 /** Cards a deep link scrolls to once its section is shown. */
 const sectionAnchors: Partial<Record<SettingsSection, string>> = { 'cover-art': 'settings-cover-art', metadata: 'settings-metadata' }
@@ -70,7 +69,6 @@ export function SettingsView({ settings, onSettings, say, keys, accounts, onRunS
   say(text: string): void
   keys: ApiKeys
   accounts: Accounts
-  /** Leaves Settings for the first-time setup. */
   onRunSetup(): void
   page: SettingsPage
   onPage(page: SettingsPage): void
@@ -327,4 +325,3 @@ export function SettingsView({ settings, onSettings, say, keys, accounts, onRunS
     </div>
   </div>
 }
-

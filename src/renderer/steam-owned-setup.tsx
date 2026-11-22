@@ -31,7 +31,6 @@ export function SteamOwnedSetup({ status, busy, error, onSave, onRemove }: {
   status: SteamOwnedStatus
   busy: boolean
   error: string
-  /** Resolves true when saved, so the fields can be cleared. */
   onSave(key: string, steamId: string): Promise<boolean>
   onRemove(): Promise<void>
 }) {

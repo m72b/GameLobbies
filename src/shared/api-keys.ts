@@ -30,5 +30,4 @@ export function steamSummary(status: SteamOwnedStatus): KeySummary {
   return { state: 'unset', label: 'Not set up · installed games only' }
 }
 
-/** The short word for the status pill: Set, Not set, or Incomplete. */
 export const pillWord = (state: KeyState) => state === 'set' ? 'Set' : state === 'partial' ? 'Incomplete' : 'Not set'

@@ -7,7 +7,6 @@ import { useKeysUi } from './api-keys'
 
 const errorText = (error: unknown, fallback: string) => error instanceof Error ? error.message : typeof error === 'string' ? error : fallback
 
-/** StoreIcon names for the account stores. */
 const iconName: Record<AccountStore, string> = { steam: 'Steam', gog: 'GOG', battlenet: 'Battle.net', xbox: 'Xbox', epic: 'Epic Games' }
 
 /**

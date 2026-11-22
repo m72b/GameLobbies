@@ -18,14 +18,12 @@ export function barWidth(part: number, whole: number): number {
 export type TopSortKey = 'title' | 'seconds'
 export type SortDirection = 'asc' | 'desc'
 
-/** Sorted copy of the top list. Time: ties by title. Title: case-insensitive. */
 export function sortTop(rows: readonly StatsTopGame[], key: TopSortKey, direction: SortDirection): StatsTopGame[] {
   const byTitle = (a: StatsTopGame, b: StatsTopGame) => a.title.localeCompare(b.title, undefined, { sensitivity: 'base' })
   const sign = direction === 'asc' ? 1 : -1
   return [...rows].sort((a, b) => key === 'title' ? sign * byTitle(a, b) : sign * (a.seconds - b.seconds) || byTitle(a, b))
 }
 
-/** The direction a column starts in: names A-Z, time biggest first. */
 export const defaultDirection = (key: TopSortKey): SortDirection => key === 'title' ? 'asc' : 'desc'
 
 /** "includes Steam playtime", "includes Steam and GOG playtime"; empty when no store figure counts. */

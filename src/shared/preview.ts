@@ -1,4 +1,3 @@
-/** How a SteamGridDB candidate is previewed: an image, a muted looping video, or not at all. */
 export type PreviewKind = 'image' | 'video'
 
 /** Classifies one preview URL. Videos (.webm) need a <video>; they are hidden unless `animated`. */

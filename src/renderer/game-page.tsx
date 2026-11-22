@@ -37,11 +37,8 @@ export interface GamePageActions {
   openFolder(game: Game): void
   remove(game: Game): void
   setEmulator(game: Game, routeIndex: number, emulatorId: string | null): Promise<void>
-  /** Opens "Link to launcher" for the game. */
   linkLauncher(game: Game): void
-  /** Removes only what linking the game to that launcher added. */
   unassignLauncher(game: Game, launcherId: string): Promise<void>
-  /** Names a route (display only); empty clears it. */
   renameRoute(game: Game, routeIndex: number, name: string): Promise<void>
   /** Launch options for a route (Rust checks them and confirms natively). */
   setRouteArgs(game: Game, routeIndex: number, args: string): Promise<void>
@@ -50,7 +47,6 @@ export interface GamePageActions {
   /** Checks launch options text for a route without saving (what would run, or the reason it is refused). */
   routeArgsCheck(game: Game, routeIndex: number, args: string): Promise<ArgsPreview>
   unlinkPreview(game: Game, routeIndex: number): Promise<UnlinkPreview>
-  /** Splits a route (and the routes that came in with it) off into its own game. */
   unlink(game: Game, routeIndex: number): Promise<void>
 }
 

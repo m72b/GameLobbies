@@ -5,7 +5,6 @@ import type { AccountStatus, SetupChoice, SetupStore, SetupStoreInfo } from './t
 export type AccountState = 'ok' | 'partial' | 'off' | 'soon'
 export interface AccountLine { state: AccountState; label: string; pill: string }
 
-/** The one-line status of a store account. */
 export function accountLine(status: AccountStatus): AccountLine {
   if (!status.available) return { state: 'soon', label: 'Sign-in comes in a later version · installed games only', pill: 'Coming soon' }
   if (status.signingIn) return { state: 'partial', label: status.store === 'steam' ? 'Continue signing in to Steam in your browser' : status.store === 'gog' ? 'Sign in to GOG in your browser, then paste the address it ends on' : 'Finish signing in to ' + status.name + ' in its sign-in window', pill: 'Signing in' }
@@ -18,7 +17,6 @@ export function accountLine(status: AccountStatus): AccountLine {
   return { state: 'ok', label: 'Signed in · owned games are synced', pill: 'Signed in' }
 }
 
-/** Whether "Sync now" can run for this account. */
 export const canSync = (status: AccountStatus) => status.available && status.signedIn && status.mode === 'account' && (status.store !== 'steam' || status.keySet) && !status.signingIn
 
 export type SetupStep = 'welcome' | 'stores' | 'choices' | 'signin' | 'folders' | 'keys' | 'done'

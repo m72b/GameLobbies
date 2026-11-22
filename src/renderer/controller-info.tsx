@@ -26,7 +26,6 @@ export function useGameInput(gameId: string) {
 
 export type GameInputState = ReturnType<typeof useGameInput>
 
-/** Small badge next to the play button when the game supports a controller (fully or partly). */
 export function ControllerBadge({ input }: { input: GameInput }) {
   if (input.support !== 'full' && input.support !== 'partial') return null
   const label = input.support === 'full' ? 'Full' : 'Partial'

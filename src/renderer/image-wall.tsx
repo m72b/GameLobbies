@@ -15,7 +15,6 @@ const FIRST_TILES = 12
 interface WallImage { key: string; thumb: string; full: string; igdb: boolean; aspect?: number; shot?: Screenshot; alt: string }
 type Filter = 'all' | 'yours' | 'igdb'
 
-/** The game's screenshots, kept up to date when they change. */
 export function useScreenshots(gameId: string) {
   const [shots, setShots] = useState<Screenshot[]>([])
   useEffect(() => {

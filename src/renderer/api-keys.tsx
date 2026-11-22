@@ -98,7 +98,6 @@ export function useApiKeys(say: (text: string) => void) {
   }
 
   const summary: Record<KeyId, KeySummary> = { steamgriddb: sgdbSummary(sgdbSet), igdb: igdbSummary(igdbStatus), steam: steamSummary(steamStatus) }
-  /** The last thing that went wrong with a key (a failed test or import), if anything. */
   const problem: Record<KeyId, string> = {
     steamgriddb: sgdbTest && !sgdbTest.ok ? sgdbTest.message : '',
     igdb: igdbTest && !igdbTest.ok ? igdbTest.message : '',
@@ -109,7 +108,6 @@ export function useApiKeys(say: (text: string) => void) {
     sgdb: { keySet: sgdbSet, busy: sgdbBusy, testing: sgdbTesting, test: sgdbTest, save: saveSgdb, runTest: testSgdb },
     igdb: { status: igdbStatus, configured: igdbStatus.clientIdSet && igdbStatus.clientSecretSet, busy: igdbBusy, testing: igdbTesting, test: igdbTest, save: saveIgdb, clear: clearIgdb, runTest: testIgdb },
     steam: { status: steamStatus, busy: steamBusy, error: steamError, save: saveSteam, remove: removeSteam },
-    /** Removes a key's saved value(s). */
     remove: async (id: KeyId) => { if (id === 'steamgriddb') await saveSgdb(''); else if (id === 'igdb') await clearIgdb(); else await removeSteam() }
   }
 }
@@ -119,7 +117,6 @@ interface KeysUi { keys: ApiKeys | null; /** Opens the sheet with every key (opt
 export const KeysUiContext = createContext<KeysUi>({ keys: null, openSheet: () => void window.lobby.settings.open('api-keys'), openTab: () => void window.lobby.settings.open('api-keys') })
 export const useKeysUi = () => useContext(KeysUiContext)
 
-/** A one-line status for a key with a link to the API keys tab; used where a full form used to be. */
 export function KeyStatusLine({ id, keys, note }: { id: KeyId; keys: ApiKeys; note?: string }) {
   const { openTab } = useKeysUi()
   const { state, label } = keys.summary[id]

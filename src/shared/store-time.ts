@@ -23,7 +23,6 @@ export function effectiveSeconds(game: Timed, times: Readonly<Record<string, Sto
   return Math.max(trackedSeconds(game), times[game.id]?.effectiveSeconds ?? 0)
 }
 
-/** Whole minutes, for the minute-based displays. */
 export const effectiveMinutes = (game: Timed, times: Readonly<Record<string, StoreTime>>): number =>
   Math.floor(effectiveSeconds(game, times) / 60)
 
@@ -32,13 +31,11 @@ export function effectiveLastPlayed(game: Pick<Game, 'id' | 'lastPlayed'>, times
   return Math.max(game.lastPlayed ?? 0, times[game.id]?.effectiveLastPlayed ?? 0)
 }
 
-/** The store a playtime figure comes from, as shown ("Steam", "GOG"). */
 export const sourceName = (source: PlaytimeSource | undefined): string => source === 'gog' ? 'GOG' : 'Steam'
 
 /** "Added from Steam · 125 h" (or GOG). */
 export const addedLabel = (seconds: number, source: PlaytimeSource = 'steam'): string => 'Added from ' + sourceName(source) + ' · ' + formatHours(seconds)
 
-/** The tooltip of the entry. */
 export function addedTooltip(entry: Pick<StoreAddition, 'storeSeconds' | 'trackedSeconds'> & { source?: PlaytimeSource }): string {
   const name = sourceName(entry.source)
   return name + ' reports ' + formatHours(entry.storeSeconds) + '. Game Lobby recorded ' + formatHours(entry.trackedSeconds) + '. The difference is added so playtime matches ' + name + '.'

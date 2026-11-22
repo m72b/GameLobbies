@@ -28,7 +28,6 @@ function ed25519Key(raw) {
   return createPublicKey({ key: { kty: 'OKP', crv: 'Ed25519', x: raw.toString('base64url') }, format: 'jwk' })
 }
 
-/** Decodes a Tauri updater public key. */
 export function parsePublicKey(pubkeyBase64) {
   const lines = fromTauriBase64(pubkeyBase64, 'public key')
   const bytes = Buffer.from(lines[1] ?? '', 'base64')

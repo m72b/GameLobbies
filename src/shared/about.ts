@@ -12,9 +12,7 @@ export interface AboutData {
   publishers?: Fact
   released?: Fact
   platforms?: Fact
-  /** Genres to show beside the user's own genre (which always stays first). */
   genres: { values: string[]; source?: FactSource }
-  /** Which providers contributed anything (for the credit line). */
   usesIgdb: boolean
   usesWikidata: boolean
   usesWikipedia: boolean

@@ -4,7 +4,6 @@ import { LauncherIcon } from './launcher-icon'
 import { assignTargetLabel, isLabelOnly, linkedMessage, playsWithText } from '../shared/launchers'
 import type { AssignmentOption, CustomLauncher, Game } from '../shared/types'
 
-/** The launchers as seen from a game (`launchers.assignments`), loaded again when its routes change. */
 function useAssignments(game: Game, launchers: CustomLauncher[], libraryVersion = 0): AssignmentOption[] | null {
   const [options, setOptions] = useState<AssignmentOption[] | null>(null)
   const routesKey = game.routes.map(route => route.sourceId + '|' + route.launchTarget + '|' + (route.launcherId ?? '') + '|' + (route.assigned ? 1 : 0)).join('\n')
@@ -148,7 +147,6 @@ export function LinkLauncherDialog({ game, launchers, onGames, onClose }: {
   </div>
 }
 
-/** A launch waiting for its custom launcher (`library.launch` returned `waiting`). */
 export interface WaitingLaunch { game: Game; pendingId: string; launcherName: string }
 
 /**

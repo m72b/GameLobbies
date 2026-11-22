@@ -7,7 +7,6 @@ const IGDB_DOCS_URL = 'https://api-docs.igdb.com/#account-creation'
 const REDIRECT_URL = 'http://localhost'
 const CATEGORY = 'Application Integration'
 
-/** Pasted values often carry spaces or line breaks at either end. */
 export const cleanPaste = (value: string) => value.trim()
 
 /** A hint for a Client ID or Secret that looks wrong, or null. Twitch uses 30 lowercase letters and digits. */
@@ -20,7 +19,6 @@ export function credentialHint(label: string, value: string): { text: string; bl
   return null
 }
 
-/** Turns the test command's message into a plain sentence. */
 export function describeTest(ok: boolean, message: string): string {
   if (ok) return 'Connected. IGDB accepted your Client ID and Client Secret.'
   const m = message.toLowerCase()

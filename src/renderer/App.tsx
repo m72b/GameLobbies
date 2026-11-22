@@ -148,7 +148,6 @@ export default function App() {
   useEffect(() => {
     void window.lobby.setup.get().then(info => { setSetupInfo(info); if (info.show) setSetupOpen(true) }).catch(() => undefined)
   }, [])
-  /** Shows the first-time setup in place of the library (from the banner or Settings → Accounts). */
   const openSetup = async () => {
     try { setSetupInfo(await window.lobby.setup.get()) } catch { /* keep what we have */ }
     setOpenId(null); setSettingsOpen(false); setStatsOpen(false); setStorageOpen(false)
@@ -183,7 +182,6 @@ export default function App() {
     zoomRef.current = null
     setOpenId(null)
   }
-  /** Shows Settings in place of the library, optionally on the page for a `settings.open` section id. */
   const openSettings = (id?: string | null) => {
     const page = sectionFor(id ?? null)
     if (!settingsOpen && !openId) savedScroll.current = scrollRef.current?.scrollTop ?? savedScroll.current
@@ -326,7 +324,6 @@ export default function App() {
     setAddKind('')
     setAdding(true)
   }
-  /** The kind a game added to `launcher` uses: the chosen one, else the launcher's first. */
   const kindFor = (launcher: CustomLauncher): LauncherTargetKind => {
     const kinds = launcherKinds(launcher)
     return addKind && kinds.includes(addKind) ? addKind : kinds[0]
@@ -795,13 +792,11 @@ export default function App() {
   </div></KeysUiContext.Provider>
 }
 
-/** A card's store badge: the launcher's icon for Custom games run by a custom launcher. */
 function CardBadge({ game, launchers }: { game: Game; launchers: CustomLauncher[] }) {
   const launcher = game.store === 'Custom' ? gameLauncher(game, launchers) : undefined
   return <span className="store-badge" title={launcher ? launcher.name : game.store}>{launcher ? <LauncherIcon launcher={launcher} /> : <StoreIcon store={game.store} />}</span>
 }
 
-/** A library card's poster: the title on a colored card until the cover has loaded (or when it fails). */
 function CardPoster({ game, index, children }: { game: Game; index: number; children: ReactNode }) {
   const { src, status } = useCover(game)
   return <div className={'poster cover-' + status} style={{ ...coverStyle(game, index), aspectRatio: '2 / 3' }}>

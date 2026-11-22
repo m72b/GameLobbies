@@ -22,7 +22,6 @@
 .sgdb-card.plain{padding-top:0;border-bottom:0;margin-bottom:0}.sgdb-status-row{display:flex;flex-wrap:wrap;align-items:center;gap:10px}.sgdb-test{font-size:11px}.sgdb-test.ok{color:var(--accent)}.sgdb-test.fail{color:#ff7b7b}
 .chip-group{display:flex;flex-wrap:wrap;gap:7px;margin:10px 0 6px}.chip{border:1px solid #ffffff1f;border-radius:999px;background:#17191c;color:var(--muted);padding:5px 12px;font-size:11px}.chip:hover{color:var(--text);border-color:#ffffff38}.chip.active{background:color-mix(in srgb,var(--accent) 18%,transparent);border-color:var(--accent);color:var(--accent)}.chip-hint{display:block;color:var(--muted);font-size:10px;margin-bottom:8px}
 .segmented{display:inline-flex;border:1px solid #ffffff12;border-radius:7px;background:#17191c;padding:2px;gap:2px}.segmented button{border:0;border-radius:5px;background:transparent;color:var(--muted);padding:3px 10px;font-size:10px}.segmented button:hover{color:var(--text)}.segmented button.active{background:var(--accent);color:#0b0d0f;font-weight:600}
-/* Game page */
 .main.page-open{padding:0}
 .game-page{flex:1;min-height:0;overflow:auto;position:relative;container-type:inline-size}
 /* Full width; height follows the 96:31 art up to a cap, so very wide windows crop instead of shrinking the hero. */
@@ -338,7 +337,6 @@
 .recent-card .poster{position:relative}
 .recent-dismiss{position:absolute;top:5px;right:5px;width:22px;height:22px;display:grid;place-items:center;border:0;border-radius:50%;background:color-mix(in srgb,var(--bg) 75%,transparent);color:var(--text);cursor:pointer;opacity:0}
 .recent-card:hover .recent-dismiss,.recent-dismiss:focus-visible{opacity:1}
-/* Play history (session-history.tsx) */
 .gp-tag-steam{display:inline-flex;align-items:center;gap:5px}.gp-steam-row,.sh-steam-row{background:color-mix(in srgb,var(--accent) 5%,transparent)}.sh-steam-row .sh-main{grid-template-columns:minmax(0,1fr) auto 80px 0}
 .gp-activity-head{display:flex;align-items:center;justify-content:space-between;gap:12px}.gp-activity-head .secondary-button{height:28px;font-size:11px}
 .sh-modal{width:min(820px,94vw);max-height:88vh;display:flex;flex-direction:column}.sh-modal .modal-head h2{display:flex;align-items:center;gap:8px}.sh-head-actions{display:flex;gap:6px;align-items:center}
@@ -359,7 +357,6 @@
 /* GL mark in the title bar and the side rail (gl-mark.tsx) */
 .brand{display:flex;align-items:center;gap:7px}
 .rail-button svg.gl-mark{width:25px;height:16px}
-/* Custom launchers */
 .launcher-icon{flex:none}.launcher-icon-image{object-fit:contain;border-radius:3px}
 .launcher-icon-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(38px,1fr));gap:6px;margin:8px 0}
 .launcher-icon-choice{height:38px;border:1px solid color-mix(in srgb,var(--text) 10%,transparent);border-radius:8px;background:var(--surface);color:var(--muted);display:grid;place-items:center}
@@ -479,7 +476,6 @@
 .setting-note{margin:2px 0 6px;font-size:11px;color:var(--accent)}
 .setting-row small.setting-help{display:block;margin-top:3px;font-size:10px;color:var(--muted);font-weight:400;max-width:360px}
 
-/* ---- API keys ---- */
 .key-pill{display:inline-flex;align-items:center;border-radius:20px;padding:2px 8px;font-size:9px;font-weight:700;letter-spacing:.3px;background:#ffffff0b;color:var(--muted)}
 .key-pill.set{background:color-mix(in srgb,var(--accent) 16%,transparent);color:var(--accent)}.key-pill.partial{background:#e8b44f22;color:#e8b44f}
 .key-row{display:flex;align-items:center;gap:16px;justify-content:space-between;padding:13px 0;border-top:1px solid #ffffff0c}

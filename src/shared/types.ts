@@ -55,7 +55,6 @@ export interface Settings { scanIntervalHours: number; posterWidth: number; show
   trackingExcludedGameIds: string[]
   /** Check for a new release about 10 s after startup, at most once a day. Never installs without a click. Default true. */
   autoCheckUpdates: boolean
-  /** Minimize Game Lobby when a game is started from it. */
   minimizeOnLaunch: boolean
   /** Start Game Lobby when Windows starts (a per-user Run entry; it starts minimized). Default false. */
   launchOnBoot: boolean
@@ -111,7 +110,6 @@ export interface CatalogSystem { id: string; name: string; aliases: string[]; ex
  * ROM-set arguments); such profiles are never picked automatically.
  */
 export interface KnownEmulator { id: string; name: string; executables: string[]; prefixes: string[]; systems: string[]; defaultArgs: string; needsConfiguration: boolean; note: string }
-/** `emulators.catalog()`: static built-in data. */
 export interface EmulatorCatalog { systems: CatalogSystem[]; emulators: KnownEmulator[] }
 /** A path on an ignore list (executables of removed emulator profiles, or game files/folders scans skip). */
 export interface IgnoredPath { path: string; addedAt: number }
@@ -217,7 +215,6 @@ export type ReviewItem = ReviewItemBase & (
  * - `dismiss` (any kind): close without changes.
  */
 export type ReviewResolution = { action: 'keep-separate' } | { action: 'ignore'; path: string } | { action: 'choose-exe'; executable: string } | { action: 'confirm-shortcut' } | { action: 'choose-emulator'; emulatorId: string } | { action: 'dismiss' }
-/** `library.addLocalGame()` result: the new (or already existing) game's id and the library. */
 export interface AddedLocalGame { gameId: string; games: Game[] }
 /**
  * Library folders. Calls reject with a user-facing message on invalid input.
@@ -268,7 +265,6 @@ export interface RootsAPI { list(): Promise<LibraryRoot[]>; add(kind: LibraryRoo
  * - ignored() / unignore(path): executables of removed profiles.
  * - browseExecutable(): native .exe picker; the path (save() accepts it), or null when cancelled.
  */
-/** What a custom launcher's games use as their target. */
 export type LauncherTargetKind = 'file' | 'folder' | 'identifier'
 /**
  * How Play starts a game of a launcher with a program: `openFirst` opens the launcher on its own
@@ -382,7 +378,6 @@ export interface UnlinkPreview { title: string; routes: string[]; remaining: str
 export interface PluginManifest { id: string; name: string; version: string; kind: 'library'; store: Store; manifestFolder?: string }
 /** A SteamGridDB poster candidate. `url`/`thumb` are https://*.steamgriddb.com images. */
 export interface SteamGridDbCover { id: number; url: string; thumb: string; width: number; height: number; style?: string; score?: number; upvotes?: number; downvotes?: number; author?: string }
-/** Result of a bulk fetch: games given a cover, games with no match, and per-game error messages. */
 export interface SteamGridDbFetchSummary { updated: number; notFound: number; errors: string[] }
 /** Result of `steamGridDb.testKey()`. `message` is user-facing and never contains the key. */
 export interface SteamGridDbKeyTest { ok: boolean; message: string }
@@ -412,7 +407,6 @@ export interface SteamGridDbKeyTest { ok: boolean; message: string }
  *   key is saved, the key is rejected, SteamGridDB rate-limits or can't be reached, or the game
  *   doesn't exist. Pass a candidate's `url` to `art.setHero` / `art.setLogo`.
  */
-/** One page of SteamGridDB picker results. */
 export interface SteamGridDbCoverPage { covers: SteamGridDbCover[]; page: number; hasMore: boolean }
 export interface SteamGridDbAPI { status(): Promise<{ keySet: boolean }>; saveKey(key: string): Promise<{ keySet: boolean }>; testKey(): Promise<SteamGridDbKeyTest>; search(gameId: string, page?: number): Promise<SteamGridDbCoverPage>; searchHeroes(gameId: string, page?: number): Promise<SteamGridDbCoverPage>; searchLogos(gameId: string, page?: number): Promise<SteamGridDbCoverPage>; apply(gameId: string, url: string): Promise<Game[]>; fetchMissing(): Promise<SteamGridDbFetchSummary>; onFetched(callback: (summary: SteamGridDbFetchSummary) => void): () => void }
 /** How a play session started: from Game Lobby (`launch`) or found running (`detected`). */
@@ -454,7 +448,6 @@ export interface PlayStats { totalSeconds: number; lastTwoWeeksSeconds: number; 
  * - `lastPlayed`: the store's last-played time (ms); `effectiveLastPlayed`: the newer of that and the tracked one.
  * - `syncedAt`: ms of the last sync of the store's figures.
  */
-/** Where a store-reported playtime figure comes from. */
 export type PlaytimeSource = 'steam' | 'gog'
 export interface StoreTime { source: PlaytimeSource; seconds: number; trackedSeconds: number; effectiveSeconds: number; addedSeconds: number; lastPlayed?: number; effectiveLastPlayed?: number; syncedAt: number }
 /**
@@ -486,7 +479,6 @@ export interface GameArt { hero: string[]; logo: string[]; /** Licence and credi
 /** Logo placements accepted by `art.setLogoLayout` (the backend rejects anything else). */
 export const logoPositions = ['bottom-left', 'top-center', 'center', 'bottom-center'] as const
 export type LogoPosition = typeof logoPositions[number]
-/** Inclusive range accepted for `GamePageCustom.logoScale`. */
 export const logoScaleRange = { min: 0.5, max: 2 } as const
 /**
  * A game's page customization. `hero` / `logo` are absent when the automatic art is used;
@@ -495,9 +487,7 @@ export const logoScaleRange = { min: 0.5, max: 2 } as const
  * (`bottom-left`, `1`).
  */
 export interface GamePageCustom { hero?: string; logo?: string; logoPosition: LogoPosition; logoScale: number }
-/** `art.get()` result: candidates (a custom choice already first) plus the customization. */
 export interface GamePageArt extends GameArt { custom: GamePageCustom }
-/** Payload of `art.onChanged`. */
 export interface ArtChangedEvent { gameId: string }
 /**
  * Game page art and its customization. Every mutation resolves with the game's updated
@@ -535,7 +525,6 @@ export interface ArtAPI {
 export interface UpdateInfo { available: boolean; currentVersion: string; version?: string; date?: number; notes?: string }
 /** `updates.onProgress`: bytes downloaded so far; `total` when the server sent a size. Throttled. */
 export interface UpdateProgress { downloaded: number; total?: number }
-/** Settings pages `settings.open(section)` can show. */
 export type SettingsSection = 'updates' | 'cover-art' | 'metadata' | 'api-keys' | 'accounts'
 /**
  * Signed updates (all work happens in the backend; one check or install at a time, a concurrent
@@ -634,7 +623,6 @@ export interface AccountsAPI {
   submitCode(store: AccountStore, code: string): Promise<AccountStatus[]>
   onChanged(callback: (statuses: AccountStatus[]) => void): () => void
 }
-/** A store the first-time setup asks about. */
 export type SetupStore = 'steam' | 'epic' | 'gog' | 'xbox' | 'battlenet' | 'ea' | 'ubisoft' | 'itch'
 export type SetupChoice = 'signin' | 'installed' | 'skip'
 export interface SetupState { version: number; completedAt?: number; skippedAt?: number; choices: Partial<Record<SetupStore, SetupChoice>> }
@@ -672,7 +660,6 @@ export interface IgdbBulkProgress { running: boolean; done: number; total: numbe
 export interface IgdbMetadataEvent { gameId: string; changed: boolean }
 export interface IgdbAPI {
   status(): Promise<IgdbCredentialStatus>
-  /** Saves the non-empty fields; an empty field keeps the stored value. */
   saveCredentials(clientId: string, clientSecret: string): Promise<IgdbCredentialStatus>
   clearCredentials(): Promise<IgdbCredentialStatus>
   test(): Promise<IgdbTestResult>
@@ -714,7 +701,6 @@ import type { NotesAPI } from './notes-types'
 export interface StorageEntry { gameId: string; title: string; store: Store; lastPlayed?: number; bytes?: number; installPath?: string; measuredAt?: number; /** The size is a lower bound. */ partial: boolean; /** `manifest` = Steam's own figure. */ source?: 'manifest' | 'scan'; /** What "Uninstall..." hands off to; absent = no hand-off for this game. */ uninstall?: { routeIndex: number; launcher: string; kind: 'uninstall' | 'library' | 'apps' } }
 export interface StorageReport { entries: StorageEntry[]; totalBytes: number }
 export interface StorageProgress { done: number; total: number; title: string }
-/** A game first discovered recently and not yet dismissed from the "Recently added" shelf. */
 export interface RecentGame { gameId: string; addedAt: number }
 /** Statistics (`stats_summary`). Playtime is in seconds; percents are 0 to 100. */
 export interface StatsTopGame { gameId: string; title: string; /** What counts: the larger of tracked and store-reported time. */ seconds: number; trackedSeconds: number; storeSeconds?: number; /** The store `storeSeconds` came from, e.g. "Steam". */ storeSource?: string; percent: number; store: string; cover?: string }
@@ -726,7 +712,6 @@ export interface StatsSummary {
   completion: { played: number; notPlayed: number }
   top: StatsTopGame[]
   library: Array<{ name: string; count: number; percent: number }>
-  /** Stores whose reported time is part of the figures. */
   storeSources: string[]
 }
 export interface LobbyAPI {
@@ -746,7 +731,6 @@ export interface LobbyAPI {
      */
     addLocalGame(): Promise<AddedLocalGame | null> }
   settings: { get(): Promise<Settings>; save(settings: Partial<Settings>): Promise<Settings>; onChanged(callback: (settings: Settings) => void): () => void
-    /** Shows Settings (inside the main window), optionally on a given section. */
     open(section?: SettingsSection): Promise<void>
     /** Rust asked the main window to show Settings (`section` is null for the page last shown). */
     onOpen(callback: (section: SettingsSection | null) => void): () => void }

@@ -6,7 +6,6 @@ import type { SteamGridDbCover, SteamGridDbCoverPage } from '../shared/types'
 export type SgdbPickerKind = 'grid' | 'hero' | 'logo'
 export type SgdbPickerState = 'idle' | 'loading' | 'ready' | 'nokey' | 'error'
 
-/** Highest page the backend accepts (0-based). */
 const MAX_PAGE = 50
 /** Pages already fetched this session, by kind, game, search settings and page number. */
 const pageCache = new Map<string, SteamGridDbCoverPage>()
@@ -80,7 +79,6 @@ export function useSgdbPages(kind: SgdbPickerKind, gameId: string, settingsKey =
   return { state, covers, hasMore, loadingMore, error, start, loadMore, reset }
 }
 
-/** "Showing N" with a Load more button, or a note that there is nothing more. */
 export function LoadMore({ shown, hasMore, loading, onMore, noun }: { shown: number; hasMore: boolean; loading: boolean; onMore(): void; noun: string }) {
   return <div className="sgdb-more" role="status" aria-live="polite">
     <span>Showing {shown} {noun}{shown === 1 ? '' : 's'}</span>
@@ -122,7 +120,6 @@ function CoverTile({ cover, kind, disabled, onApply }: { cover: SteamGridDbCover
   </button>
 }
 
-/** The SteamGridDB cover grid: fixed 2:3 tiles with a skeleton until each preview has loaded. */
 export function CoverTiles({ covers, animated, applying, onApply }: { covers: SteamGridDbCover[]; animated: boolean; applying: boolean; onApply(cover: SteamGridDbCover): void }) {
   return <div className={'sgdb-grid' + (applying ? ' busy' : '')} aria-busy={applying}>
     {covers.map(cover => {

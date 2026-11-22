@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
 
-/** Re-renders the caller every second while `active`; returns the current time (ms). */
 export function useNow(active: boolean): number {
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {

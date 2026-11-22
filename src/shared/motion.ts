@@ -8,13 +8,11 @@ export const EASE_MOVE = 'cubic-bezier(.65,0,.35,1)'
 
 export interface Rect { left: number; top: number; width: number; height: number }
 
-/** How much motion the user wants: everything, short fades only, or none. */
 export type MotionPreferenceValue = 'system' | 'full' | 'reduced' | 'off'
 export type MotionLevel = 'full' | 'reduced' | 'off'
 
 /** Duration of the short fade used instead of movement when motion is reduced. */
 export const REDUCED_MS = 80
-/** The game page's fade when motion is reduced. */
 export const REDUCED_PAGE_MS = 120
 
 /**
@@ -52,14 +50,11 @@ export const OPEN = {
   noCardMs: 300, noCardScale: 0.96, decodeCapMs: 120
 } as const
 
-/** Timing of the game page closing. */
 export const CLOSE = { contentMs: 120, shrinkDelayMs: 70, shrinkMs: 340, coverFadeMs: 140, undimMs: 340, undimFrom: 0.55, centerMs: 300, centerScale: 0.5 } as const
 
-/** Start delays for a cascade of `count` items. */
 export const cascadeDelays = (count: number, startMs: number, staggerMs: number): number[] =>
   Array.from({ length: Math.max(0, count) }, (_, index) => startMs + index * staggerMs)
 
-/** When the whole opening sequence has finished, given how many items cascade in. */
 export const openTotalMs = (cascadeCount: number): number => Math.max(
   OPEN.zoomDelayMs + OPEN.zoomMs,
   OPEN.cascadeStartMs + Math.max(0, cascadeCount - 1) * OPEN.cascadeStaggerMs + OPEN.cascadeMs
@@ -67,7 +62,6 @@ export const openTotalMs = (cascadeCount: number): number => Math.max(
 
 export const rectOf = (box: Rect): Rect => ({ left: box.left, top: box.top, width: box.width, height: box.height })
 
-/** Whether a rect has a usable size and lies mostly inside the viewport/container `within`. */
 export function isRectVisible(rect: Rect, within: Rect, minShare = 0.6): boolean {
   if (!(rect.width > 0) || !(rect.height > 0)) return false
   const overlapW = Math.min(rect.left + rect.width, within.left + within.width) - Math.max(rect.left, within.left)
@@ -76,7 +70,6 @@ export function isRectVisible(rect: Rect, within: Rect, minShare = 0.6): boolean
   return (overlapW * overlapH) / (rect.width * rect.height) >= minShare
 }
 
-/** The centre of a rect. */
 export const centerOf = (rect: Rect) => ({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 })
 
 /**

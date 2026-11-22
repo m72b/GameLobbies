@@ -2,7 +2,6 @@ import { CLOSE, EASE_MOVE, OPEN, REDUCED_PAGE_MS, cascadeDelays, centerOf, cover
 import { EASE, currentMotion } from './motion'
 import { cssUrl } from './cover'
 
-/** Where a game page opens from: the clicked poster's box on screen and its cover. */
 export interface ZoomOrigin { rect: Rect; src?: string; radius: number }
 
 /*
@@ -108,7 +107,6 @@ export function captureLibrary(main: HTMLElement | null) {
   backdrop = shell
 }
 
-/** A clip layer (see the note at the top): the pieces to animate. */
 function clipLayer(bounds: Rect, base: Rect, src: string | undefined) {
   const root = overlay('zoom-layer', bounds)
   const lift = document.createElement('div')
@@ -127,7 +125,6 @@ function clipLayer(bounds: Rect, base: Rect, src: string | undefined) {
   return { root, lift, clip, art }
 }
 
-/** Animates a clip layer so its window goes from `from` to `to` (screen rects) while the art covers it. */
 function growClip(layer: ReturnType<typeof clipLayer>, bounds: Rect, base: Rect, from: Rect, to: Rect, radii: [number, number], ms: number, delay: number) {
   const rel = (rect: Rect, radius: number) => insetClip(relativeTo(rect, bounds), bounds.width, bounds.height, radius)
   layer.clip.style.clipPath = rel(from, radii[0])
@@ -259,7 +256,6 @@ export function zoomOut(from: Rect, src: string | undefined, target: { rect: Rec
   for (const part of library) animate(part, [{ opacity: CLOSE.undimFrom }, { opacity: 1 }], CLOSE.undimMs, { fill: 'backwards' })
 }
 
-/** Fades the given elements in (a short, plain ease-out), e.g. the library as the page leaves. */
 export function fadeIn(elements: Element[], ms = 140) {
   const level = currentMotion()
   const length = level === 'off' ? 0 : level === 'reduced' ? Math.min(ms, 80) : ms

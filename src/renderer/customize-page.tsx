@@ -164,7 +164,6 @@ export function CustomizePanel({ game, custom, heroSrc, logoSrc, layout, onLayou
   wiki?: WikiView
   /** The SteamGridDB filters in effect (keys the session cache of picker pages). */
   sgdbSettingsKey?: string
-  /** The "Include animated covers" setting: whether video previews may play. */
   animated?: boolean
   custom: GamePageCustom
   heroSrc?: string

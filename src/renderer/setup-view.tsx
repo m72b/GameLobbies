@@ -16,7 +16,6 @@ const stepTitles: Record<SetupStep, string> = {
   folders: 'Library folders', keys: 'Optional keys', done: 'All set'
 }
 
-/** StoreIcon names for the setup's stores. */
 const iconName: Record<SetupStore, string> = { steam: 'Steam', epic: 'Epic Games', gog: 'GOG', xbox: 'Xbox', battlenet: 'Battle.net', ea: 'EA app', ubisoft: 'Ubisoft', itch: 'itch.io' }
 
 /**

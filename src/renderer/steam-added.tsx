@@ -3,7 +3,6 @@ import { formatDate, formatTime } from './format'
 import { addedLabel, sourceName } from '../shared/store-time'
 import type { StoreAddition } from '../shared/sessions'
 
-/** The store pill ("Steam", "GOG") of the read-only "Added from …" activity entry. */
 export const SteamTag = ({ source }: { source?: StoreAddition['source'] }) => <span className="gp-tag gp-tag-steam"><StoreIcon store={sourceName(source)} size={11} /> {sourceName(source)}</span>
 
 /** The text block of the entry: label with the hours, dated at the last sync. */
