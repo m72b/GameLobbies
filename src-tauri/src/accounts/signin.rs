@@ -1558,8 +1558,9 @@ mod tests {
             assert!(!browser_url_ok(&Url::parse(bad).unwrap()), "{bad}");
         }
         // The browser gets only the URL built here, opened by Rust (never by the renderer):
-        // bound to 127.0.0.1, built from Expected, checked, then shell_open.
-        let source = include_str!("signin.rs");
+        // bound to 127.0.0.1, built from Expected, checked, then shell_open. Line endings are
+        // normalised so the "\n}\n" function-end search also works on a CRLF checkout (CI).
+        let source = include_str!("signin.rs").replace("\r\n", "\n");
         let browser = &source[source.find("async fn start_browser").unwrap()..];
         let browser = &browser[..browser.find("\n}\n").unwrap_or(browser.len())];
         let at = |needle: &str| browser.find(needle).unwrap_or_else(|| panic!("{needle}"));
