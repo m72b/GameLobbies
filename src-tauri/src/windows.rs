@@ -72,7 +72,17 @@ fn is_app_page(url: &Url) -> bool {
 
 /// The user guide, the only page of github.com that the app's links may open (any section of
 /// it). Exact path, no query: the rest of github.com stays closed.
-pub const USER_GUIDE: &str = "https://github.com/m72b/GameLobby/blob/main/docs/USER-GUIDE.md";
+pub const USER_GUIDE: &str = concat!(
+    "https://github.com/",
+    github_repo!(),
+    "/blob/main/docs/USER-GUIDE.md"
+);
+/// The same page under the repository's name before the rename (GitHub redirects it).
+const LEGACY_USER_GUIDE: &str = concat!(
+    "https://github.com/",
+    legacy_github_repo!(),
+    "/blob/main/docs/USER-GUIDE.md"
+);
 
 fn is_allowed_external(url: &Url) -> bool {
     let plain = url.scheme() == "https"
@@ -83,7 +93,9 @@ fn is_allowed_external(url: &Url) -> bool {
     let listed = host.as_deref().is_some_and(|h| EXTERNAL_HOSTS.contains(&h));
     let guide = host.as_deref() == Some("github.com")
         && url.query().is_none()
-        && Some(url.path()) == Url::parse(USER_GUIDE).ok().as_ref().map(Url::path);
+        && [USER_GUIDE, LEGACY_USER_GUIDE]
+            .iter()
+            .any(|page| Some(url.path()) == Url::parse(page).ok().as_ref().map(Url::path));
     plain && (listed || guide)
 }
 
@@ -230,9 +242,23 @@ mod tests {
     fn only_the_user_guide_opens_on_github() {
         let ok = |u: &str| is_allowed_external(&Url::parse(u).unwrap());
         assert!(ok(USER_GUIDE));
+        assert_eq!(
+            USER_GUIDE,
+            "https://github.com/m72b/GameLobbies/blob/main/docs/USER-GUIDE.md"
+        );
         assert!(ok(&format!("{USER_GUIDE}#launch-options-on-a-launcher")));
+        // The renderer's link (src/shared/routes.ts) is to this page.
+        let routes = include_str!("../../src/shared/routes.ts");
+        assert!(routes.contains(&format!("'{USER_GUIDE}#launch-options'")));
+        // The page under the repository's old name still opens (GitHub redirects it).
+        assert!(ok(
+            "https://github.com/m72b/GameLobby/blob/main/docs/USER-GUIDE.md#launch-options"
+        ));
         assert!(ok("https://www.steamgriddb.com/profile/preferences/api"));
         for bad in [
+            "https://github.com/m72b/GameLobbies",
+            "https://github.com/m72b/GameLobbies/blob/main/docs/USER-GUIDE.md?x=1",
+            "https://github.com/m72b/GameLobbies/blob/main/README.md",
             "https://github.com/m72b/GameLobby",
             "https://github.com/evil/repo/blob/main/docs/USER-GUIDE.md",
             "https://github.com/m72b/GameLobby/blob/main/docs/USER-GUIDE.md?x=1",

@@ -55,7 +55,7 @@ export function routeRef(route: Pick<GameRoute, 'sourceId' | 'launchTarget'>, in
 export type ArgsSupport = { ok: true; launcher?: string } | { ok: false; reason: string }
 
 /** The user guide's section on launch options (opened in the browser; the only github.com page the app may open). */
-export const LAUNCH_OPTIONS_HELP = 'https://github.com/m72b/GameLobby/blob/main/docs/USER-GUIDE.md#launch-options'
+export const LAUNCH_OPTIONS_HELP = 'https://github.com/m72b/GameLobbies/blob/main/docs/USER-GUIDE.md#launch-options'
 
 /**
  * Whether a route can take launch options, mirroring the backend's `links::args_host` (which decides

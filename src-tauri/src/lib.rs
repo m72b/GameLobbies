@@ -1,4 +1,23 @@
-//! Game Lobby — a unified local game library and launcher (Tauri backend).
+//! GameLobbies — a unified local game library and launcher (Tauri backend).
+
+/// The GitHub repository (`owner/name`) the app links to and names in its User-Agent. A macro so
+/// `concat!` can use it. When it changes, also change the first update endpoint in
+/// `tauri.conf.json` and `RELEASE_REPO` in `.github/workflows/release.yml` (a test checks that
+/// they agree); see docs/RELEASING.md.
+macro_rules! github_repo {
+    () => {
+        "m72b/GameLobbies"
+    };
+}
+
+/// The repository's name up to 0.9.0. Installed copies of 0.4.0–0.9.0 read their updates from it
+/// and accept installers only under its `/releases/download/` path; GitHub redirects it to
+/// [`github_repo`] after the rename, so update manifests keep using it (docs/RELEASING.md).
+macro_rules! legacy_github_repo {
+    () => {
+        "m72b/GameLobby"
+    };
+}
 
 mod accounts;
 mod applog;

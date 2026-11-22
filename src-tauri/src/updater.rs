@@ -237,8 +237,9 @@ async fn check(app: &AppHandle, updates: &Updates) -> Result<UpdateInfo, Failure
     let mut found = result.map_err(|e| describe(&e))?;
     if let Some(update) = found.as_mut() {
         // Only installers published in the configured releases repository are downloaded.
-        let allowed = configured_download_prefix(app)
-            .is_some_and(|prefix| download_url_allowed(update.download_url.as_str(), &prefix));
+        let allowed = configured_download_prefixes(app)
+            .iter()
+            .any(|prefix| download_url_allowed(update.download_url.as_str(), prefix));
         if !allowed {
             *updates.pending() = None;
             return Err(Failure::UntrustedLocation);
@@ -315,18 +316,22 @@ async fn with_size_limit<F: Future>(
     }
 }
 
-/// `/<owner>/<repo>/releases/download/` for the configured update endpoint.
-fn configured_download_prefix(app: &AppHandle) -> Option<String> {
-    let endpoint = app
-        .config()
+/// `/<owner>/<repo>/releases/download/` for each configured update endpoint: the repository
+/// and, until no installed copy reads it, its name before the rename ([`legacy_github_repo`]).
+fn configured_download_prefixes(app: &AppHandle) -> Vec<String> {
+    let config = app.config();
+    let endpoints = config
         .plugins
         .0
-        .get("updater")?
-        .get("endpoints")?
-        .as_array()?
-        .first()?
-        .as_str()?;
-    download_prefix(endpoint)
+        .get("updater")
+        .and_then(|u| u.get("endpoints"))
+        .and_then(serde_json::Value::as_array);
+    download_prefixes(
+        endpoints
+            .into_iter()
+            .flatten()
+            .filter_map(serde_json::Value::as_str),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -348,6 +353,17 @@ pub fn download_prefix(endpoint: &str) -> Option<String> {
     let owner = segments.next().filter(|s| !s.is_empty())?;
     let repo = segments.next().filter(|s| !s.is_empty())?;
     Some(format!("/{owner}/{repo}/releases/download/"))
+}
+
+/// [`download_prefix`] of each endpoint that has one, without duplicates, in order.
+pub fn download_prefixes<'a>(endpoints: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+    let mut prefixes: Vec<String> = Vec::new();
+    for prefix in endpoints.into_iter().filter_map(download_prefix) {
+        if !prefixes.contains(&prefix) {
+            prefixes.push(prefix);
+        }
+    }
+    prefixes
 }
 
 /// True when an installer URL from the (unsigned) manifest is a release asset of the
@@ -999,30 +1015,53 @@ mod tests {
         let config = json_file("tauri.conf.json");
         let updater = &config["plugins"]["updater"];
         let endpoints = updater["endpoints"].as_array().expect("endpoints");
-        assert!(!endpoints.is_empty());
-        for endpoint in endpoints {
-            let url = url::Url::parse(endpoint.as_str().unwrap()).unwrap();
+        // The repository first, then its name before the rename (which GitHub redirects): the
+        // updater tries them in order, and installers are accepted from either one's releases.
+        let endpoints: Vec<&str> = endpoints.iter().map(|e| e.as_str().unwrap()).collect();
+        assert_eq!(
+            endpoints,
+            [
+                concat!(
+                    "https://github.com/",
+                    github_repo!(),
+                    "/releases/latest/download/latest.json"
+                ),
+                concat!(
+                    "https://github.com/",
+                    legacy_github_repo!(),
+                    "/releases/latest/download/latest.json"
+                ),
+            ]
+        );
+        for endpoint in &endpoints {
+            let url = url::Url::parse(endpoint).unwrap();
             assert_eq!(url.scheme(), "https", "{url}");
             assert_eq!(url.host_str(), Some("github.com"), "{url}");
-            assert!(url.path().starts_with("/m72b/GameLobby/"), "{url}");
             assert!(url.query().is_none() && url.username().is_empty(), "{url}");
-            // Installers are accepted only from this repository's release downloads.
-            assert_eq!(
-                download_prefix(url.as_str()).as_deref(),
-                Some("/m72b/GameLobby/releases/download/")
-            );
         }
-        // The release workflow publishes to the same repository the app reads from.
+        assert_eq!(
+            download_prefixes(endpoints.iter().copied()),
+            [
+                concat!("/", github_repo!(), "/releases/download/"),
+                concat!("/", legacy_github_repo!(), "/releases/download/"),
+            ]
+        );
+        // The release workflow publishes to the repository it runs in, the one the app reads
+        // from, and writes installer URLs under the old name for installed 0.4.0–0.9.0 copies.
         let workflow = std::fs::read_to_string(
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../.github/workflows/release.yml"),
         )
         .unwrap();
-        let release_repo = workflow
-            .lines()
-            .find_map(|line| line.trim().strip_prefix("RELEASE_REPO:"))
-            .expect("RELEASE_REPO in release.yml")
-            .trim();
-        assert_eq!(release_repo, "m72b/GameLobby");
+        let env_value = |name: &str| {
+            workflow
+                .lines()
+                .find_map(|line| line.trim().strip_prefix(name))
+                .unwrap_or_else(|| panic!("{name} in release.yml"))
+                .trim()
+                .to_string()
+        };
+        assert_eq!(env_value("RELEASE_REPO:"), github_repo!());
+        assert_eq!(env_value("DOWNLOAD_REPO:"), legacy_github_repo!());
         // The public key decodes to a minisign public key.
         let pubkey = updater["pubkey"].as_str().expect("pubkey");
         use base64::Engine;
@@ -1130,5 +1169,48 @@ mod tests {
             r#"'"$INSTDIR\${{MAINBINARYNAME}}.exe" {}'"#,
             crate::autostart::FLAG
         )));
+    }
+
+    /// The installer URL the release workflow writes (updater-manifest.mjs with DOWNLOAD_REPO)
+    /// must pass both the check of installed 0.4.0–0.9.0 copies, whose only prefix comes from
+    /// their single endpoint under the old name, and this build's.
+    #[test]
+    fn manifest_urls_under_the_old_name_pass_old_and_new_clients() {
+        let url = concat!(
+            "https://github.com/",
+            legacy_github_repo!(),
+            "/releases/download/v1.0.0/GameLobbies_1.0.0_x64-setup.exe"
+        );
+        let old_prefix = download_prefix(
+            "https://github.com/m72b/GameLobby/releases/latest/download/latest.json",
+        )
+        .unwrap();
+        assert!(download_url_allowed(url, &old_prefix));
+        let config = json_file("tauri.conf.json");
+        let endpoints = config["plugins"]["updater"]["endpoints"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e.as_str().unwrap());
+        let prefixes = download_prefixes(endpoints);
+        assert!(prefixes.iter().any(|p| download_url_allowed(url, p)));
+        // A URL under the new name would be refused by the old copies (exact path prefix), so
+        // the manifest must not use it while they are around.
+        let renamed = concat!(
+            "https://github.com/",
+            github_repo!(),
+            "/releases/download/v1.0.0/GameLobbies_1.0.0_x64-setup.exe"
+        );
+        assert!(!download_url_allowed(renamed, &old_prefix));
+        assert!(prefixes.iter().any(|p| download_url_allowed(renamed, p)));
+        // Duplicates and endpoints that are not GitHub release paths add nothing.
+        assert_eq!(
+            download_prefixes([
+                "https://github.com/a/b/releases/latest/download/latest.json",
+                "https://example.com/a/b/latest.json",
+                "https://github.com/a/b/releases/latest/download/other.json",
+            ]),
+            ["/a/b/releases/download/"]
+        );
     }
 }

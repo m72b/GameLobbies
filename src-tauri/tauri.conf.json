@@ -37,7 +37,10 @@
   "plugins": {
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDAzN0M2RDRFQzk4ODVGMDQKUldRRVg0akpUbTE4QTQ2a2FrM0F2eisyQkFnTXkzYXc5S1g4aEZ5R25tTUwxa2FoU25Ja1M5ci8K",
-      "endpoints": ["https://github.com/m72b/GameLobby/releases/latest/download/latest.json"],
+      "endpoints": [
+        "https://github.com/m72b/GameLobbies/releases/latest/download/latest.json",
+        "https://github.com/m72b/GameLobby/releases/latest/download/latest.json"
+      ],
       "requireSignedVersion": true,
       "windows": { "installMode": "passive" }
     }

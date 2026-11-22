@@ -2,7 +2,8 @@ name: Release
 
 # Builds the Windows installer for a version tag, signs it, and publishes it with the updater
 # manifest (latest.json) as a GitHub release in RELEASE_REPO. The app checks
-# https://github.com/<RELEASE_REPO>/releases/latest/download/latest.json (tauri.conf.json).
+# https://github.com/<RELEASE_REPO>/releases/latest/download/latest.json, and copies up to 0.9.0
+# check the same path under DOWNLOAD_REPO, which GitHub redirects (tauri.conf.json).
 #
 # Jobs, each with only what it needs:
 #   build    no secrets; installs dependencies without install scripts and builds the installer
@@ -27,9 +28,15 @@ on:
         required: true
 
 env:
-  # Where releases are published. Changing it also needs the endpoint in
-  # src-tauri/tauri.conf.json and the config test in src-tauri/src/updater.rs (see README).
-  RELEASE_REPO: m72b/GameLobby
+  # Where releases are published: this repository (then the built-in GITHUB_TOKEN is used).
+  # Changing it also needs github_repo! in src-tauri/src/lib.rs and the first endpoint in
+  # src-tauri/tauri.conf.json; a test in src-tauri/src/updater.rs checks that they agree.
+  RELEASE_REPO: m72b/GameLobbies
+  # The repository path written into latest.json for the installer download: the name before the
+  # rename, which GitHub redirects to RELEASE_REPO. Installed 0.4.0-0.9.0 copies accept
+  # installers only under /m72b/GameLobby/releases/download/. Never create a repository named
+  # GameLobby on this account: it would end that redirect (docs/RELEASING.md).
+  DOWNLOAD_REPO: m72b/GameLobby
   TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
 
 permissions: {}
@@ -92,7 +99,7 @@ jobs:
               | sed '/^-----BEGIN \(PGP\|SSH\) SIGNATURE-----/,$d' > "$notes"
           fi
           if [ -z "$(tr -d '[:space:]' < "$notes")" ]; then
-            echo "Game Lobby ${TAG#v}" > "$notes"
+            echo "GameLobbies ${TAG#v}" > "$notes"
           fi
           cat "$notes"
 
@@ -251,7 +258,7 @@ jobs:
           if [[ "$VERSION" == *-* ]]; then prerelease=(--prerelease); fi
           gh release create "v$VERSION" --repo "$RELEASE_REPO" \
             "release/$ASSET" "release/$ASSET.sig" release/latest.json \
-            --title "Game Lobby $VERSION" --notes-file release/notes.txt "${prerelease[@]}"
+            --title "GameLobbies $VERSION" --notes-file release/notes.txt "${prerelease[@]}"
 
   # Publishing to this repository: the built-in token, with write access in this job only.
   publish-here:
@@ -275,4 +282,4 @@ jobs:
           if [[ "$VERSION" == *-* ]]; then prerelease=(--prerelease); fi
           gh release create "v$VERSION" --repo "$RELEASE_REPO" \
             "release/$ASSET" "release/$ASSET.sig" release/latest.json \
-            --title "Game Lobby $VERSION" --notes-file release/notes.txt "${prerelease[@]}"
+            --title "GameLobbies $VERSION" --notes-file release/notes.txt "${prerelease[@]}"

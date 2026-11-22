@@ -17,9 +17,11 @@ pub const API_HOSTS: [&str; 4] = [
 ];
 /// Wikimedia asks automated clients to identify themselves (no personal data in it).
 pub const USER_AGENT: &str = concat!(
-    "GameLobby/",
+    "GameLobbies/",
     env!("CARGO_PKG_VERSION"),
-    " (https://github.com/m72b/GameLobby)"
+    " (https://github.com/",
+    github_repo!(),
+    ")"
 );
 /// Minimum gap between two requests (Wikimedia asks for serial, unhurried clients).
 pub const SPACING: Duration = Duration::from_millis(300);
@@ -549,8 +551,8 @@ pub mod tests {
         ] {
             assert!(!ok(bad), "{bad}");
         }
-        assert!(USER_AGENT.starts_with("GameLobby/"));
-        assert!(USER_AGENT.ends_with("(https://github.com/m72b/GameLobby)"));
+        assert!(USER_AGENT.starts_with("GameLobbies/"));
+        assert!(USER_AGENT.ends_with("(https://github.com/m72b/GameLobbies)"));
     }
 
     #[test]
