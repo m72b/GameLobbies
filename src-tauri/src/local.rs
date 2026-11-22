@@ -75,19 +75,15 @@ use std::time::Instant;
 
 pub const ROM_SOURCE: &str = "rom";
 pub const LOCAL_SOURCE: &str = "local";
-/// Review items of one kind kept per root and scan.
 const MAX_REVIEW_PER_KIND: usize = 200;
 const MAX_SAMPLES: usize = 20;
 
-/// `library-scan:progress` payload.
 #[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Progress {
     /// `"emulators"`, `"games"`, `"library"` (saving and checking duplicates) or `"done"`.
     pub phase: &'static str,
-    /// The root being scanned (its path); empty for the library phase.
     pub root: String,
-    /// Entries looked at so far in this root.
     pub processed: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub total: Option<usize>,
@@ -121,7 +117,6 @@ pub struct RootOutcome {
     pub full: bool,
 }
 
-/// The user-facing text for a scan that stopped at its entry cap.
 pub fn truncation_notice(path: &str, kind: &str, cap: usize, full: bool) -> String {
     let what = if kind == "emulators" {
         "Emulators"
@@ -166,7 +161,6 @@ pub struct GameCounts {
     /// Launcher games folders: routes added to games already in the library.
     #[serde(default)]
     pub routes_added: usize,
-    /// ROMs found whose system an enabled emulator runs (or that were matched to one).
     #[serde(default)]
     pub roms_matched: usize,
     /// Review items this scan left open for its roots (choose an executable or emulator,
@@ -266,7 +260,6 @@ fn launcher_target(
     }
 }
 
-/// How one root's finds become routes (see the module docs).
 #[derive(Clone, Copy)]
 pub enum RootMode<'a> {
     /// An ordinary library folder.
@@ -353,7 +346,6 @@ fn attach_to_existing(conn: &Connection, games: &mut [Game]) -> Result<HashSet<u
     Ok(attached)
 }
 
-/// A route that plays a file on this PC: local, ROM or custom launcher.
 fn is_file_route(route: &GameRoute) -> bool {
     route.source_id == LOCAL_SOURCE
         || route.source_id == ROM_SOURCE
@@ -389,7 +381,6 @@ fn scan_inputs(conn: &Connection) -> Result<ScanInputs> {
     })
 }
 
-/// Route identities in the library with their install state (identity → installed, target).
 fn known_routes(conn: &Connection) -> Result<HashMap<String, (bool, String)>> {
     Ok(db::all_games(conn)?
         .into_iter()
@@ -824,7 +815,6 @@ fn non_empty_key(route: &GameRoute) -> String {
         .unwrap_or_else(|| route.launch_target.to_lowercase())
 }
 
-/// Games of one (system, title) group: game id → (title, launch targets).
 type DuplicateGroup = BTreeMap<String, (String, Vec<String>)>;
 
 /// Recomputes `duplicate` review items over the whole library: installed ROM/PC routes of
@@ -1267,23 +1257,27 @@ pub fn remove_launcher_root(
 // ---------------------------------------------------------------------------
 // Review resolution
 
-/// How to resolve a review item (`review.resolve`).
 #[derive(Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "action", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum Resolution {
     /// `duplicate`: the games are different; never ask again for this set.
     KeepSeparate,
     /// Any kind: never scan `path` again (one of the item's paths or its folder).
-    Ignore { path: String },
+    Ignore {
+        path: String,
+    },
     /// `ambiguous-exe`: use `executable` (one of the item's candidates) for the folder.
-    ChooseExe { executable: String },
+    ChooseExe {
+        executable: String,
+    },
     /// `shortcut`: the user checked the shortcut's target and arguments; add the game. Fails
     /// when the shortcut changed since the item was made.
     ConfirmShortcut,
     /// `uncertain-rom`: play the ROM with `emulatorId` (one of the item's listed emulators).
     #[serde(rename_all = "camelCase")]
-    ChooseEmulator { emulator_id: String },
-    /// Any kind: close without changes.
+    ChooseEmulator {
+        emulator_id: String,
+    },
     Dismiss,
 }
 
@@ -1773,7 +1767,6 @@ pub fn folder_format_system(file: &Path) -> Option<&'static catalog::System> {
     named.or_else(|| found.iter().max_by_key(|(_, len)| *len).map(|f| f.0))
 }
 
-/// What a chosen file (`library.addLocalGame`) becomes.
 #[derive(Debug)]
 pub enum LocalFile {
     Game(Game),
@@ -1849,7 +1842,6 @@ pub fn game_for_file(
     Ok(LocalFile::Game(new_game("rom", &title, "Emulator", route)))
 }
 
-/// File dialog extensions for `addLocalGame` (without dots).
 pub fn pickable_extensions() -> Vec<String> {
     let mut exts: Vec<String> = vec!["exe".into(), "lnk".into(), "url".into()];
     for system in catalog::SYSTEMS {
@@ -1863,7 +1855,6 @@ pub fn pickable_extensions() -> Vec<String> {
     exts
 }
 
-/// Sets (or with `None` clears back to automatic) a ROM route's emulator.
 pub fn set_emulator(
     conn: &Connection,
     game_id: &str,
@@ -2805,7 +2796,6 @@ mod tests {
     // -----------------------------------------------------------------------
     // Launcher games folders
 
-    /// A launcher with a program (`exe`) or, with `None`, a label-only one.
     fn save_launcher(f: &Fixture, exe: Option<&Path>, kinds: &[&str]) -> CustomLauncher {
         let l = launchers::validate(CustomLauncher {
             id: if exe.is_some() { "prog" } else { "app" }.into(),

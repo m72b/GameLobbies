@@ -24,7 +24,6 @@ use std::time::{Duration, Instant};
 /// How long Continue stays possible (time to start a launcher and sign in).
 pub const PENDING_LIFETIME: Duration = Duration::from_secs(5 * 60);
 
-/// A launch waiting for its launcher.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Pending {
     pub game_id: String,
@@ -48,7 +47,6 @@ struct Entry {
 
 #[derive(Debug, Default)]
 pub struct PendingLaunches {
-    /// By game id: one per game.
     entries: Mutex<HashMap<String, Entry>>,
 }
 

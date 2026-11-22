@@ -583,7 +583,6 @@ async fn add_label_only_game(
 // ---------------------------------------------------------------------------
 // Assigning games already in the library (the game page's Launcher block)
 
-/// A way to pass a game to a launcher, from one of its routes (`launchers::AssignCandidate`).
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AssignTarget {
@@ -600,12 +599,10 @@ pub struct AssignmentOption {
     launcher_id: String,
     /// The game shows under this launcher (any way: Add game, a games folder, the game page).
     listed: bool,
-    /// The game page added it (`launchers_unassign` removes it).
     assigned: bool,
     /// For a launcher with a program: the targets it can use (existing files and folders only),
     /// the first being the default.
     targets: Vec<AssignTarget>,
-    /// Why it can't be assigned, when it can't.
     problem: Option<String>,
 }
 
@@ -624,7 +621,6 @@ fn route_arg(value: Option<i64>) -> CmdResult<Option<usize>> {
     }
 }
 
-/// Every launcher, as seen from game `gameId`'s page (see [`AssignmentOption`]).
 #[tauri::command]
 pub async fn launchers_assignments(
     state: State<'_, AppState>,
@@ -777,10 +773,8 @@ pub async fn launchers_link(
     })
 }
 
-/// What [`assign_game`] did.
 struct Assigned {
     games: Vec<Game>,
-    /// The target of the new launch route (none for a launcher without a program).
     candidate: Option<launchers::AssignCandidate>,
     /// Whether the native dialog was shown (and confirmed).
     #[cfg_attr(not(test), allow(dead_code))]

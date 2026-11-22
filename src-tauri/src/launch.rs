@@ -497,7 +497,6 @@ pub fn prepare_emulator_launch(
     Ok((exe.to_path_buf(), argv, cwd))
 }
 
-/// How a `local` route starts.
 #[derive(Debug, PartialEq)]
 pub enum LocalLaunch {
     /// An `.exe`, started directly in its folder.
@@ -571,14 +570,12 @@ pub fn local_launch(
     bail!("This game can only start an .exe, a confirmed shortcut or a store link. Add it again with \"Add local game\".")
 }
 
-/// How a store route (any source but `local` and ROM routes) starts.
 #[derive(Debug, PartialEq)]
 pub enum StoreLaunch {
     /// A link that passed [`validate_launch_uri`].
     Link(String),
     /// `shell:AppsFolder\<AUMID>` (Xbox / Microsoft Store apps), opened through Explorer.
     AppsFolder,
-    /// An existing file at an absolute drive path (resolved).
     Path(PathBuf),
 }
 
@@ -637,11 +634,9 @@ fn track_started_process(state: &AppState, game_id: &str, pid: u32, exe: &Path) 
     Ok(())
 }
 
-/// What a launch did.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 #[serde(tag = "status", rename_all = "camelCase")]
 pub enum LaunchOutcome {
-    /// The game was started.
     Started,
     /// The game's "open first" launcher wasn't running: its program was started on its own and
     /// the launch waits for the user's Continue (`library_launch_continue` with `pendingId`).

@@ -189,8 +189,6 @@ async fn a_failing_service_fails_the_batch_and_nothing_is_guessed() {
     assert!(err.is_outage());
 }
 
-// -- cache ----------------------------------------------------------------
-
 fn library(ids: &[&str]) -> db::Db {
     let db = db::Db::memory().unwrap();
     for id in ids {
@@ -613,8 +611,6 @@ fn the_cover_cache_and_page_art_take_commons_uploads_only() {
     );
 }
 
-// -- review fixes ------------------------------------------------------------
-
 #[tokio::test]
 async fn an_edition_whose_game_is_missing_is_asked_for_once() {
     let body = serde_json::json!({"entities": {
@@ -818,8 +814,6 @@ fn a_rate_limit_pauses_every_request() {
     assert!(state.rate_limited());
     assert_eq!(state.api().err(), Some(WikiError::RateLimited));
 }
-
-// -- confirmation review ----------------------------------------------------------
 
 fn info_page(title: &str, licence: &str) -> serde_json::Value {
     let name = title.trim_start_matches("File:").replace(' ', "_");

@@ -35,7 +35,6 @@ pub const MAX_INPUT_NOTES_CHARS: usize = 1000;
 const MAX_GAME_ID_CHARS: usize = 512;
 const MAX_BACKUP_ROWS: usize = 100_000;
 pub const SUPPORT_LEVELS: &[&str] = &["full", "partial", "none", "unknown"];
-/// How long a Steam answer (including "nothing declared") is reused.
 pub const STEAM_TTL_MS: i64 = 7 * 24 * 3_600_000;
 const MIN_GAP: Duration = Duration::from_millis(1500);
 /// After a failed Steam request (offline, rate limited) the same game is not asked again for
@@ -55,7 +54,6 @@ pub struct Memory {
     /// `YYYY-MM-DD`.
     pub date: String,
     pub text: String,
-    /// A screenshot of this game; `None` when not linked or the screenshot is gone.
     pub screenshot_id: Option<String>,
     pub created_at: i64,
 }
@@ -342,7 +340,6 @@ fn prune_notes(conn: &Connection, game_id: &str) -> Result<()> {
     Ok(())
 }
 
-/// Sets the score (`None` clears it). The notes are left as they are.
 pub fn set_rating(conn: &Connection, game_id: &str, rating: Option<f64>) -> Result<()> {
     let rating = rating.map(valid_rating).transpose()?;
     require_game(conn, game_id)?;
@@ -354,7 +351,6 @@ pub fn set_rating(conn: &Connection, game_id: &str, rating: Option<f64>) -> Resu
     prune_notes(conn, game_id)
 }
 
-/// Sets the quick notes (empty clears them). The score is left as it is.
 pub fn set_notes(conn: &Connection, game_id: &str, notes: &str) -> Result<()> {
     let notes = valid_notes(notes)?;
     require_game(conn, game_id)?;
@@ -557,7 +553,6 @@ pub fn parse_controller_support(body: &str, app_id: &str) -> Result<Option<&'sta
     })
 }
 
-/// Whether Steam should be asked again for this game.
 pub fn steam_due(input: &GameInput, now: i64) -> bool {
     input.support_source != "user" && now - input.steam_checked_at >= STEAM_TTL_MS
 }
@@ -902,8 +897,6 @@ pub async fn input_refresh(
     let _ = app.emit("input:changed", Changed { game_id: &game_id });
     Ok(updated)
 }
-
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

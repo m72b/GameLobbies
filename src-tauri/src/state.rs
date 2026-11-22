@@ -16,15 +16,12 @@ pub struct AppState {
     pub scan_timer: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
     /// Held while library roots (emulator/ROM/PC folders) are scanned.
     pub local_scan_lock: tokio::sync::Mutex<()>,
-    /// Local cover cache (background downloads, retries).
     pub covers: crate::covercache::CacheState,
     /// IGDB access token (memory only), rate limiter and fetch bookkeeping.
     pub igdb: crate::igdb::IgdbState,
     /// Wikidata / Wikipedia / Commons request pacing and fetch bookkeeping.
     pub wikimedia: crate::wikimedia::WikimediaState,
-    /// Recent native-picker results that a later save may use (see `picks`).
     pub picks: crate::picks::PickedPaths,
-    /// Launches waiting for a custom launcher to open (see `pending_launch`).
     pub pending_launches: crate::pending_launch::PendingLaunches,
     /// Store sign-in windows and first-time setup (see `accounts`).
     pub accounts: crate::accounts::AccountsState,

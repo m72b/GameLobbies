@@ -20,9 +20,7 @@ use std::path::{Path, PathBuf};
 
 /// Most findings read from `quick_check` / `integrity_check`.
 const CHECK_LIMIT: u32 = 200;
-/// Rowids probed past the highest one seen when salvaging a damaged table.
 const PROBE_MARGIN: i64 = 1_000;
-/// Upper bound on rowid probes per table.
 const MAX_PROBES: i64 = 2_000_000;
 
 /// `PRAGMA quick_check` findings; empty when the database is healthy. A database that can't
@@ -129,13 +127,11 @@ pub struct TableReport {
     pub copied: usize,
     /// Rows that could be read but failed validation or a uniqueness constraint.
     pub rejected: usize,
-    /// Rowids that could not be read at all.
     pub unreadable: usize,
     /// Left empty on purpose (a cache, with `drop_caches`).
     pub dropped: bool,
     /// Rows added from the known-good backup.
     pub from_backup: usize,
-    /// Rows rebuilt from files on disk.
     pub from_files: usize,
     /// Rows deleted afterwards because what they referred to was lost.
     pub orphans_removed: usize,
@@ -159,7 +155,6 @@ impl RepairReport {
         self.tables.iter().find(|t| t.name == name)
     }
 
-    /// One line per table that lost or gained rows, for logs and the user notice.
     pub fn summary(&self) -> String {
         let mut lines = Vec::new();
         for t in &self.tables {
@@ -821,7 +816,6 @@ pub struct RepairNotice {
 }
 
 impl RepairNotice {
-    /// The text shown to the user.
     pub fn message(&self) -> String {
         let mut text = String::from("Game Lobby found damage in its library database.\n\n");
         if self.replaced {
@@ -1080,7 +1074,6 @@ mod tests {
         .unwrap()
     }
 
-    /// Overwrites page `page` (1-based) with garbage.
     fn smash(file: &Path, page: u32) {
         let size = page_size(file);
         let mut bytes = std::fs::read(file).unwrap();
@@ -1089,7 +1082,6 @@ mod tests {
         std::fs::write(file, bytes).unwrap();
     }
 
-    /// The first child of an interior table page.
     fn first_child(file: &Path, page: u32) -> u32 {
         let size = page_size(file);
         let bytes = std::fs::read(file).unwrap();
@@ -1099,7 +1091,6 @@ mod tests {
         u32::from_be_bytes([p[cell], p[cell + 1], p[cell + 2], p[cell + 3]])
     }
 
-    /// Damages one cover cache leaf and the whole screenshot table.
     fn corrupt(file: &Path) {
         let leaf = first_child(file, root(file, "cover_cache"));
         let shots = root(file, "game_screenshots");

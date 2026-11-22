@@ -29,7 +29,6 @@ static QUITTING: AtomicBool = AtomicBool::new(false);
 /// The window was hidden for the first time; the hint is sent when it is next shown.
 static HINT_PENDING: AtomicBool = AtomicBool::new(false);
 
-/// How the main window should first appear.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StartMode {
     Show,
@@ -39,7 +38,6 @@ pub enum StartMode {
     Hidden,
 }
 
-/// Whether the tray icon is wanted for these settings.
 pub fn wants_tray(settings: &Settings) -> bool {
     settings.minimize_to_tray || settings.close_to_tray
 }
@@ -58,7 +56,6 @@ fn hide_on_close(close_to_tray: bool, tray_ready: bool, quitting: bool) -> bool 
     close_to_tray && tray_ready && !quitting
 }
 
-/// Whether a minimized window should be hidden to the tray.
 fn hide_on_minimize(minimize_to_tray: bool, tray_ready: bool, quitting: bool) -> bool {
     minimize_to_tray && tray_ready && !quitting
 }
@@ -69,7 +66,6 @@ pub fn allow_exit() {
     QUITTING.store(true, Ordering::SeqCst);
 }
 
-/// Exits Game Lobby for real.
 pub fn quit(app: &AppHandle) {
     allow_exit();
     app.exit(0);
@@ -85,7 +81,6 @@ pub fn init(app: &AppHandle, settings: &Settings, autostart: bool) -> StartMode 
     start_mode(autostart, TRAY_READY.load(Ordering::SeqCst))
 }
 
-/// Applies changed settings: the hide options, the tray icon and the Run entry.
 pub fn apply_settings(app: &AppHandle, settings: &Settings) {
     store_flags(settings);
     let want = wants_tray(settings);
@@ -177,7 +172,6 @@ fn quit_app(app: &AppHandle) {
     quit(app);
 }
 
-/// The main window's events: Close to tray and Minimize to tray.
 pub fn on_window_event(window: &Window, event: &WindowEvent) {
     if window.label() != MAIN {
         return;

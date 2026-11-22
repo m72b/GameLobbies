@@ -58,7 +58,6 @@ pub const ALLOWED_HOSTS: [&str; 7] = [
     "steamcdn-a.akamaihd.net",
     crate::igdb::IMAGE_HOST,
 ];
-/// Downloads running at the same time in a background pass.
 pub const CONCURRENCY: usize = 4;
 /// Downloads per URL in one run of the app before it is left alone until the next start.
 pub const MAX_ATTEMPTS: u32 = 4;
@@ -124,7 +123,6 @@ pub fn cacheable(raw: &str, allow: Allow) -> Option<Url> {
     Url::parse(raw).ok().filter(allow)
 }
 
-/// `lobby-cover://<file>` for a cache file.
 pub fn local_value(file: &str) -> String {
     format!("{LOBBY_COVER_PREFIX}{file}")
 }
@@ -306,7 +304,6 @@ pub const SCREENSHOT_BOUNDS: Bounds = Bounds {
     shrink_above_bytes: 4_000_000,
 };
 
-/// Screenshot bounds for IGDB images, cover bounds for everything else.
 pub fn bounds_for(url: &str) -> Bounds {
     let igdb = url::Url::parse(url)
         .ok()
@@ -380,7 +377,6 @@ pub fn prepare(bytes: Vec<u8>) -> Result<(Vec<u8>, &'static str), FetchError> {
     prepare_with(bytes, COVER_BOUNDS)
 }
 
-/// [`prepare`] with explicit bounds.
 pub fn prepare_with(bytes: Vec<u8>, bounds: Bounds) -> Result<(Vec<u8>, &'static str), FetchError> {
     let ext = sniff(&bytes).ok_or(FetchError::NotImage)?;
     if keep_original(&bytes, ext) {
@@ -467,7 +463,6 @@ pub async fn fetch_to_file(
 // ---------------------------------------------------------------------------
 // Index (table `cover_cache`)
 
-/// The cache file recorded for `url`, if any.
 pub fn lookup(conn: &Connection, url: &str) -> Result<Option<String>> {
     Ok(conn
         .query_row("SELECT file FROM cover_cache WHERE url=?", [url], |r| {
@@ -476,7 +471,6 @@ pub fn lookup(conn: &Connection, url: &str) -> Result<Option<String>> {
         .optional()?)
 }
 
-/// The cache file for `url` when it is recorded and still on disk.
 pub fn existing_file(conn: &Connection, covers_dir: &Path, url: &str) -> Result<Option<String>> {
     Ok(lookup(conn, url)?.filter(|file| {
         is_cache_file_name(file)
@@ -646,11 +640,8 @@ pub fn sweep_files(conn: &Connection, covers_dir: &Path) -> Result<usize> {
 
 #[derive(Debug, Default, PartialEq)]
 pub struct PassOutcome {
-    /// URLs now cached (downloaded or already on disk).
     pub cached: usize,
-    /// Games switched to a local file.
     pub games_changed: usize,
-    /// URLs whose download failed (their remote URL stays in place).
     pub failed: Vec<String>,
 }
 
@@ -724,7 +715,6 @@ pub async fn run_pass(
     Ok(outcome)
 }
 
-/// Run-time state of the cache (in [`AppState`]).
 #[derive(Default)]
 pub struct CacheState {
     running: AtomicBool,
@@ -802,7 +792,6 @@ fn commit_present(
     })
 }
 
-/// The local value for a remote cover that is already cached, else the value unchanged.
 pub fn cached_value(conn: &Connection, covers_dir: &Path, value: &str) -> String {
     if cacheable(value, is_allowed).is_none() {
         return value.to_string();
@@ -813,7 +802,6 @@ pub fn cached_value(conn: &Connection, covers_dir: &Path, value: &str) -> String
     }
 }
 
-/// Whether a cover value is a remote image a pass would cache.
 pub fn needs_caching(value: Option<&str>) -> bool {
     value.is_some_and(|v| cacheable(v, is_allowed).is_some())
 }
@@ -889,7 +877,6 @@ async fn run_until_idle(app: &AppHandle) {
     }
 }
 
-/// URLs that failed and may still be retried, with their attempt counts.
 fn failed_pending(state: &AppState) -> Vec<(String, u32)> {
     state
         .covers

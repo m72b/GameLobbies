@@ -46,9 +46,7 @@ use std::sync::{Mutex as StdMutex, OnceLock};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 
-/// How long a match stays fresh.
 pub const MATCH_TTL_MS: i64 = 30 * 24 * 3_600_000;
-/// How long a "no match" or "ambiguous" result stays fresh.
 pub const MISS_TTL_MS: i64 = 7 * 24 * 3_600_000;
 const FUTURE_SKEW_MS: i64 = 24 * 3_600_000;
 /// Version of the stored JSON; older rows count as stale.
@@ -128,7 +126,6 @@ pub struct WikiMetadata {
     pub shape: u32,
 }
 
-/// A choice for the user when the match is ambiguous, or a search result.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Candidate {
@@ -160,7 +157,6 @@ pub struct ImageCredit {
 pub struct WikiView {
     pub enabled: bool,
     pub pending: bool,
-    /// A lookup has completed for this game.
     pub checked: bool,
     /// `"matched"`, `"none"` or `"ambiguous"`.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -399,7 +395,6 @@ pub fn referenced_image_urls(conn: &Connection) -> Result<HashSet<String>> {
     Ok(urls)
 }
 
-/// Whether the built-in provider is on (settings; on by default).
 pub fn enabled(conn: &Connection) -> bool {
     db::get_settings(conn).is_ok_and(|s| s.wikimedia_enabled)
 }
@@ -420,18 +415,14 @@ pub fn is_fresh(row: &CachedMatch, now: i64) -> bool {
 // ---------------------------------------------------------------------------
 // Resolving games (network, batched)
 
-/// What the lookup needs to know about a game.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct GameInput {
     pub game_id: String,
     pub title: String,
     pub steam: Option<String>,
-    /// The IGDB slug of the game's IGDB match, when there is one.
     pub igdb: Option<String>,
     pub platform: Option<&'static str>,
-    /// Release year from IGDB, for splitting ties.
     pub year: Option<i32>,
-    /// An item already chosen (by the user, or an earlier automatic match): fetched directly.
     pub known: Option<String>,
 }
 
@@ -466,7 +457,6 @@ pub fn year_of_ms(ms: i64) -> i32 {
     (yoe + era * 400 + i64::from(month <= 2)) as i32
 }
 
-/// The lookup input for a game, from the library and the caches.
 pub fn input_for(conn: &Connection, game: &Game) -> GameInput {
     let row = cached(conn, &game.id).ok().flatten();
     let known = row
@@ -519,7 +509,6 @@ pub struct Entities {
     requested: HashSet<String>,
 }
 
-/// How many rounds of edition → game lookups one call follows.
 const MAX_EDITION_ROUNDS: usize = 2;
 
 async fn fetch_entities(
@@ -731,7 +720,6 @@ async fn fetch_images(
     Ok(out)
 }
 
-/// Only the free files of [`fetch_images`].
 fn free_only(verdicts: HashMap<String, FileVerdict>) -> HashMap<String, CommonsImage> {
     verdicts
         .into_iter()
@@ -1223,7 +1211,6 @@ const IMAGE_TIMEOUT: Duration = Duration::from_secs(45);
 /// An uncredited Commons image is looked up again at most this often.
 pub const CREDIT_RETRY_AFTER: Duration = Duration::from_secs(60 * 60);
 
-/// Run-time state (in [`AppState`]).
 #[derive(Default)]
 pub struct WikimediaState {
     pub limiter: Limiter,
@@ -1591,7 +1578,6 @@ pub fn spawn_restore_credits(app: &AppHandle, game_id: &str, urls: Vec<String>) 
     });
 }
 
-/// Resolves and stores a batch; emits per game. Errors fail the batch.
 async fn run_batch(app: &AppHandle, inputs: &[GameInput]) -> Result<(), WikiError> {
     let state = app.state::<AppState>();
     let api = state.wikimedia.api()?;

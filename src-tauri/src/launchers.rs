@@ -77,11 +77,9 @@ use std::sync::LazyLock;
 pub const SOURCE_PREFIX: &str = "launcher:";
 /// The only placeholder in a launcher's argument template.
 pub const TARGET: &str = "{target}";
-/// Longest typed identifier.
 pub const MAX_IDENTIFIER_CHARS: usize = 200;
 pub const MAX_NAME_CHARS: usize = 64;
 pub const MAX_TEMPLATE_CHARS: usize = 2_048;
-/// Largest icon image that can be chosen.
 pub const MAX_ICON_BYTES: u64 = 5 * 1024 * 1024;
 /// At most this many launchers (backups included).
 pub const MAX_LAUNCHERS: usize = 200;
@@ -123,14 +121,11 @@ const ICON_RULES: crate::art::ImageRules = crate::art::ImageRules {
 
 static ID: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[A-Za-z0-9_-]{1,64}$").unwrap());
 static COLOR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^#[0-9A-Fa-f]{6}$").unwrap());
-/// Icon files as [`import_icon`] names them.
 static ICON_FILE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^launcher-icon-[0-9a-f]{32}\.(png|jpg|webp|gif)$").unwrap());
 
-/// What a launcher's games carry as their target.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TargetKind {
-    /// A file chosen in a native picker.
     File,
     /// A folder chosen in a native picker.
     Folder,
@@ -156,7 +151,6 @@ impl TargetKind {
         }
     }
 
-    /// Canonical order of a kind set.
     const ORDER: [Self; 3] = [Self::File, Self::Folder, Self::Identifier];
 
     fn noun(self) -> &'static str {
@@ -210,11 +204,9 @@ pub fn kind_names(kinds: &[TargetKind]) -> Vec<String> {
     kinds.iter().map(|k| k.as_str().to_string()).collect()
 }
 
-/// How Play starts a game of a launcher with a program (see the module docs).
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum StartMode {
-    /// Run the launcher's program with the game as an argument (the template's argv).
     #[default]
     Through,
     /// Open the launcher's program alone first (no arguments), wait for the user, then start the
@@ -256,7 +248,6 @@ pub struct CustomLauncher {
     pub icon_value: String,
     /// `#rrggbb`.
     pub color: String,
-    /// Empty for a label-only launcher ([`is_label_only`]).
     pub executable: String,
     pub args_template: String,
     /// The first of `target_kinds` (kept for older backups and builds).
@@ -283,7 +274,6 @@ pub struct CustomLauncher {
 }
 
 impl CustomLauncher {
-    /// The primary (first) target kind.
     #[cfg(test)]
     pub fn kind(&self) -> Result<TargetKind> {
         Ok(self.kinds()?[0])
@@ -317,7 +307,6 @@ pub fn route_launcher(route: &GameRoute) -> Option<&str> {
     launcher_id_of(route).or(route.launcher_id.as_deref().filter(|id| !id.is_empty()))
 }
 
-/// The launcher id of a launcher route.
 pub fn launcher_id_of(route: &GameRoute) -> Option<&str> {
     route
         .source_id
@@ -589,7 +578,6 @@ pub fn validate(mut l: CustomLauncher) -> Result<CustomLauncher> {
 #[derive(Deserialize, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LauncherInput {
-    /// Absent for a new launcher.
     #[serde(default)]
     pub id: Option<String>,
     pub name: String,
@@ -606,7 +594,6 @@ pub struct LauncherInput {
     pub target_kinds: Vec<String>,
     /// `executable` (the executable's folder) or `folder` (a picked folder).
     pub working_dir: String,
-    /// Use the executable just chosen with `launchers_browse_executable`.
     #[serde(default)]
     pub use_executable_pick: bool,
     /// A label-only launcher: no program (its games run directly). Overrides the pick.
@@ -623,7 +610,6 @@ pub struct LauncherInput {
 /// What a renderer save may draw on besides its own input.
 pub struct SaveContext<'a> {
     pub stored: Option<&'a CustomLauncher>,
-    /// The latest executable pick (`PickKind::LauncherExecutable`), if recent.
     pub executable_pick: Option<String>,
     /// The latest folder pick (`PickKind::LauncherFolder`), if recent.
     pub folder_pick: Option<String>,
@@ -871,14 +857,12 @@ fn working_folder(l: &CustomLauncher) -> String {
     }
 }
 
-/// Copies a user-chosen icon image into `covers_dir` and returns its new bare file name.
 pub fn import_icon(covers_dir: &Path, source: &Path) -> Result<String> {
     crate::art::import_image_as(covers_dir, source, &ICON_RULES, |ext| {
         format!("launcher-icon-{}.{ext}", uuid::Uuid::new_v4().simple())
     })
 }
 
-/// Whether `name` is an icon file that exists (as a regular file) in `covers_dir`.
 pub fn icon_exists(covers_dir: &Path, name: &str) -> bool {
     icon_file_ok(name)
         && std::fs::symlink_metadata(covers_dir.join(name)).is_ok_and(|m| m.is_file())
@@ -1007,7 +991,6 @@ pub fn program_running(processes: &[crate::platform::ProcessInfo], program: &Pat
 // here can't run anything the game didn't already point at; the native confirmation shows the
 // exact program and arguments before it is saved.
 
-/// One way a game can be passed to a launcher: route `route_index`'s `target`, of `kind`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AssignCandidate {
     pub route_index: usize,
@@ -1015,7 +998,6 @@ pub struct AssignCandidate {
     pub target: String,
 }
 
-/// Whether a route (or its launcher label) was added on the game page.
 pub fn is_assigned(route: &GameRoute) -> bool {
     route.assigned == Some(true)
 }
@@ -1074,7 +1056,6 @@ pub fn candidate_exists(c: &AssignCandidate) -> bool {
     check_target(c.kind, &c.target).is_ok()
 }
 
-/// Why the game can't be assigned to the launcher at all, or `None`.
 pub fn assign_blocker(l: &CustomLauncher, game: &Game) -> Option<String> {
     if game
         .routes
@@ -1236,11 +1217,9 @@ pub enum DirectStart {
     },
 }
 
-/// What the link dialog of an "open first" launcher says besides the launcher and the target.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct OpenFirstFacts {
     pub start: DirectStart,
-    /// The target comes from another launcher's game ([`takes_another_launchers_file`]).
     pub other_launcher: bool,
 }
 
@@ -1255,7 +1234,6 @@ pub fn takes_another_launchers_file(l: &CustomLauncher, base: &GameRoute) -> boo
         && launcher_id_of(base) != Some(l.id.as_str())
 }
 
-/// [`assign_prompt_with`] with no "open first" facts (tests).
 #[cfg(test)]
 pub fn assign_prompt(
     l: &CustomLauncher,
@@ -1360,7 +1338,6 @@ fn open_first_assign_prompt(
 // ---------------------------------------------------------------------------
 // Games
 
-/// A new game for a launcher with its primary target kind (see [`new_game_of_kind`]).
 #[cfg(test)]
 pub fn new_game(l: &CustomLauncher, title: &str, target: &str) -> Result<Game> {
     new_game_of_kind(l, title, target, l.kind()?)
@@ -1438,7 +1415,6 @@ pub fn new_game_of_kind(
     })
 }
 
-/// What happens to a deleted launcher's games.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RemoveMode {
     /// The games stay (store Custom) without the launcher's route.
@@ -1457,7 +1433,6 @@ impl RemoveMode {
     }
 }
 
-/// The ids of games with a route run by or labelled with launcher `id`.
 pub fn games_of(conn: &Connection, id: &str) -> Result<Vec<String>> {
     Ok(db::all_games(conn)?
         .into_iter()
@@ -2562,7 +2537,6 @@ mod tests {
         assert_eq!(added.launcher.executable, EXE);
     }
 
-    /// The text of function `name` in `source` (up to the next top-level item).
     fn function_text<'a>(source: &'a str, name: &str) -> &'a str {
         let start = source.find(name).expect(name);
         let rest = &source[start..];

@@ -69,7 +69,6 @@ impl WikiError {
     }
 }
 
-/// Which API a request goes to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Service {
     /// `www.wikidata.org/w/api.php`
@@ -312,7 +311,6 @@ impl<'a> Api<'a> {
         Self::with_client(endpoints, limiter, http)
     }
 
-    /// With a client made by [`build_client`] for the same endpoints (kept by the app).
     pub fn with_client(
         endpoints: Endpoints,
         limiter: &'a Limiter,
@@ -452,7 +450,6 @@ pub mod tests {
         }
     }
 
-    /// A reply: status, extra headers, body.
     pub type Reply = (u16, Vec<(String, String)>, Vec<u8>);
     pub type Handler = Arc<dyn Fn(&Req) -> Reply + Send + Sync>;
     pub type Log = Arc<Mutex<Vec<Req>>>;

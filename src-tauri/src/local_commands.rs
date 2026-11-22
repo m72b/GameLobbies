@@ -38,7 +38,6 @@ fn list_roots(state: &AppState) -> CmdResult<Vec<LibraryRoot>> {
     Ok(roots::with_online(roots))
 }
 
-/// Profiles with `available` filled in, the same way.
 fn list_emulators(state: &AppState) -> CmdResult<Vec<EmulatorProfile>> {
     let profiles = db::emulator_profiles(&state.db.lock()).map_err(err)?;
     Ok(emulators::refresh_available(profiles))
@@ -279,7 +278,6 @@ pub async fn emulators_remove(
     list_emulators(&state)
 }
 
-/// Scans every enabled emulator root for known emulators.
 #[tauri::command]
 pub async fn emulators_scan(app: AppHandle) -> CmdResult<local::ScanSummary> {
     scan::scan_local(&app, LocalScope::Kind("emulators"), false, false).await
@@ -291,7 +289,6 @@ pub struct Catalog {
     emulators: &'static [catalog::KnownEmulator],
 }
 
-/// The built-in systems and known emulators.
 #[tauri::command]
 pub fn emulators_catalog() -> Catalog {
     Catalog {
@@ -329,7 +326,6 @@ pub async fn emulators_ignored(state: State<'_, AppState>) -> CmdResult<Vec<Igno
     ignored(&state, db::IGNORE_EMULATOR)
 }
 
-/// Lets scans find a removed emulator's executable again.
 #[tauri::command]
 pub async fn emulators_unignore(
     state: State<'_, AppState>,
@@ -358,7 +354,6 @@ pub async fn emulators_browse_executable(
 // ---------------------------------------------------------------------------
 // Review
 
-/// Open items, or all items with `includeResolved`.
 #[tauri::command]
 pub async fn review_list(
     state: State<'_, AppState>,
@@ -367,7 +362,6 @@ pub async fn review_list(
     review::list(&state.db.lock(), include_resolved.unwrap_or(false)).map_err(err)
 }
 
-/// A native warning dialog with `ok` and Cancel; `true` only when the user chose `ok`.
 pub(crate) async fn confirm_natively(
     window: &WebviewWindow,
     title: &str,
@@ -453,7 +447,6 @@ pub async fn review_unignore(
 // ---------------------------------------------------------------------------
 // Local games
 
-/// Sets a ROM route's emulator; `null` = automatic (the system's default).
 #[tauri::command]
 pub async fn library_set_emulator(
     app: AppHandle,

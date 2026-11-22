@@ -61,11 +61,9 @@ use tokio::sync::Notify;
 pub const POLL_INTERVAL: Duration = Duration::from_secs(5);
 /// How long a game's process may be missing before its session is closed.
 pub const EXIT_GRACE_MS: i64 = 30_000;
-/// How long a Game Lobby launch waits for the game's process to appear.
 pub const START_TIMEOUT_MS: i64 = 10 * 60_000;
 /// Sessions shorter than this are not stored and add no playtime.
 pub const MIN_SESSION_SECONDS: i64 = 10;
-/// `tracking:changed` is emitted at least this often while a game runs.
 pub const HEARTBEAT_MS: i64 = 60_000;
 
 // ---------------------------------------------------------------------------

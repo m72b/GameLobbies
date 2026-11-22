@@ -77,7 +77,6 @@ impl FetchError {
     }
 }
 
-/// One owned app from the response.
 #[derive(Debug, Clone, PartialEq)]
 pub struct OwnedApp {
     pub app_id: String,
@@ -245,7 +244,6 @@ pub async fn fetch_owned(
 // ---------------------------------------------------------------------------
 // Stored state
 
-/// The last outcome, for the status line in Settings.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportStatus {
@@ -305,7 +303,6 @@ fn delete_import_state(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-/// Whether a library scan should ask Steam now.
 pub fn is_due(state: &ImportState, now: i64) -> bool {
     if state.attempted_at <= 0 || state.attempted_at > now {
         return true;
@@ -320,7 +317,6 @@ pub fn is_due(state: &ImportState, now: i64) -> bool {
 // ---------------------------------------------------------------------------
 // Applying
 
-/// A library entry for an owned app that is not installed.
 pub fn owned_game(app: &OwnedApp) -> Game {
     single_route_game(
         format!("steam:{}", app.app_id),
@@ -457,7 +453,6 @@ pub fn apply(
     Ok(status)
 }
 
-/// Removes what the import added (games the user put nothing into) and its state.
 pub fn undo(conn: &mut Connection) -> Result<usize> {
     let state = load_import_state(conn)?;
     let ids: HashSet<String> = state.app_ids.into_iter().collect();

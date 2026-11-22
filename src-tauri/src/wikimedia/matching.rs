@@ -40,11 +40,9 @@ pub fn platform_item(system: &str) -> Option<&'static str> {
     })
 }
 
-/// What was decided for one game.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Decision {
     Match(String),
-    /// Several possible items (Q-ids); the user chooses.
     Ambiguous(Vec<String>),
     None,
 }
@@ -56,7 +54,6 @@ pub fn is_game(entity: &Entity) -> bool {
         .any(|c| GAME_CLASSES.contains(&c.as_str()))
 }
 
-/// The game an edition belongs to, when the item is an edition and names exactly one.
 pub fn edition_base(entity: &Entity) -> Option<&str> {
     (entity.classes.iter().any(|c| c == EDITION) && entity.edition_of.len() == 1)
         .then(|| entity.edition_of[0].as_str())
@@ -81,7 +78,6 @@ fn dedup(list: Vec<String>) -> Vec<String> {
     out
 }
 
-/// Decides from the items an external id led to.
 pub fn pick_by_ids(hits: &[String], entities: &HashMap<String, Entity>) -> Decision {
     // Unknown items (not fetched) are kept: they are facts too, just unchecked.
     let games: Vec<&String> = hits

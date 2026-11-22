@@ -95,7 +95,6 @@ pub async fn library_scan(app: AppHandle) -> CmdResult<LibraryStats> {
     scan::scan_libraries(&app).await
 }
 
-/// The automatically scanned stores, whether each is on, and what the last scan found.
 #[tauri::command]
 pub async fn library_stores(state: State<'_, AppState>) -> CmdResult<Vec<StoreStatus>> {
     scan::store_statuses(&state).map_err(err)
@@ -659,7 +658,6 @@ pub async fn steamgriddb_status(state: State<'_, AppState>) -> CmdResult<KeyStat
     steamgriddb::status(&state).map_err(err)
 }
 
-/// Saves the key, or clears it when `key` is empty or whitespace.
 #[tauri::command]
 pub async fn steamgriddb_save_key(state: State<'_, AppState>, key: String) -> CmdResult<KeyStatus> {
     secrets::set_steamgriddb_api_key(&state, &key).map_err(err)?;
@@ -713,7 +711,6 @@ pub async fn steamgriddb_fetch_missing(app: AppHandle) -> CmdResult<FetchSummary
 // ---------------------------------------------------------------------------
 // Play tracking and game page art
 
-/// Games currently launching or running (`RunningGame[]`); also pushed as `tracking:changed`.
 #[tauri::command]
 pub async fn tracking_status(state: State<'_, AppState>) -> CmdResult<Vec<RunningGame>> {
     Ok(state.tracker.status())
@@ -762,7 +759,6 @@ pub async fn tracking_set_excluded(
     Ok(notify_settings(&app, saved))
 }
 
-/// Hero/logo candidate URLs for the game page; empty lists when nothing is available.
 #[tauri::command]
 pub async fn art_get(
     app: AppHandle,
@@ -816,7 +812,6 @@ pub async fn art_set_hero(
     set_page_image(&app, &state, &game_id, art::Slot::Hero, url.as_deref())
 }
 
-/// Like `art_set_hero`, for the logo.
 #[tauri::command]
 pub async fn art_set_logo(
     app: AppHandle,
@@ -875,7 +870,6 @@ pub async fn art_choose_hero_file(
     choose_page_image(&app, &window, &state, &game_id, art::Slot::Hero).await
 }
 
-/// Like `art_choose_hero_file`, for the logo.
 #[tauri::command]
 pub async fn art_choose_logo_file(
     app: AppHandle,
@@ -900,7 +894,6 @@ pub async fn art_set_logo_layout(
     Ok(notify_art(&app, &game_id, custom))
 }
 
-/// SteamGridDB hero candidates for the picker (not cached).
 #[tauri::command]
 pub async fn steamgriddb_search_heroes(
     state: State<'_, AppState>,
@@ -912,7 +905,6 @@ pub async fn steamgriddb_search_heroes(
         .map_err(err)
 }
 
-/// SteamGridDB logo candidates for the picker (not cached).
 #[tauri::command]
 pub async fn steamgriddb_search_logos(
     state: State<'_, AppState>,

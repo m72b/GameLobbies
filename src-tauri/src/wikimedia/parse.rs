@@ -301,7 +301,6 @@ pub fn parse_entities(body: &str) -> Result<HashMap<String, Entity>, WikiError> 
         .collect())
 }
 
-/// `wbgetentities&props=labels` → English (or language-neutral) label by id.
 pub fn parse_labels(body: &str) -> Result<HashMap<String, String>, WikiError> {
     let value = json(body)?;
     let entities = value
@@ -315,7 +314,6 @@ pub fn parse_labels(body: &str) -> Result<HashMap<String, String>, WikiError> {
         .collect())
 }
 
-/// One `wbsearchentities` hit.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SearchHit {
     pub qid: String,
@@ -350,14 +348,12 @@ pub fn parse_search(body: &str) -> Result<Vec<SearchHit>, WikiError> {
         .collect())
 }
 
-/// Which external id a SPARQL row matched.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IdKind {
     Steam,
     Igdb,
 }
 
-/// SPARQL JSON results with `?i` (the item) and `?steam` or `?igdb` → (kind, id, Q-id) rows.
 pub fn parse_sparql(body: &str) -> Result<Vec<(IdKind, String, String)>, WikiError> {
     let value: Value = serde_json::from_str(body)
         .map_err(|_| WikiError::Invalid("the SPARQL response is not JSON."))?;
@@ -450,7 +446,6 @@ pub struct Extract {
     pub text: String,
 }
 
-/// Longest description kept (about a long paragraph).
 pub const MAX_EXTRACT_BYTES: usize = 1500;
 /// Shorter "paragraphs" are stubs or disambiguation lines and are not shown.
 const MIN_EXTRACT_CHARS: usize = 40;

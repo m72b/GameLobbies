@@ -72,7 +72,6 @@ pub struct GameRoute {
     /// best enabled profile for `system` is used at launch (and stored by the next scan).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub emulator_id: Option<String>,
-    /// Catalog system id (`catalog::SYSTEMS`) of a ROM or local PC route.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system: Option<String>,
     /// A label only: the custom launcher (`launchers::CustomLauncher::id`) whose games folder a
@@ -131,7 +130,6 @@ pub struct Game {
     pub routes: Vec<GameRoute>,
 }
 
-/// A partial game update (`library:save`). Missing fields keep their stored value.
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct GamePatch {
@@ -250,13 +248,10 @@ pub struct Settings {
     /// [`STEAM_GRID_DB_STYLES`] by `validation::settings_patch`.
     #[serde(default)]
     pub steam_grid_db_styles: Vec<String>,
-    /// Include animated grids in SteamGridDB requests.
     #[serde(default)]
     pub steam_grid_db_animated: bool,
-    /// Include adult-flagged grids in SteamGridDB requests.
     #[serde(default)]
     pub steam_grid_db_nsfw: bool,
-    /// Include humor-flagged grids in SteamGridDB requests.
     #[serde(default)]
     pub steam_grid_db_humor: bool,
     /// With `tracking` on, also detect and track installed games started outside Game Lobby
@@ -271,16 +266,13 @@ pub struct Settings {
     /// never installed without the user's click. Stored settings without it default to on.
     #[serde(default = "default_true")]
     pub auto_check_updates: bool,
-    /// Store ids from [`STORE_SOURCES`] that library scans skip. Default: none.
     #[serde(default)]
     pub disabled_stores: Vec<String>,
     /// Minimize Game Lobby when a game is started from it. Stored settings without it default to on.
     #[serde(default = "default_true")]
     pub minimize_on_launch: bool,
-    /// Start Game Lobby when Windows starts (a per-user Run entry; see the autostart module).
     #[serde(default)]
     pub launch_on_boot: bool,
-    /// Minimizing the main window hides it to the tray icon (see the tray module).
     #[serde(default)]
     pub minimize_to_tray: bool,
     /// The main window's close button hides it to the tray icon instead of exiting (see the tray module).
@@ -296,14 +288,12 @@ pub struct Settings {
     pub wikimedia_enabled: bool,
 }
 
-/// Values `Settings.motion` may have.
 pub const MOTION_CHOICES: &[&str] = &["system", "full", "reduced", "off"];
 
 fn default_motion() -> String {
     "system".to_string()
 }
 
-/// Grid styles accepted by the SteamGridDB API (`styles=` on `/grids`).
 pub const STEAM_GRID_DB_STYLES: &[&str] =
     &["alternate", "blurred", "white_logo", "material", "no_logo"];
 
@@ -353,7 +343,6 @@ pub struct EmulatorProfile {
     pub rom_folders: Vec<String>,
     #[serde(default)]
     pub extensions: Vec<String>,
-    /// Catalog system ids this profile runs (used to pick a game's default emulator).
     #[serde(default)]
     pub systems: Vec<String>,
     /// Disabled profiles are never picked automatically and refuse to launch.
@@ -362,10 +351,8 @@ pub struct EmulatorProfile {
     /// `"discovered"` (found in an emulator folder) or `"manual"`.
     #[serde(default = "manual_source")]
     pub source: String,
-    /// Catalog emulator id (`catalog::EMULATORS`) the executable was recognised as.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detected_as: Option<String>,
-    /// Output only: the executable exists right now.
     #[serde(default = "default_true")]
     pub available: bool,
     /// Output only: the catalog's default arguments still need editing (RetroArch's core).
@@ -404,7 +391,6 @@ pub struct ConnectionValues {
     pub gog_database_path: String,
 }
 
-/// Stores and launchers scanned automatically, by the ids used in `Settings.disabledStores`.
 pub const STORE_SOURCES: &[(&str, &str)] = &[
     ("steam", "Steam"),
     ("epic", "Epic Games"),
@@ -417,7 +403,6 @@ pub const STORE_SOURCES: &[(&str, &str)] = &[
     ("xbox", "Xbox / Microsoft Store"),
 ];
 
-/// One store on the Libraries settings page (`library_stores`).
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct StoreStatus {
@@ -433,7 +418,6 @@ pub struct StoreStatus {
     pub scanned_at: Option<i64>,
 }
 
-/// What the last scan found per store (stored in `library_connections`, key `stores`).
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct StoreDetection {
@@ -513,7 +497,6 @@ pub struct PlaySession {
     pub seconds: i64,
     /// `"launch"` or `"detected"`.
     pub source: String,
-    /// Start or end corrected by hand.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub edited: bool,
     /// Ended by a crash or shutdown; the end is the last time the game was seen running.
@@ -521,7 +504,6 @@ pub struct PlaySession {
     pub interrupted: bool,
 }
 
-/// Playtime summary for one game (`tracking_stats`).
 #[derive(Serialize, Clone, Debug, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct PlayStats {
@@ -538,7 +520,6 @@ pub struct PlayStats {
     pub store: Option<crate::stats::StoreTime>,
 }
 
-/// Game page art candidates in priority order (`art_get`), with the game's customization.
 #[derive(Serialize, Clone, Debug, Default, PartialEq)]
 pub struct GameArt {
     pub hero: Vec<String>,
@@ -550,7 +531,6 @@ pub struct GameArt {
     pub credits: Vec<crate::wikimedia::ImageCredit>,
 }
 
-/// Where the logo sits on the game page hero.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum LogoPosition {

@@ -213,7 +213,6 @@ pub fn is_installed(game: &Game) -> bool {
 #[serde(rename_all = "camelCase")]
 pub struct UninstallInfo {
     pub route_index: usize,
-    /// Display name of what will open.
     pub launcher: String,
     /// `uninstall` (the launcher's own uninstall dialog), `library` (its library: uninstall
     /// there) or `apps` (Windows' Installed apps settings).
@@ -552,7 +551,6 @@ pub struct RecentGame {
     pub added_at: i64,
 }
 
-/// Unseen games first discovered within [`RECENT_DAYS`] of `now`, newest first.
 pub fn recent(conn: &Connection, now: i64) -> Result<Vec<RecentGame>> {
     let mut stmt = conn.prepare(
         "SELECT a.gameId,a.addedAt FROM game_added a JOIN games g ON g.id=a.gameId

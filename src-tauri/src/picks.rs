@@ -17,13 +17,9 @@ pub const PICK_LIFETIME: Duration = Duration::from_secs(10 * 60);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PickKind {
-    /// `emulators_browse_executable`.
     EmulatorExecutable,
-    /// `roots_browse` for a `games` root.
     GamesFolder,
-    /// `roots_browse` for an `emulators` root.
     EmulatorsFolder,
-    /// `launchers_browse_executable`: a custom launcher's program.
     LauncherExecutable,
     /// `launchers_browse_folder`: a custom launcher's working folder.
     LauncherFolder,
@@ -93,7 +89,6 @@ impl PickedPaths {
         }
     }
 
-    /// [`find`](Self::find) for a pick remembered for `owner` ([`remember_for`](Self::remember_for)).
     pub fn find_for(&self, kind: PickKind, raw: &str, owner: &str) -> Option<String> {
         let key = normalize_path(raw)?;
         let now = Instant::now();

@@ -26,7 +26,6 @@ fn field(text: &str, key: &str) -> Option<String> {
     })
 }
 
-/// Steam's library cover for an app (also used by the owned-games import, `steam_owned`).
 pub(crate) fn cover(app_id: &str) -> String {
     format!("https://cdn.akamai.steamstatic.com/steam/apps/{app_id}/library_600x900.jpg")
 }

@@ -24,10 +24,8 @@ use rusqlite::Connection;
 use std::io::{Read, Write};
 use std::path::Path;
 
-/// Largest hero or logo file that can be chosen.
 pub const MAX_IMAGE_BYTES: u64 = 20 * 1024 * 1024;
 
-/// Which custom image of the game page.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Slot {
     Hero,
@@ -50,12 +48,10 @@ impl Slot {
     }
 }
 
-/// How long SteamGridDB results stay cached.
 pub const ART_TTL_MS: i64 = 30 * 24 * 3_600_000;
 /// Tolerated clock skew before a cache entry dated in the future is treated as stale.
 const FUTURE_SKEW_MS: i64 = 24 * 3_600_000;
 
-/// Steam's library hero and logo for an app ID.
 pub fn steam_art(app_id: &str) -> (String, String) {
     let base = format!("https://cdn.akamai.steamstatic.com/steam/apps/{app_id}");
     (
@@ -70,7 +66,6 @@ fn steam_hero_2x(app_id: &str) -> String {
     format!("https://cdn.akamai.steamstatic.com/steam/apps/{app_id}/library_hero_2x.jpg")
 }
 
-/// Whether a cache entry can be used without refetching.
 pub fn is_fresh(cached: &CachedArt, prefs_key: &str, now: i64) -> bool {
     cached.prefs == prefs_key
         && cached.fetched_at <= now + FUTURE_SKEW_MS
@@ -158,7 +153,6 @@ pub fn set_image(
     update(conn, game_id, |custom| *slot.field(custom) = value)
 }
 
-/// `art_set_logo_layout`.
 pub fn set_logo_layout(
     conn: &Connection,
     game_id: &str,
@@ -229,7 +223,6 @@ pub fn import_image_file(
     Ok(format!("{LOBBY_COVER_PREFIX}{name}"))
 }
 
-/// What [`import_image_as`] accepts.
 pub struct ImageRules {
     /// Lower-case extensions (file name AND content); content types are named as
     /// [`crate::covercache::sniff`] names them (`jpg` for JPEG).

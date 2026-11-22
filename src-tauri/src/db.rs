@@ -202,7 +202,6 @@ fn migrate(db: &Connection, file: Option<&Path>) -> Result<()> {
 /// The `PRAGMA user_version` this build writes.
 pub const SCHEMA_VERSION: i64 = 1;
 
-/// What [`remove_store_accounts`] would change.
 struct StoreAccountCleanup {
     secrets: Vec<&'static str>,
     connections: Option<ConnectionValues>,
@@ -1164,7 +1163,6 @@ pub fn cached_art(db: &Connection, game_id: &str) -> Result<Option<CachedArt>> {
     }))
 }
 
-/// Caches art for a game that still exists.
 pub fn put_cached_art(db: &Connection, game_id: &str, art: &CachedArt) -> Result<()> {
     db.execute(
         "INSERT INTO game_art(gameId,hero,logo,prefs,fetchedAt) SELECT ?1,?2,?3,?4,?5 WHERE EXISTS(SELECT 1 FROM games WHERE id=?1)
@@ -1363,7 +1361,6 @@ pub fn put_settings(db: &Connection, patch: Map<String, Value>) -> Result<Settin
     Ok(settings)
 }
 
-/// What the last scan found per store id.
 pub fn store_detection(db: &Connection) -> Result<HashMap<String, StoreDetection>> {
     let stored: Option<String> = db
         .query_row(
@@ -1652,7 +1649,6 @@ pub fn mark_local_routes_missing(
 /// [`reconcile_local_root`]).
 pub const MASS_REMOVAL_MIN: usize = 20;
 
-/// Result of [`reconcile_local_root`].
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct LocalReconcile {
     /// Routes marked not installed (including dropped ones).
@@ -1737,7 +1733,6 @@ pub fn games_with_user_data(db: &Connection) -> Result<Vec<(Game, bool)>> {
         .collect())
 }
 
-/// Replaces one game's routes.
 pub fn set_routes(db: &Connection, id: &str, routes: Vec<GameRoute>) -> Result<()> {
     persist_game(
         db,

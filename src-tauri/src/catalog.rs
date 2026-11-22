@@ -337,7 +337,6 @@ pub fn extension_of(file_name: &str) -> Option<String> {
     (!ext.is_empty() && ext.len() <= 16).then(|| format!(".{}", ext.to_lowercase()))
 }
 
-/// Systems whose formats include this extension.
 pub fn systems_for_extension(ext: &str) -> Vec<&'static System> {
     SYSTEMS
         .iter()
@@ -378,7 +377,6 @@ pub struct KnownEmulator {
     /// automatically and won't launch until its arguments are changed (see
     /// `emulators::needs_configuration`).
     pub needs_configuration: bool,
-    /// One line shown next to the profile.
     pub note: &'static str,
 }
 

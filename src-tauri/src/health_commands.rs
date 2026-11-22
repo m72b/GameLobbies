@@ -186,7 +186,6 @@ pub async fn health_remove_route(
     open_items(&state)
 }
 
-/// "Ignore" a missing file, "Not duplicates" for a pair, "Keep both" for routes.
 #[tauri::command]
 pub async fn health_dismiss(
     app: AppHandle,
@@ -210,7 +209,6 @@ pub async fn health_dismiss(
 // Linking a duplicate pair goes through the review step (`link_commands::library_link` with
 // the item's id), never straight from the item.
 
-/// "Merge" duplicate routes of one game into one.
 #[tauri::command]
 pub async fn health_merge_routes(
     app: AppHandle,

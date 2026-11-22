@@ -21,7 +21,6 @@ pub const COMMONS_PATH: &str = "/wikipedia/commons/";
 const MAX_URL_LEN: usize = 1024;
 const MAX_TEXT_CHARS: usize = 200;
 
-/// Raster formats the cover cache and the web view accept for a display file.
 const DISPLAY_EXTENSIONS: [&str; 4] = ["png", "jpg", "jpeg", "webp"];
 /// Source formats we take from Commons (SVG only through its PNG rendering).
 const SOURCE_MIMES: [&str; 4] = ["image/png", "image/jpeg", "image/webp", "image/svg+xml"];
@@ -34,7 +33,6 @@ pub struct CommonsImage {
     pub file: String,
     /// The display file (a rendering at most ~500 px wide), see [`display_url`].
     pub src: String,
-    /// Size of `src` in pixels.
     pub width: u32,
     pub height: u32,
     /// Size of the original file (equal to the above when no rendering was needed).
@@ -60,7 +58,6 @@ pub struct CommonsImage {
     pub restrictions: Option<String>,
 }
 
-/// Why a file was not used (for logs and tests).
 pub type Reject = &'static str;
 
 static LICENCE_CODE: LazyLock<Regex> = LazyLock::new(|| {

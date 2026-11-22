@@ -12,7 +12,6 @@ use std::sync::LazyLock;
 #[derive(Clone, Debug, Default)]
 pub struct RegistryEntry {
     pub key: String,
-    /// Value names are lowercased, like the Electron build's parser.
     pub values: HashMap<String, String>,
 }
 
@@ -44,7 +43,6 @@ impl RegistryEntry {
     }
 }
 
-/// Reads `key` and all of its subkeys. A missing key yields an empty list.
 #[cfg(windows)]
 pub fn query_registry(key: &str) -> Result<Vec<RegistryEntry>> {
     use winreg::enums::*;

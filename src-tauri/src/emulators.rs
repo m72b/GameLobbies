@@ -67,7 +67,6 @@ pub fn executable_path_ok(executable: &str) -> bool {
     drive_path_ok(executable) && executable.to_lowercase().ends_with(".exe")
 }
 
-/// An absolute, existing `.exe` file.
 pub fn executable_ok(executable: &str) -> bool {
     executable_path_ok(executable) && Path::new(executable).is_file()
 }
@@ -85,7 +84,6 @@ pub fn needs_configuration(p: &EmulatorProfile) -> bool {
         })
 }
 
-/// Whether a profile may be picked automatically for `system`.
 fn usable_for(p: &EmulatorProfile, system: &str) -> bool {
     p.enabled && p.available && !p.needs_configuration && p.systems.iter().any(|s| s == system)
 }
@@ -121,7 +119,6 @@ pub fn default_for_system<'a>(
         .min_by(|a, b| rank(a, system).cmp(&rank(b, system)))
 }
 
-/// One executable found in an emulator root.
 #[derive(Debug, Clone)]
 pub struct Found {
     pub path: PathBuf,
@@ -396,7 +393,6 @@ pub fn confirmation_prompt(p: &EmulatorProfile) -> Result<String> {
     ))
 }
 
-/// A new discovered profile with the catalog defaults.
 pub fn new_profile(path: &Path, known: &KnownEmulator) -> EmulatorProfile {
     EmulatorProfile {
         id: format!("emu:{}", uuid::Uuid::new_v4()),

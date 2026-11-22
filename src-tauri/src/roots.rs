@@ -55,7 +55,6 @@ pub struct LibraryRoot {
     pub added_at: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_scan_at: Option<i64>,
-    /// The last scan of this root (`RootScanResult` in TypeScript).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_result: Option<Value>,
     /// Output only: the folder exists right now.
@@ -78,7 +77,6 @@ pub struct RootGuard {
     pub containers: Vec<String>,
     /// Rejected when equal, containing or inside.
     pub trees: Vec<String>,
-    /// Like `trees`, for emulator roots only.
     pub emulator_trees: Vec<String>,
 }
 

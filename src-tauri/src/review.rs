@@ -59,7 +59,6 @@ fn read(row: &rusqlite::Row) -> rusqlite::Result<ReviewItem> {
     })
 }
 
-/// Adds an open item, or refreshes an open one's details. Resolved items are left alone.
 pub fn upsert(
     conn: &Connection,
     kind: &str,
@@ -105,7 +104,6 @@ pub fn prune(
     Ok(())
 }
 
-/// Removes every open item of a root (the root was removed).
 pub fn forget_root(conn: &Connection, root_id: &str) -> Result<()> {
     conn.execute(
         "DELETE FROM scan_review WHERE rootId=? AND status='open'",
@@ -114,7 +112,6 @@ pub fn forget_root(conn: &Connection, root_id: &str) -> Result<()> {
     Ok(())
 }
 
-/// Items, open first then newest; resolved ones only with `include_resolved`.
 pub fn list(conn: &Connection, include_resolved: bool) -> Result<Vec<ReviewItem>> {
     let sql = if include_resolved {
         "SELECT * FROM scan_review ORDER BY status='open' DESC,updatedAt DESC,id LIMIT 5000"
@@ -140,7 +137,6 @@ pub fn resolve(conn: &Connection, id: &str, resolution: &str) -> Result<()> {
     Ok(())
 }
 
-/// Open items of one root.
 pub fn open_count_for_root(conn: &Connection, root_id: &str) -> Result<usize> {
     Ok(conn.query_row(
         "SELECT COUNT(*) FROM scan_review WHERE status='open' AND rootId=?",

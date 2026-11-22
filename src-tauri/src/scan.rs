@@ -15,7 +15,6 @@ struct Collected {
     discovered: Vec<Game>,
     errors: Vec<String>,
     installed: Vec<(&'static str, Vec<Game>)>,
-    /// Per store id (see [`STORE_SOURCES`]): what this scan found.
     detected: HashMap<String, StoreDetection>,
 }
 
@@ -52,7 +51,6 @@ impl Collected {
     }
 }
 
-/// Every store with its on/off state and what the last scan found.
 pub fn store_statuses(state: &AppState) -> Result<Vec<StoreStatus>> {
     let conn = state.db.lock();
     let disabled = db::get_settings(&conn)?.disabled_stores;
@@ -103,15 +101,12 @@ async fn perform(app: &AppHandle) -> Result<LibraryStats> {
 /// Which library roots a folder scan covers.
 #[derive(Debug, Clone)]
 pub enum LocalScope {
-    /// Every enabled root.
     All,
-    /// Every enabled root of one kind (`emulators` / `games`).
     Kind(&'static str),
     /// One root (must be enabled).
     Root(String),
 }
 
-/// Minimum time between two `library-scan:progress` events of the same phase.
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
 
 /// Scans library roots, emitting `library-scan:progress` (at most ~10 per second, plus every

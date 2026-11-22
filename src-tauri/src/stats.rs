@@ -36,7 +36,6 @@ type CmdResult<T> = Result<T, String>;
 
 /// Sources of store-reported playtime (`store_playtime.source`).
 pub const STEAM: &str = "steam";
-/// GOG playtime from a GOG account (Settings → Accounts), keyed by GOG product id.
 pub const GOG: &str = "gog";
 
 /// The playtime source a route's figure is stored under, by the route's source: Steam routes
@@ -48,7 +47,6 @@ pub fn playtime_source(route_source: &str) -> Option<&'static str> {
         _ => None,
     }
 }
-/// Rows in the top playtime list.
 pub const TOP_LIMIT: usize = 50;
 
 /// Adds the table of store-reported playtime (idempotent, no `user_version` change; older builds
@@ -117,7 +115,6 @@ pub fn merge_store_playtime(
     Ok(())
 }
 
-/// Drops the rows of `source` whose app is not in `keep` (games no longer owned).
 pub fn prune_store_playtime(
     conn: &mut Connection,
     source: &str,
@@ -161,7 +158,6 @@ pub struct Counts {
     pub all: usize,
     pub installed: usize,
     pub not_installed: usize,
-    /// Hidden games in the whole library, whether or not they are counted in the other figures.
     pub hidden: usize,
     pub favorite: usize,
 }
@@ -170,22 +166,18 @@ pub struct Counts {
 #[serde(rename_all = "camelCase")]
 pub struct Playtime {
     pub total_seconds: i64,
-    /// Total over the games with time above zero; zero when there are none.
     pub average_seconds: i64,
     pub played_games: usize,
-    /// How much of the total comes from a store's figure rather than Game Lobby's own tracking.
     pub store_seconds: i64,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct InstallSize {
-    /// Sum of the known sizes.
     pub bytes: u64,
     pub known: usize,
     /// Installed games without a measured size (not part of `bytes`).
     pub unknown: usize,
-    /// Known sizes that are lower bounds.
     pub partial: usize,
 }
 
@@ -204,10 +196,8 @@ pub struct TopGame {
     /// What counts: the larger of the two below.
     pub seconds: i64,
     pub tracked_seconds: i64,
-    /// Absent when no store reported time for the game.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub store_seconds: Option<i64>,
-    /// Which store `store_seconds` came from.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub store_source: Option<String>,
     /// Share of the total playtime, 0 to 100.
@@ -220,7 +210,6 @@ pub struct TopGame {
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct LibraryEntry {
-    /// A store ("Steam") or a custom launcher's name.
     pub name: String,
     pub count: usize,
     /// Share of the counted games, 0 to 100.
@@ -237,7 +226,6 @@ pub struct StatsSummary {
     pub completion: Completion,
     pub top: Vec<TopGame>,
     pub library: Vec<LibraryEntry>,
-    /// Stores whose reported time is part of the figures (for the "includes ... playtime" hint).
     pub store_sources: Vec<String>,
 }
 
@@ -257,7 +245,6 @@ fn store_label(source: &str) -> &'static str {
     }
 }
 
-/// One store row: the store's figure for an app.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct StoreRow {
     pub seconds: i64,
@@ -314,7 +301,6 @@ fn game_store_row(game: &Game, store: &StoreRows) -> Option<(&'static str, Store
     ))
 }
 
-/// A game's largest store-reported time across its routes, with the store it came from.
 fn store_time(game: &Game, store: &StoreRows) -> Option<(i64, &'static str)> {
     game_store_row(game, store).map(|(source, row)| (row.seconds, source))
 }
@@ -327,21 +313,16 @@ fn store_time(game: &Game, store: &StoreRows) -> Option<(i64, &'static str)> {
 pub struct StoreTime {
     /// `"steam"` or `"gog"`.
     pub source: String,
-    /// The store's figure.
     pub seconds: i64,
-    /// What Game Lobby recorded itself.
     pub tracked_seconds: i64,
     /// What counts: `max(tracked, store)`.
     pub effective_seconds: i64,
     /// `max(0, store - tracked)`: the hours the store has that Game Lobby did not track.
     pub added_seconds: i64,
-    /// The store's last-played time (ms), when it gave one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_played: Option<i64>,
-    /// The newer of the tracked and the store's last-played time (ms).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effective_last_played: Option<i64>,
-    /// Ms of the last sync of the store's figures.
     pub synced_at: i64,
 }
 
@@ -356,7 +337,6 @@ pub fn combine(
     combine_for(STEAM, tracked_seconds, tracked_last_played, row)
 }
 
-/// [`combine`] for the figure of `source` (`"steam"`, `"gog"`).
 pub fn combine_for(
     source: &str,
     tracked_seconds: i64,
@@ -411,7 +391,6 @@ pub fn store_time_of(
         .map(|(source, row)| combine_for(source, tracked_seconds(game), tracked_last_played, &row)))
 }
 
-/// Every game that has a store figure, by game id.
 pub fn store_times(conn: &Connection) -> Result<HashMap<String, StoreTime>> {
     let rows = app_playtime(conn)?;
     if rows.is_empty() {
@@ -438,7 +417,6 @@ pub struct StoreAddition {
     pub synced_at: i64,
 }
 
-/// The additions for one game or (None) every game; games whose difference is zero have none.
 pub fn additions(conn: &Connection, game_id: Option<&str>) -> Result<Vec<StoreAddition>> {
     let rows = app_playtime(conn)?;
     if rows.is_empty() {
@@ -471,7 +449,6 @@ pub fn additions(conn: &Connection, game_id: Option<&str>) -> Result<Vec<StoreAd
     Ok(out)
 }
 
-/// The name a game is counted under (the store shown on its card).
 fn library_name(game: &Game, launcher_names: &HashMap<String, String>) -> String {
     if game.store == "Custom" {
         if let Some(name) = game
@@ -494,7 +471,6 @@ fn sessions_exist(conn: &Connection) -> Result<HashSet<String>> {
     Ok(rows)
 }
 
-/// Everything the Statistics view shows, from the library as it is now.
 pub fn summarize(conn: &Connection, include_hidden: bool) -> Result<StatsSummary> {
     let all_games = db::all_games(conn)?;
     let hidden = all_games.iter().filter(|g| g.hidden).count();

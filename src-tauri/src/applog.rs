@@ -19,7 +19,6 @@ pub const LOG_DIR: &str = "logs";
 pub const LOG_FILE: &str = "game-lobby.log";
 /// A file is rotated once it would grow beyond this many bytes.
 pub const MAX_BYTES: u64 = 1_000_000;
-/// Files kept in total, the live one included.
 pub const MAX_FILES: usize = 3;
 
 /// The folder the log files live in.
@@ -36,7 +35,6 @@ fn file_path(dir: &Path, n: usize) -> PathBuf {
     }
 }
 
-/// An append-only file that rotates by size.
 struct RotatingFile {
     dir: PathBuf,
     max_bytes: u64,

@@ -34,7 +34,6 @@ pub const HEALTH_DUPLICATE: &str = "health-duplicate";
 pub const DUPLICATE_ROUTE: &str = "duplicate-route";
 pub const KINDS: [&str; 3] = [MISSING_FILE, HEALTH_DUPLICATE, DUPLICATE_ROUTE];
 
-/// Most "use this location" suggestions kept per route.
 const MAX_CANDIDATES: usize = 5;
 /// Limits of the search under the library folders (a check must stay cheap).
 const SEARCH_MAX_ENTRIES: usize = 400_000;
@@ -60,7 +59,6 @@ pub struct HealthSummary {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Presence {
     Present,
-    /// The volume is there but the path isn't.
     Missing,
     /// The path's drive (or network share) isn't connected: not a missing file.
     DriveNotConnected,
@@ -409,7 +407,6 @@ fn game_systems(game: &Game) -> BTreeSet<String> {
         .collect()
 }
 
-/// Systems for which the scan's own `duplicate` review already compares these two games.
 fn scan_covers(a: &Game, b: &Game) -> bool {
     let local_systems = |g: &Game| -> BTreeSet<String> {
         g.routes
@@ -796,7 +793,6 @@ pub fn prepare_relocation(ctx: &RepairContext, new: &Path) -> Result<Option<Game
     }
 }
 
-/// Applies a relocation prepared by [`prepare_relocation`] and resolves the item.
 pub fn apply_relocation(
     db: &Db,
     id: &str,
@@ -952,7 +948,6 @@ pub fn merge_pair(db: &Db, id: &str, target: Option<&str>) -> Result<(String, St
     Ok((target.to_string(), source.clone()))
 }
 
-/// Merges the routes of one game that launch the same thing into one.
 pub fn merge_routes(db: &Db, id: &str) -> Result<()> {
     let conn = db.lock();
     let item = open_item(&conn, id, DUPLICATE_ROUTE)?;

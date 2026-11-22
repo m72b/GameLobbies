@@ -48,9 +48,7 @@ pub const REQUEST_SPACING: Duration = Duration::from_millis(260);
 const RETRY_DELAYS: [Duration; 2] = [Duration::from_secs(1), Duration::from_secs(3)];
 /// A cached token is renewed this long before it expires.
 const TOKEN_MARGIN: Duration = Duration::from_secs(60);
-/// How long matched metadata stays fresh.
 pub const METADATA_TTL_MS: i64 = 30 * 24 * 3_600_000;
-/// How long a "no match" result stays fresh.
 pub const MISS_TTL_MS: i64 = 7 * 24 * 3_600_000;
 const FUTURE_SKEW_MS: i64 = 24 * 3_600_000;
 /// After a failed background fetch, the same game is not retried automatically for this long.
@@ -71,14 +69,12 @@ const NO_CREDENTIALS: &str =
     "Add your IGDB (Twitch) Client ID and Client Secret in Settings first.";
 const WORKS: &str = "IGDB connection works.";
 
-/// Fields fetched for the game page.
 pub const GAME_FIELDS: &str = "name,summary,storyline,genres.name,involved_companies.company.name,involved_companies.developer,involved_companies.publisher,aggregated_rating,aggregated_rating_count,rating,rating_count,first_release_date,url,screenshots.image_id,artworks.image_id";
 /// Fields of `game_time_to_beats` (seconds; `count` = number of submissions).
 const TIME_TO_BEAT_FIELDS: &str = "hastily,normally,completely,count";
 /// Version of the cached metadata JSON. Rows written with an older shape (without images or
 /// time to beat) still load, but count as stale so the next view refetches them.
 pub const CACHE_SHAPE: u32 = 2;
-/// Screenshots plus artworks kept per game.
 pub const MAX_IMAGES: usize = 8;
 /// Screenshots kept before artworks fill the rest of [`MAX_IMAGES`].
 const MAX_SCREENSHOTS_FIRST: usize = 5;
@@ -160,7 +156,6 @@ pub struct TimeToBeat {
     /// Completionist ("completely").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completely: Option<u64>,
-    /// Number of submissions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub count: Option<u32>,
 }
@@ -267,7 +262,6 @@ fn clean_image_ids(ids: Vec<String>, max: usize) -> Vec<String> {
         .collect()
 }
 
-/// Image sizes used by the page.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImageSize {
     /// `t_screenshot_med` (569x320) for the strip.
@@ -290,7 +284,6 @@ pub fn image_url(id: &str, size: ImageSize) -> Option<String> {
     ))
 }
 
-/// Every image URL (both sizes) the metadata refers to.
 pub fn image_urls(metadata: &GameMetadata) -> Vec<String> {
     metadata
         .image_ids()
@@ -386,7 +379,6 @@ pub fn image_views(metadata: &GameMetadata, resolve: &dyn Fn(&str) -> String) ->
         .collect()
 }
 
-/// One candidate in the "Search IGDB" picker.
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchResult {
@@ -437,7 +429,6 @@ pub struct TestResult {
     pub message: String,
 }
 
-/// `igdb:progress` payload and `igdb_fetch_all` result.
 #[derive(Serialize, Clone, Debug, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct BulkProgress {
@@ -502,7 +493,6 @@ impl std::error::Error for IgdbError {}
 // ---------------------------------------------------------------------------
 // Text sanitizing (pure)
 
-/// Bidirectional controls and invisible characters that could disguise text.
 fn is_hidden(c: char) -> bool {
     c == '\u{200B}' || crate::validation::is_bidi_or_hidden(c)
 }
@@ -634,7 +624,6 @@ pub fn clean_title(title: &str) -> Option<String> {
     (!cleaned.is_empty()).then_some(cleaned)
 }
 
-/// Lower-case letters and digits only, for comparing names.
 pub fn normalize(name: &str) -> String {
     name.chars()
         .filter(|c| c.is_alphanumeric())
@@ -690,7 +679,6 @@ impl SourceField {
     }
 }
 
-/// `external_games` lookup of a Steam app id (digits only, else `None`).
 pub fn query_steam_external(app_id: &str, field: SourceField) -> Option<String> {
     if app_id.is_empty() || app_id.len() > 12 || !app_id.chars().all(|c| c.is_ascii_digit()) {
         return None;
@@ -770,7 +758,6 @@ fn str_field(obj: &Value, key: &str) -> Option<String> {
     obj.get(key).and_then(Value::as_str).map(str::to_owned)
 }
 
-/// Rounds a 0–100 score; `None` when missing or not a number.
 pub fn rating(score: Option<&Value>, count: Option<&Value>) -> Option<Rating> {
     let score = score.and_then(Value::as_f64).filter(|s| s.is_finite())?;
     let count = count
@@ -783,7 +770,6 @@ pub fn rating(score: Option<&Value>, count: Option<&Value>) -> Option<Rating> {
     })
 }
 
-/// Developer and publisher names from `involved_companies`.
 pub fn companies(value: Option<&Value>) -> (Vec<String>, Vec<String>) {
     let mut developers = Vec::new();
     let mut publishers = Vec::new();
@@ -859,14 +845,12 @@ pub fn parse_games(body: &str) -> Result<Option<GameMetadata>, IgdbError> {
     Ok(json_array(body)?.iter().find_map(parse_game))
 }
 
-/// `POST /external_games` → the first linked game id.
 pub fn parse_external(body: &str) -> Result<Option<u64>, IgdbError> {
     Ok(json_array(body)?
         .iter()
         .find_map(|item| item.get("game").and_then(as_id)))
 }
 
-/// A search candidate with what ranking needs.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Candidate {
     pub id: u64,
@@ -1107,9 +1091,7 @@ pub struct IgdbState {
     limiter: RateLimiter,
     /// Serializes token requests so concurrent lookups share one.
     token_fetch: tokio::sync::Mutex<()>,
-    /// Games with a fetch in progress.
     in_flight: StdMutex<HashSet<String>>,
-    /// Games whose last background fetch failed, and when.
     failed: StdMutex<HashMap<String, Instant>>,
     bulk_running: AtomicBool,
     bulk_cancel: AtomicBool,
@@ -1408,7 +1390,6 @@ impl<'a> Api<'a> {
         }
     }
 
-    /// Full metadata for one IGDB id, with its time to beat.
     pub async fn game(&self, igdb_id: u64) -> Result<Option<GameMetadata>, IgdbError> {
         let Some(mut metadata) = parse_games(&self.post("games", &query_by_id(igdb_id)).await?)?
         else {
@@ -1431,7 +1412,6 @@ impl<'a> Api<'a> {
         }
     }
 
-    /// The IGDB id linked to a Steam app id, trying both names of the source field.
     pub async fn steam_game(&self, app_id: &str) -> Result<Option<u64>, IgdbError> {
         for field in SourceField::ALL {
             let Some(query) = query_steam_external(app_id, field) else {
@@ -1451,7 +1431,6 @@ impl<'a> Api<'a> {
         Ok(None)
     }
 
-    /// Search candidates for free text.
     pub async fn search(&self, text: &str) -> Result<Vec<Candidate>, IgdbError> {
         let Some(query) = query_search(text, false) else {
             return Ok(Vec::new());
@@ -1466,7 +1445,6 @@ impl<'a> Api<'a> {
         }
     }
 
-    /// Resolves a library game to an IGDB id: Steam app id first, then the cleaned title.
     pub async fn match_game(&self, game: &Game) -> Result<Option<u64>, IgdbError> {
         if let Some(app_id) = steam_app_id(game) {
             if let Some(id) = self.steam_game(app_id).await? {
@@ -1489,7 +1467,6 @@ impl<'a> Api<'a> {
 // ---------------------------------------------------------------------------
 // Cache decisions (pure)
 
-/// Whether a cache row can be used without refetching.
 pub fn is_fresh(cached: &CachedMetadata, now: i64) -> bool {
     let ttl = if cached.igdb_id.is_some() {
         METADATA_TTL_MS
@@ -1728,7 +1705,6 @@ pub fn get(app: &AppHandle, game_id: &str) -> Result<MetadataView> {
     Ok(view)
 }
 
-/// [`view`] with image URLs replaced by cached copies where they exist.
 fn resolved_view(
     state: &AppState,
     cached: Option<CachedMetadata>,
@@ -1792,7 +1768,6 @@ fn spawn_image_cache(app: &AppHandle, game_id: &str, view: &MetadataView) {
     });
 }
 
-/// "Wrong game? Search IGDB": candidates for the game's cleaned title, or for `text`.
 pub async fn search(
     state: &AppState,
     game_id: &str,
@@ -2087,8 +2062,6 @@ mod tests {
         assert_eq!(games[0].title, "Pretty Name");
     }
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-    // -- local HTTP server -------------------------------------------------
 
     #[derive(Debug, Clone)]
     struct Req {
@@ -2609,8 +2582,6 @@ mod tests {
         assert!(urls.iter().all(|u| !u.contains("BAD")));
     }
 
-    // -- query building ------------------------------------------------------
-
     #[test]
     fn search_queries_cannot_be_broken_out_of() {
         let q = query_search(r#"Foo"; where id = 1; fields *; ""#, false).unwrap();
@@ -2649,8 +2620,6 @@ mod tests {
             format!("fields {GAME_FIELDS}; where id = 72; limit 1;")
         );
     }
-
-    // -- parsing --------------------------------------------------------------
 
     #[test]
     fn full_responses_parse_and_sanitize() {
@@ -2896,8 +2865,6 @@ mod tests {
         assert_eq!(r.release_date, Some(10_000));
     }
 
-    // -- tokens -----------------------------------------------------------------
-
     #[test]
     fn token_body_is_form_encoded() {
         let body = token_form("id 1", "s&e=c+r/et");
@@ -2946,8 +2913,6 @@ mod tests {
         cache.clear();
         assert_eq!(cache.get("a", now), None);
     }
-
-    // -- HTTP against a local server -------------------------------------------------
 
     fn api_for<'a>(base: &str, state: &'a IgdbState) -> Api<'a> {
         Api::new(Endpoints::local(base), ID.into(), SECRET.into(), state).unwrap()
@@ -3192,8 +3157,6 @@ mod tests {
         }
         assert_eq!(e.api_url("games").as_str(), "https://api.igdb.com/v4/games");
     }
-
-    // -- cache ---------------------------------------------------------------------------
 
     fn row(id: Option<i64>, fetched_at: i64, source: &str) -> CachedMetadata {
         CachedMetadata {

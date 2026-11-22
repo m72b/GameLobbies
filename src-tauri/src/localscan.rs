@@ -60,7 +60,6 @@ use anyhow::{bail, Result};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 
-/// Paths longer than this are skipped.
 pub const MAX_PATH_CHARS: usize = 4_096;
 /// Index files (`.m3u`, `.cue`, `.gdi`, `PARAM.SFO`) larger than this are not parsed.
 const MAX_INDEX_BYTES: u64 = 1024 * 1024;
@@ -76,22 +75,18 @@ pub struct ScanLimits {
 }
 
 impl ScanLimits {
-    /// Game roots, normal scans.
     pub const GAMES_QUICK: Self = Self {
         max_depth: 8,
         max_entries: 250_000,
     };
-    /// Game roots, "scan everything".
     pub const GAMES_FULL: Self = Self {
         max_depth: 16,
         max_entries: 3_000_000,
     };
-    /// Emulator roots, normal scans.
     pub const EMULATORS_QUICK: Self = Self {
         max_depth: 5,
         max_entries: 200_000,
     };
-    /// Emulator roots, "scan everything".
     pub const EMULATORS_FULL: Self = Self {
         max_depth: 8,
         max_entries: 3_000_000,
@@ -220,20 +215,19 @@ fn pc_title(folder_name: &str, exe: Option<&Path>) -> String {
 // ---------------------------------------------------------------------------
 // Shortcuts
 
-/// What a `.lnk` / `.url` file may become (see the module docs).
 #[derive(Debug, Clone, PartialEq)]
 pub enum ShortcutKind {
     /// A `.url` whose link is an allowed store launch link (already validated).
     Uri(String),
-    /// A `.lnk` pointing at an existing local `.exe` with no arguments.
     Exe(PathBuf),
     /// A `.lnk` the user confirmed with exactly this target and these arguments.
     Confirmed,
     /// A `.lnk` that needs the user's confirmation first.
-    NeedsConfirmation { target: String, arguments: String },
-    /// Not usable (with a user-facing reason).
+    NeedsConfirmation {
+        target: String,
+        arguments: String,
+    },
     Invalid(String),
-    /// The file couldn't be read.
     Unreadable,
 }
 
@@ -304,7 +298,6 @@ pub struct RomGame {
     pub title: String,
     /// Lower-case extension (`.iso`) or `folder`.
     pub format: String,
-    /// Other discs of a multi-disc game without an `.m3u`.
     pub other_discs: Vec<PathBuf>,
 }
 
@@ -327,7 +320,6 @@ pub struct PcGame {
 pub struct UncertainRom {
     pub path: PathBuf,
     pub title: String,
-    /// The systems using its extension (catalog ids, catalog order).
     pub systems: Vec<&'static str>,
 }
 
@@ -362,9 +354,7 @@ pub struct GameScan {
     pub shortcuts: Vec<PendingShortcut>,
     pub unsupported: Vec<Unsupported>,
     pub unreadable: Vec<String>,
-    /// Files skipped as not a game (unknown format, no system, Switch update/DLC, ...).
     pub skipped: usize,
-    /// A few skipped paths with the reason, for the summary.
     pub samples: Vec<String>,
     pub truncated: bool,
     pub visited: usize,
@@ -407,7 +397,6 @@ pub fn path_key(raw: &str) -> Option<String> {
     normalize_path(&crate::platform::long_path(Path::new(raw.trim())).to_string_lossy())
 }
 
-/// [`path_key`] for a `Path` (empty when unusable).
 pub fn key_of(path: &Path) -> String {
     path_key(&path.to_string_lossy()).unwrap_or_default()
 }
@@ -894,7 +883,6 @@ fn generic_exe_folder(path: &Path) -> bool {
         .is_some_and(|n| GENERIC_EXE_FOLDERS.contains(&n.to_string_lossy().to_lowercase().as_str()))
 }
 
-/// A known emulator executable directly in `dir`. Adds the entries listed to `listed`.
 fn holds_emulator(dir: &Path, listed: &mut usize) -> bool {
     list_dir(dir).is_ok_and(|listing| {
         *listed += listing.items.len();
@@ -1077,7 +1065,6 @@ fn folder_game(system: &'static System, dir: &Path, name: &str) -> Option<RomGam
     None
 }
 
-/// The `TITLE` entry of a PlayStation `PARAM.SFO`, if the file is well formed.
 fn sfo_title(path: &Path) -> Option<String> {
     if std::fs::metadata(path).ok()?.len() > 64 * 1024 {
         return None;
@@ -1117,9 +1104,7 @@ fn parse_sfo_title(data: &[u8]) -> Option<String> {
 #[derive(Debug, PartialEq)]
 pub enum Pick {
     One(PathBuf),
-    /// No `.exe`, one shortcut: classify it with [`classify_shortcut`].
     Shortcut(PathBuf),
-    /// Several equally good candidates (best first).
     Ambiguous(Vec<PathBuf>),
     None,
     /// The folder (or a subfolder) couldn't be listed completely.
@@ -1132,7 +1117,6 @@ pub fn pick_executable(folder: &Path, name: &str) -> Pick {
     pick_executable_counted(folder, name, &mut 0)
 }
 
-/// [`pick_executable`], adding the number of entries it listed to `listed`.
 pub fn pick_executable_counted(folder: &Path, name: &str, listed: &mut usize) -> Pick {
     let Ok(ranked) = crate::importers::registry::ranked_executables_counted(folder, name, listed)
     else {
@@ -1176,7 +1160,6 @@ pub fn pick_executable_counted(folder: &Path, name: &str, listed: &mut usize) ->
     }
 }
 
-/// Scans a games root. Errors only when the root itself can't be read.
 pub fn scan_games(
     root: &Path,
     inputs: &ScanInputs,

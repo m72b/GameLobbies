@@ -41,7 +41,6 @@ const AUTO_CHECK_INTERVAL_MS: i64 = 24 * 60 * 60 * 1000;
 /// Row in the `settings` table holding the time of the last check that reached the server.
 /// Kept out of [`crate::types::Settings`] so the renderer cannot set it.
 const LAST_CHECK_KEY: &str = "updaterLastCheckAt";
-/// Minimum gap between `updates:progress` events.
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(150);
 /// Time for the renderer to show "Restarting…" before the installer closes the app.
 const READY_DELAY: Duration = Duration::from_millis(500);

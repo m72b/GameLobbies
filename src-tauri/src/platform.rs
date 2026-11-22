@@ -49,7 +49,6 @@ pub fn encode_uri_component(value: &str) -> String {
     percent_encoding::utf8_percent_encode(value, SET).to_string()
 }
 
-/// Starts a program detached from Game Lobby, so closing the launcher doesn't close the game.
 pub fn spawn_detached(program: &Path, args: &[String]) -> Result<()> {
     let cwd = program.parent().filter(|d| d.is_dir());
     spawn_detached_in(program, args, cwd)
@@ -132,14 +131,12 @@ fn shell_open_blocking(target: &str) -> Result<()> {
     bail!("Opening {target} is only supported on Windows.")
 }
 
-/// A running process: its id and full executable path.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ProcessInfo {
     pub path: String,
     pub pid: u32,
 }
 
-/// All running processes this user can query, sorted by path.
 #[cfg(windows)]
 pub fn running_processes() -> Result<Vec<ProcessInfo>> {
     use std::mem::{size_of, zeroed};
@@ -209,7 +206,6 @@ pub fn running_processes() -> Result<Vec<ProcessInfo>> {
     Ok(Vec::new())
 }
 
-/// What process tracking needs to know about one top-level window.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct WindowInfo {
     pub pid: u32,
@@ -237,7 +233,6 @@ pub fn is_play_window(w: &WindowInfo) -> bool {
         && (w.minimized || (w.width > 0 && w.height > 0))
 }
 
-/// Ids of processes that own at least one [`is_play_window`] window (one `EnumWindows` pass).
 pub fn processes_with_play_windows() -> std::collections::HashSet<u32> {
     top_level_windows()
         .iter()
@@ -375,7 +370,6 @@ pub fn unprotect(_: &[u8]) -> Result<Vec<u8>> {
 // ---------------------------------------------------------------------------
 // Shortcuts and drives
 
-/// Largest `.lnk` / `.url` file that is read.
 pub const MAX_SHORTCUT_BYTES: u64 = 64 * 1024;
 
 /// The `URL=` value of an Internet shortcut's `[InternetShortcut]` section. The caller must
@@ -456,7 +450,6 @@ pub fn resolve_shortcut(path: &Path) -> Result<(String, String)> {
     bail!("{} can't be read as a shortcut here.", path.display())
 }
 
-/// Writes a `.lnk` (tests only).
 #[cfg(all(windows, test))]
 pub fn create_shortcut(path: &Path, target: &str, arguments: &str) -> Result<()> {
     use windows::core::{Interface, HSTRING};
@@ -482,7 +475,6 @@ pub fn create_shortcut(path: &Path, target: &str, arguments: &str) -> Result<()>
     }
 }
 
-/// True when the drive of an absolute `X:\...` path is a network drive (`DRIVE_REMOTE`).
 #[cfg(windows)]
 pub fn is_remote_drive(path: &str) -> bool {
     use windows_sys::Win32::Storage::FileSystem::GetDriveTypeW;
@@ -520,7 +512,6 @@ pub fn is_reparse_point(path: &Path) -> bool {
     }
 }
 
-/// Version resources larger than this are not read.
 const MAX_VERSION_INFO_BYTES: u32 = 1024 * 1024;
 
 /// A version-resource name that can serve as a game title: 1 to 100 characters, with a
@@ -740,7 +731,6 @@ pub fn short_path(path: &Path) -> PathBuf {
 mod tests {
     use super::*;
 
-    /// Path containment moved to `tracker`; same cases, now on `normalize_path` + `is_within`.
     #[test]
     fn path_containment_is_case_insensitive_and_prefix_safe() {
         use crate::tracker::{is_within, normalize_path};

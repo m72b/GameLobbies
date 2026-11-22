@@ -146,7 +146,6 @@ pub struct Cursor {
 #[serde(rename_all = "camelCase")]
 pub struct SessionPage {
     pub sessions: Vec<SessionEntry>,
-    /// Pass back to load the next page; absent on the last page.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next: Option<Cursor>,
     /// Read-only "Added from Steam" entries (one per game with a positive difference), on the
@@ -467,7 +466,6 @@ impl Format {
 pub struct Summary {
     pub title: String,
     pub started_at: i64,
-    /// Absent while running.
     pub ended_at: Option<i64>,
     pub seconds: i64,
     pub source: String,

@@ -12,7 +12,6 @@ use rusqlite::Connection;
 use std::path::Path;
 use tauri::{AppHandle, State};
 
-/// How many trailing log lines the report carries.
 pub const LOG_LINES: usize = 200;
 
 type CmdResult<T> = Result<T, String>;
@@ -21,7 +20,6 @@ fn err(e: impl Into<anyhow::Error>) -> String {
     format!("{:#}", e.into())
 }
 
-/// Facts that do not come from the library database.
 pub struct Environment {
     pub app_version: String,
     pub windows: String,
@@ -89,7 +87,6 @@ fn environment(app: &AppHandle, state: &AppState) -> Environment {
     }
 }
 
-/// Games per store, sorted by store id.
 fn store_counts(conn: &Connection) -> Result<Vec<(String, i64)>> {
     let mut stmt =
         conn.prepare("SELECT store, COUNT(*) FROM games GROUP BY store ORDER BY store")?;
@@ -221,7 +218,6 @@ pub fn render(
     Ok(redact::redact_with(&out, profile))
 }
 
-/// The report for the running app.
 fn build(app: &AppHandle, state: &AppState) -> Result<String> {
     let env = environment(app, state);
     let lines = applog::tail_lines(&state.data_dir, LOG_LINES);
@@ -249,7 +245,6 @@ pub async fn diagnostics_open_logs(state: State<'_, AppState>) -> CmdResult<()> 
         .map_err(err)
 }
 
-/// Writes the startup facts to the log.
 pub fn log_startup(app: &tauri::App, data_dir: &Path) {
     log::info!(
         "Game Lobby {} starting (Windows: {}, {}, WebView2: {})",

@@ -38,14 +38,12 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
 
 const API: &str = "https://www.steamgriddb.com/api/v2";
-/// Poster sizes close to the UI's 2:3 card.
 const DIMENSIONS: &str = "600x900,342x482,660x930";
 pub const MAX_CANDIDATES: usize = 30;
 /// Results asked for per picker page (the API's maximum).
 pub const PAGE_SIZE: u32 = 50;
 /// Highest picker page that can be requested (0-based).
 pub const MAX_PAGE: u32 = 50;
-/// Hero or logo candidates kept per game for the game page.
 pub const MAX_ART_CANDIDATES: usize = 10;
 const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_REPORTED_ERRORS: usize = 50;
@@ -62,7 +60,6 @@ pub struct Cover {
     pub id: u64,
     /// Full-size image (https://cdn2.steamgriddb.com/...).
     pub url: String,
-    /// Smaller preview of the same image.
     pub thumb: String,
     pub width: u32,
     pub height: u32,
@@ -86,7 +83,6 @@ pub struct FetchSummary {
     pub errors: Vec<String>,
 }
 
-/// One picker page: the candidates that pass the filters, and whether a next page exists.
 #[derive(Serialize, Clone, Debug, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct CoverPage {
@@ -128,7 +124,6 @@ pub struct KeyTest {
 // ---------------------------------------------------------------------------
 // Grid preferences (from Settings)
 
-/// Which grids to ask SteamGridDB for. Built from [`Settings`] at request time.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct GridPrefs {
     /// Known, distinct styles in canonical order; empty = any style.
@@ -153,7 +148,6 @@ impl GridPrefs {
         }
     }
 
-    /// Query parameters for `GET /grids/game/{id}`.
     pub fn query(&self) -> Vec<(&'static str, String)> {
         let mut pairs = vec![("dimensions", DIMENSIONS.to_string())];
         if !self.styles.is_empty() {
@@ -294,13 +288,11 @@ fn envelope(body: &str) -> Result<(Value, Option<u64>, Option<u64>), ApiError> {
         .ok_or_else(|| ApiError::Invalid("the response has no data.".into()))
 }
 
-/// `GET /games/steam/{appId}` → one game.
 pub fn parse_game(body: &str) -> Result<SgdbGame, ApiError> {
     serde_json::from_value(envelope_data(body)?)
         .map_err(|_| ApiError::Invalid("the game entry is malformed.".into()))
 }
 
-/// `GET /search/autocomplete/{title}` → matching games (malformed entries are skipped).
 pub fn parse_search(body: &str) -> Result<Vec<SgdbGame>, ApiError> {
     match envelope_data(body)? {
         Value::Array(items) => Ok(items
@@ -428,7 +420,6 @@ pub fn parse_art(body: &str, prefs: &GridPrefs) -> Result<Vec<String>, ApiError>
         .collect())
 }
 
-/// Game page art kinds on SteamGridDB.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArtKind {
     Hero,
@@ -447,14 +438,12 @@ impl ArtKind {
 // ---------------------------------------------------------------------------
 // Matching
 
-/// How a game is looked up on SteamGridDB.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Lookup {
     Steam(String),
     Title(String),
 }
 
-/// The first Steam route's app ID, when it is a plain number.
 pub fn steam_app_id(game: &Game) -> Option<&str> {
     game.routes.iter().find_map(|r| {
         (r.source_id == "steam")
@@ -464,7 +453,6 @@ pub fn steam_app_id(game: &Game) -> Option<&str> {
     })
 }
 
-/// Prefers a Steam route's app ID (exact), falling back to a title search.
 pub fn lookup_for(game: &Game) -> Option<Lookup> {
     match steam_app_id(game) {
         Some(id) => Some(Lookup::Steam(id.to_string())),
@@ -595,7 +583,6 @@ impl Client {
         String::from_utf8(body).map_err(|_| ApiError::Invalid("the response is not text.".into()))
     }
 
-    /// Resolves the SteamGridDB game ID; `None` when nothing matches.
     async fn game_id(&self, game: &Game) -> Result<Option<u64>, ApiError> {
         let Some(lookup) = lookup_for(game) else {
             return Ok(None);
@@ -719,7 +706,6 @@ fn client(state: &AppState) -> Result<Client> {
     Client::new(get_steamgriddb_api_key(state)?.ok_or_else(|| anyhow!(NO_KEY))?)
 }
 
-/// The grid preferences as currently saved.
 pub fn grid_prefs(state: &AppState) -> Result<GridPrefs> {
     Ok(GridPrefs::from_settings(&db::get_settings(
         &state.db.lock(),
@@ -735,7 +721,6 @@ pub fn status(state: &AppState) -> Result<KeyStatus> {
     })
 }
 
-/// One page of poster candidates for the cover picker (`steamgriddb_search`).
 pub async fn search(state: &AppState, game_id: &str, page: Option<u32>) -> Result<CoverPage> {
     search_page(state, game_id, None, page).await
 }

@@ -96,7 +96,6 @@ fn open_if_allowed_external(url: &Url) {
     }
 }
 
-/// Settings pages that `settings_open` may jump to (the `settings:open` event's payload).
 pub const SETTINGS_SECTIONS: [&str; 5] =
     ["updates", "cover-art", "metadata", "api-keys", "accounts"];
 

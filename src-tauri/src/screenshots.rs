@@ -33,9 +33,7 @@ use tauri::http::{header, Request, Response, StatusCode};
 use tauri::{AppHandle, Emitter, Manager, Runtime, State, UriSchemeContext, WebviewWindow};
 use tauri_plugin_dialog::DialogExt;
 
-/// Largest screenshot file accepted.
 pub const MAX_SCREENSHOT_BYTES: u64 = 40 * 1024 * 1024;
-/// Widest or tallest picture accepted (pixels).
 const MAX_DIMENSION: u32 = 16_384;
 /// Steam screenshots looked at per import (newest first).
 pub const MAX_STEAM_IMPORT: usize = 200;
@@ -70,14 +68,12 @@ pub struct Screenshot {
     pub missing: bool,
 }
 
-/// Result of adding or importing screenshots.
 #[derive(Serialize, Clone, Debug, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct AddResult {
     pub screenshots: Vec<Screenshot>,
     pub added: usize,
     pub duplicates: usize,
-    /// Pictures already listed whose missing file was written back.
     pub restored: usize,
     /// One line per refused file (file name only).
     pub errors: Vec<String>,
@@ -323,13 +319,10 @@ pub fn list(conn: &Connection, root: &Path, game_id: &str) -> Result<Vec<Screens
         .collect())
 }
 
-/// What [`store`] did with a picture.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Stored {
     Added,
-    /// The game already has it and its file is there.
     Duplicate,
-    /// The game already had it but the file was missing: written back.
     Restored,
 }
 
@@ -618,7 +611,6 @@ pub async fn screenshots_list(
     list(&state.db.lock(), &state.screenshots_dir(), &game_id).map_err(err)
 }
 
-/// Opens the native multi-file picker and adds the chosen pictures. Cancelling adds nothing.
 #[tauri::command]
 pub async fn screenshots_add(
     app: AppHandle,
