@@ -1077,4 +1077,58 @@ mod tests {
         }
         assert!(files > 0);
     }
+
+    /// The rename from "Game Lobby" keeps everything the app data, the WebView2 profile, the
+    /// single-instance lock and jump lists hang on (the identifier), and the installer hook
+    /// moves an old install over without touching app data.
+    #[test]
+    fn the_renamed_installer_keeps_the_identifier_and_moves_the_old_install() {
+        let config = json_file("tauri.conf.json");
+        assert_eq!(config["productName"], "GameLobbies");
+        assert_eq!(config["mainBinaryName"], "GameLobbies");
+        assert_eq!(config["identifier"], "app.gamelobby.desktop");
+        let nsis = &config["bundle"]["windows"]["nsis"];
+        assert_eq!(nsis["installMode"], "currentUser");
+        assert_eq!(nsis["installerHooks"], "installer/hooks.nsh");
+
+        let hooks = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("installer/hooks.nsh"),
+        )
+        .unwrap();
+        // Only NSIS code counts, not the comments explaining it.
+        let code: String = hooks
+            .lines()
+            .filter(|l| !l.trim_start().starts_with(';'))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let lower = code.to_lowercase();
+        assert!(code.contains("!macro NSIS_HOOK_PREINSTALL"));
+        assert!(code.contains("!macro NSIS_HOOK_POSTINSTALL"));
+        // The old install as the 0.9.0 installer wrote it (productName "Game Lobby", publisher
+        // from the identifier), per user.
+        assert!(code.contains(r#"!define GL_OLD_PRODUCTNAME "Game Lobby""#));
+        assert!(code.contains(r#"!define GL_OLD_PUBLISHER "gamelobby""#));
+        assert!(code.contains(
+            r#"!define GL_OLD_UNINSTKEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\Game Lobby""#
+        ));
+        assert!(!lower.contains("hklm") && !lower.contains("shctx"));
+        // The old uninstaller runs silently in update mode, in place, so it keeps app data.
+        assert!(
+            code.contains(r#"ExecWait '"$GlOldDir\uninstall.exe" /S /UPDATE _?=$GlOldDir' $R3"#)
+        );
+        // Never a recursive delete, and never the app data folders.
+        assert!(!lower.contains("rmdir /r"), "recursive delete in hooks.nsh");
+        assert!(!lower.contains("$appdata") && !lower.contains("bundleid"));
+        assert!(!lower.contains("$localappdata"));
+        // Old shortcuts are removed only when they start the old app.
+        assert_eq!(code.matches("!insertmacro IsShortcutTarget").count(), 2);
+        assert_eq!(code.matches("Delete \"$SMPROGRAMS\\").count(), 1);
+        assert_eq!(code.matches("Delete \"$DESKTOP\\").count(), 1);
+        // The Run value the hook moves is the one the app used to write, in the app's format.
+        assert_eq!(crate::autostart::OLD_VALUE_NAME, "Game Lobby");
+        assert!(code.contains(&format!(
+            r#"'"$INSTDIR\${{MAINBINARYNAME}}.exe" {}'"#,
+            crate::autostart::FLAG
+        )));
+    }
 }
