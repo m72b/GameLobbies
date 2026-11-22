@@ -229,3 +229,25 @@ The owner's test of Phase B: nothing worked. The GOG window opened, but GOG's Go
 4. After a pasted GOG sign-in, Settings → Accounts shows **Signed in to GOG as <name>. Not you? Sign out**. This is the login-CSRF mitigation, since Galaxy's flow has no `state` or PKCE.
 5. Tests: no `StoreHttp` error, `Debug` output or message contains a request URL, a secret, a code, a refresh token or the bearer token; `gog.rs` contains no logging call.
 6. `main.tsx` warns in the console, and keeps running, when `Object.prototype` is not frozen (`/freeze-prototype.js` didn't load). A web test checks that `index.html` loads that script before the module, and the config.
+
+### Phase B revised: Battle.net identity providers
+
+The owner's test (2026-11-21) showed Battle.net's form rendering after the `freezePrototype` fix. Its "Sign in with …" buttons are top-level redirects from `eu.account.battle.net/login/signin/<provider>` to the providers' own sign-in pages, which the window's host allowlist blocked: `accounts.google.com`, `www.facebook.com`, `discord.com`, `steamcommunity.com`, `accounts.nintendo.com`, `auth.api.sonyentertainmentnetwork.com`. The owner wants these options to work.
+
+- `signin::idp_hosts(store)` lists the identity-provider hosts allowed as top-level pages, for the Battle.net window only (empty for every other store):
+  - the six above;
+  - `m.facebook.com`;
+  - Sony's sign-in form host `my.account.sony.com` and account API host `ca.account.sony.com` (Sony's flow was not observed beyond its first host; the two are included because Sony's web sign-in uses them);
+  - Apple `appleid.apple.com`;
+  - Microsoft `login.live.com`, `login.microsoftonline.com`, `account.live.com`.
+- Matching is by exact host (no subdomains of these third parties), https only, with no port, user info or punycode label.
+- `page_allowed(url, store)` (store hosts with subdomains, or identity-provider hosts exactly) is used by both the Tauri navigation guard and the native WebView2 `NavigationStarting` check.
+- Capture is unchanged: the session is saved only after Battle.net's own signed-in page (`account.battle.net/overview`) is reached and the Battle.net probe accepts the cookies, so a provider's page can never count as signed in. Only cookies of Battle.net's domains are kept, never the provider's.
+- The window title shows the current host, so on a provider's page it shows that provider's site.
+- Popups stay denied. All six providers seen in the log used top-level redirects, not popups; Apple and Xbox were not in the log, so if either opens a popup it will not work.
+- Google refuses sign-in in embedded app webviews ("This browser or app may not be secure"), so Google may still fail; e-mail and password and the other providers should work.
+- Tests:
+  - every listed host passes only for Battle.net, in both checks;
+  - look-alikes (`accounts.google.com.evil.com`, `evil.accounts.google.com`, `discord.com.evil`, `www.discord.com`, punycode), http, ports and user info are refused;
+  - no provider page counts as Battle.net's signed-in page;
+  - the guard uses the same rule.
