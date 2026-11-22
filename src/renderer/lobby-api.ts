@@ -204,7 +204,7 @@ const api: LobbyAPI = {
     onProgress: callback => subscribe<UpdateProgress>('updates:progress', callback),
     onReady: callback => subscribe('updates:ready', () => callback())
   },
-  app: { quit: () => call('app_quit') },
+  app: { quit: () => call('app_quit'), onTrayHint: callback => subscribe('tray:hint', () => callback()) },
   diagnostics: {
     report: () => call('diagnostics_report'),
     openLogs: () => call('diagnostics_open_logs')

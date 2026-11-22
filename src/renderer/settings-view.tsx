@@ -240,7 +240,9 @@ export function SettingsView({ settings, onSettings, say, keys, page: section, o
         </>}
 
         {section === 'Startup and Behavior' && <div className="settings-card">
-          {['Launch on boot', 'Minimize to tray', 'Close to tray'].map(label => <div className="feature-row" key={label}><span>{label}</span><span className="coming-soon">COMING SOON</span></div>)}
+          <div className="toggle-row"><div><b>Launch on boot</b><small>Start Game Lobby when you sign in to Windows. It starts minimized, in the tray if a tray option is on.</small></div><input type="checkbox" aria-label="Launch on boot" checked={settings.launchOnBoot} onChange={event => void save({ launchOnBoot: event.target.checked })} /></div>
+          <div className="toggle-row"><div><b>Minimize to tray</b><small>Minimizing hides Game Lobby to the tray icon instead of the taskbar</small></div><input type="checkbox" aria-label="Minimize to tray" checked={settings.minimizeToTray} onChange={event => void save({ minimizeToTray: event.target.checked })} /></div>
+          <div className="toggle-row"><div><b>Close to tray</b><small>The close button hides Game Lobby and keeps it running, so playtime tracking continues. Quit from the tray menu.</small></div><input type="checkbox" aria-label="Close to tray" checked={settings.closeToTray} onChange={event => void save({ closeToTray: event.target.checked })} /></div>
         </div>}
 
         {section === 'Playtime and Stats' && <>

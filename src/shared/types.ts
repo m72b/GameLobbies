@@ -57,6 +57,12 @@ export interface Settings { scanIntervalHours: number; posterWidth: number; show
   autoCheckUpdates: boolean
   /** Minimize Game Lobby when a game is started from it. */
   minimizeOnLaunch: boolean
+  /** Start Game Lobby when Windows starts (a per-user Run entry; it starts minimized). Default false. */
+  launchOnBoot: boolean
+  /** Minimizing the window hides it to the notification area (tray icon) instead of the taskbar. Default false. */
+  minimizeToTray: boolean
+  /** The window close button hides the window to the tray; Game Lobby keeps running. Quit from the tray menu. Default false. */
+  closeToTray: boolean
   /** Motion in the interface: always animate, follow Windows, short fades only, or no animation at all. Default "system". */
   motion: MotionPreference
   /** Stores that library scans skip (distinct `StoreId`s). Default []. */
@@ -685,7 +691,7 @@ export interface LobbyAPI {
   screenshots: ScreenshotsAPI
   notes: NotesAPI
   updates: UpdatesAPI
-  app: { quit(): Promise<void> }
+  app: { quit(): Promise<void>; /** Fires the first time Game Lobby is brought back from the tray (one-time hint). */ onTrayHint(callback: () => void): () => void }
   /** Support tools. `report` is a redacted plain-text diagnostics report (no keys or tokens, user folder replaced); `openLogs` opens the fixed logs folder (the renderer passes no path). */
   diagnostics: { report(): Promise<string>; openLogs(): Promise<void> }
   /** Cached install sizes. `rescan` measures in the background (progress events) and rejects if one is running. `uninstall` only hands off to the game's launcher (never deletes files): the backend builds the link from the stored route. */

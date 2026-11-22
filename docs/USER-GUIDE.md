@@ -38,6 +38,15 @@ Every optional key lives in **Settings → API keys**: the SteamGridDB key (cove
 
 Screens and game pages animate subtly: a game page grows out of the poster you clicked, the library fades when you switch launcher or filter, and buttons respond to a press. **Settings → Appearance → Reduce motion** sets this: **Full** always animates, **Follow Windows** (the default) uses Windows' animation setting, **Reduced** keeps only short fades, and **Off** turns every animation off. If Windows' *Animation effects* are off, Follow Windows reduces motion and Settings shows a note saying so; choose **Full** to see every animation anyway.
 
+### Startup and Behavior
+
+**Settings → Startup and Behavior** has three options, all off by default.
+
+- **Launch on boot** starts Game Lobby when you sign in to Windows, minimized: in the tray if **Minimize to tray** or **Close to tray** is on, otherwise as a minimized taskbar button. It adds a per-user entry (`Run`, for your Windows user only, no administrator rights); turning the option off, or uninstalling Game Lobby, removes it. Game Lobby checks the entry each time it starts and when you change settings, so it keeps working after an update moves the program.
+- **Minimize to tray** hides the window to the notification area (the icon next to the clock, possibly under the **^** arrow) when you minimize it, instead of leaving a taskbar button.
+- **Close to tray** makes the window's close button hide Game Lobby instead of exiting. It keeps running, so playtime tracking and scheduled scans continue. The first time this happens, the next time you open the window it tells you Game Lobby is still in the tray.
+
+The tray icon appears only while one of the two tray options is on. Click it to open Game Lobby; right-click it for **Open Game Lobby** and **Quit**. **Quit** (and the Quit button in the side rail) exits for real, and so does installing an update. Starting Game Lobby a second time brings the hidden window back. If **Minimize when a game starts** is on together with **Minimize to tray**, pressing Play sends Game Lobby to the tray.
 ### Steam games you own but haven't installed
 
 Steam is installed-games only unless you set this up. In **Settings → API keys** (also reachable from the Steam row in **Settings → Libraries**), choose **Add keys** and fill in the **Steam Web API key and SteamID64** card:
