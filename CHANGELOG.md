@@ -2,6 +2,15 @@
 
 All notable changes to Game Lobby are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Game details without a key: Wikidata, Wikipedia and Wikimedia Commons
+- New built-in game details source that needs no key: release date, platforms, developer, publisher and genres from Wikidata (CC0), the first paragraph of the English Wikipedia article when IGDB has no description (shown with *From Wikipedia*, a link to the article and CC BY-SA 4.0), and free logos, plus a cover where a free one exists, from Wikimedia Commons, each credited with author, licence and a link to its file page. On by default; **Use Wikipedia & Wikidata (no key needed)** in **Settings → API keys** and **Settings → Playtime and Stats** turns it off.
+- Only free images: a Commons file is used only when Commons hosts it under public domain, CC0, CC BY or CC BY-SA (never fair use, NonFree, NonCommercial, NoDerivatives, GFDL-only or unclear licences), and only from the Commons upload folder.
+- Only fills what is missing: IGDB and your own values come first; titles, genres, covers and logos you set are never changed. Wikimedia logos are fallbacks behind Steam and SteamGridDB; a cover is set automatically only for a game with none, and only when it is not low resolution.
+- Matching by Steam app ID or IGDB entry first (one batched query), editions count as their game, then by exact title; when several items match, Game Lobby asks instead of guessing (**Find details on Wikidata** on the game page, with **Use automatic match** to undo). **Customize** shows Commons logos under **Logo** and free covers under **Cover**.
+- Requests go one at a time to the four Wikimedia API hosts only (https, checked redirects, size caps, `maxlag`, Retry-After), with a descriptive User-Agent; images go through the cover cache (Commons uploads only). Results are cached for 30 days (7 when nothing was found) and are not part of backups.
+
 ## [0.8.0] — 2026-11-22
 
 ### Store accounts and first-time setup

@@ -324,7 +324,36 @@ pub async fn get(state: &AppState, game_id: &str) -> Result<GameArt> {
             }
         },
     };
-    Ok(with_custom(combine(&game, sgdb), custom))
+    let conn = state.db.lock();
+    let wiki = crate::wikimedia::logo_urls(&conn, game_id);
+    let art = with_custom(with_wikimedia(combine(&game, sgdb), wiki), custom);
+    Ok(with_credits(&conn, &state.covers_dir(), art))
+}
+
+/// Free Commons logos go after Steam's and SteamGridDB's, as fallbacks (never ahead of them).
+pub fn with_wikimedia(mut art: GameArt, logos: Vec<String>) -> GameArt {
+    for url in logos {
+        if !art.logo.contains(&url) {
+            art.logo.push(url);
+        }
+    }
+    art
+}
+
+/// Commons images are shown from the cover cache once downloaded, each with its credit.
+fn with_credits(conn: &Connection, covers_dir: &Path, mut art: GameArt) -> GameArt {
+    let mut pairs = Vec::new();
+    for list in [&mut art.hero, &mut art.logo] {
+        for value in list.iter_mut() {
+            if crate::wikimedia::licence::valid_image_url(value) {
+                let display = crate::covercache::cached_value(conn, covers_dir, value);
+                pairs.push((value.clone(), display.clone()));
+                *value = display;
+            }
+        }
+    }
+    art.credits = crate::wikimedia::credits_for(conn, &pairs);
+    art
 }
 
 #[cfg(test)]

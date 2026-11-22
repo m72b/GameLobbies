@@ -179,6 +179,8 @@ fn migrate(db: &Connection, file: Option<&Path>) -> Result<()> {
     // ended without closing them (crash, power loss): they keep their last saved length, are
     // closed at that point and marked interrupted.
     crate::sessions::migrate(db)?;
+    // Wikidata matches and Commons image credits: added tables, no `user_version` change.
+    crate::wikimedia::migrate(db)?;
     db.execute(
         "INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)",
         params!["app", serde_json::to_string(&Settings::default())?],
@@ -866,7 +868,7 @@ pub fn drop_owned(
     let mut customized = customized_game_ids(db)?;
     // A manual IGDB match is the user's work too (an automatic one is only a cache).
     customized.extend(
-        db.prepare("SELECT gameId FROM game_metadata WHERE source<>'auto'")?
+        db.prepare("SELECT gameId FROM game_metadata WHERE source<>'auto' UNION SELECT gameId FROM wikimedia_match WHERE source='user'")?
             .query_map([], |row| row.get::<_, String>(0))?
             .collect::<rusqlite::Result<Vec<_>>>()?,
     );
@@ -968,6 +970,7 @@ pub(crate) fn delete_game_rows(db: &Connection, id: &str) -> Result<()> {
         "DELETE FROM game_art WHERE gameId=?",
         "DELETE FROM game_page_custom WHERE gameId=?",
         "DELETE FROM game_metadata WHERE gameId=?",
+        "DELETE FROM wikimedia_match WHERE gameId=?",
         "DELETE FROM game_screenshots WHERE gameId=?",
         "DELETE FROM game_notes WHERE gameId=?",
         "DELETE FROM game_memories WHERE gameId=?",

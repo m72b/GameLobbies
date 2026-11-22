@@ -20,6 +20,8 @@ pub struct AppState {
     pub covers: crate::covercache::CacheState,
     /// IGDB access token (memory only), rate limiter and fetch bookkeeping.
     pub igdb: crate::igdb::IgdbState,
+    /// Wikidata / Wikipedia / Commons request pacing and fetch bookkeeping.
+    pub wikimedia: crate::wikimedia::WikimediaState,
     /// Recent native-picker results that a later save may use (see `picks`).
     pub picks: crate::picks::PickedPaths,
     /// Launches waiting for a custom launcher to open (see `pending_launch`).

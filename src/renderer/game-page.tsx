@@ -9,6 +9,8 @@ import { CoverLayer, useCover } from './poster'
 import { FadeImg } from './loading-image'
 import { zoomIn, type ZoomOrigin } from './zoom'
 import { GenreBlock, IgdbAbout, IgdbPicker, IgdbRatings, useIgdb } from './igdb-details'
+import { ImageCredit, WikiPicker, useWikimedia } from './wiki-details'
+import { creditFor } from '../shared/about'
 import { argsSupport, argsText, isEmulatorRoute, routeLabel, routeTitle, withRouteName } from '../shared/routes'
 import { launcherOfRoute, playLauncher } from '../shared/launchers'
 import { LauncherBlock } from './launcher-assign'
@@ -71,6 +73,7 @@ export function GamePage({ game, index, settings, launchers, running, libraryVer
   const [emuError, setEmuError] = useState('')
   const [customizing, setCustomizing] = useState(false)
   const [igdbPicking, setIgdbPicking] = useState(false)
+  const [wikiPicking, setWikiPicking] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
   const [tool, setTool] = useState<{ index: number; tool: RouteTool } | null>(null)
   const [optionsOpen, setOptionsOpen] = useState(false)
@@ -79,6 +82,7 @@ export function GamePage({ game, index, settings, launchers, running, libraryVer
   const [argsBusy, setArgsBusy] = useState(false)
   const toggleTool = (index: number, next: RouteTool) => setTool(current => current && current.index === index && current.tool === next ? null : { index, tool: next })
   const { view: igdb, setView: setIgdb } = useIgdb(game.id)
+  const { view: wiki, setView: setWiki } = useWikimedia(game.id)
   const { shots, setShots } = useScreenshots(game.id)
   const inputState = useGameInput(game.id)
   const { layout, change: changeLayout, flush: flushLayout } = useLogoLayout(game.id, art.custom)
@@ -88,7 +92,7 @@ export function GamePage({ game, index, settings, launchers, running, libraryVer
   // so the selection never points at a route that moved.
   const routesKey = game.routes.map(route => route.sourceId + '|' + route.launchTarget).join('\n')
   const defaultRoute = useMemo(() => Math.max(0, game.routes.findIndex(route => route.installed)), [game.id, routesKey]) // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { setMenuOpen(false); setCustomizing(false); setIgdbPicking(false) }, [game.id])
+  useEffect(() => { setMenuOpen(false); setCustomizing(false); setIgdbPicking(false); setWikiPicking(false) }, [game.id])
   useEffect(() => { setRouteIdx(defaultRoute); setTool(null) }, [game.id, routesKey, defaultRoute])
   // Whether the chosen route's stored launch options need confirming before Play uses them (Rust
   // decides: they came from a backup or an older version, or the program or command line changed).
@@ -132,6 +136,7 @@ export function GamePage({ game, index, settings, launchers, running, libraryVer
   }
   const closeCustomize = useCallback(() => { flushLayout(); setCustomizing(false) }, [flushLayout])
   const closeIgdb = useCallback(() => setIgdbPicking(false), [])
+  const closeWiki = useCallback(() => setWikiPicking(false), [])
 
   const runKey = running ? running.state + ':' + running.startedAt : 'idle'
   useEffect(() => {
@@ -144,6 +149,8 @@ export function GamePage({ game, index, settings, launchers, running, libraryVer
 
   const heroSrc = art.hero[heroIdx] ? coverUrl(art.hero[heroIdx]) : undefined
   const logoSrc = art.logo[logoIdx] ? coverUrl(art.logo[logoIdx]) : undefined
+  // A Commons logo carries its credit (author, licence) on the page.
+  const logoCredit = creditFor(art.credits, art.logo[logoIdx])
   const cover = useCover(game)
   const route = game.routes[routeIdx]
   const playVia = playLauncher(route, launchers)
@@ -177,6 +184,7 @@ export function GamePage({ game, index, settings, launchers, running, libraryVer
     ['Set custom cover', () => actions.setCover(game)],
     ['Find cover on SteamGridDB', () => actions.findCover(game)],
     ['Find details on IGDB', () => setIgdbPicking(true)],
+    ['Find details on Wikidata', () => setWikiPicking(true)],
     ['Link other games…', () => actions.link(game)],
     ...(launchers.length > 0 ? [['Link to launcher…', () => actions.linkLauncher(game)] as [string, () => void]] : []),
     [game.hidden ? 'Unhide' : 'Hide', () => actions.toggleHidden(game)],
@@ -197,10 +205,12 @@ export function GamePage({ game, index, settings, launchers, running, libraryVer
           ? <FadeImg key={logoSrc} className="gp-logo" src={logoSrc} alt={game.title} onError={() => setLogoIdx(value => value + 1)} />
           : <h1 className="gp-title">{game.title}</h1>}
       </div>
+      {logoSrc && logoCredit && <ImageCredit image={logoCredit} className="gp-logo-credit" />}
     </div>
 
+    {wikiPicking && <WikiPicker game={game} view={wiki} onClose={closeWiki} onChosen={next => { setWiki(next); setWikiPicking(false) }} />}
     {igdbPicking && <IgdbPicker game={game} view={igdb} onClose={closeIgdb} onChosen={next => { setIgdb(next); setIgdbPicking(false) }} />}
-    {customizing && <CustomizePanel game={game} custom={art.custom} heroSrc={heroSrc} logoSrc={logoSrc} layout={layout} onLayout={changeLayout} onClose={closeCustomize} sgdbSettingsKey={JSON.stringify([settings.steamGridDbAnimated, settings.steamGridDbNsfw, settings.steamGridDbHumor])} animated={settings.steamGridDbAnimated} />}
+    {customizing && <CustomizePanel game={game} custom={art.custom} heroSrc={heroSrc} logoSrc={logoSrc} layout={layout} onLayout={changeLayout} onClose={closeCustomize} wiki={wiki} sgdbSettingsKey={JSON.stringify([settings.steamGridDbAnimated, settings.steamGridDbNsfw, settings.steamGridDbHumor])} animated={settings.steamGridDbAnimated} />}
 
     <div className="gp-bar">
       {launching
@@ -291,7 +301,7 @@ export function GamePage({ game, index, settings, launchers, running, libraryVer
           <div><span>Sessions</span><b>{stats?.sessionCount ?? 0}</b></div>
           <div><span>First played</span><b>{formatDate(stats?.firstPlayed)}</b></div>
         </div>
-        <IgdbAbout view={igdb} title={game.title} onSearch={() => setIgdbPicking(true)} />
+        <IgdbAbout view={igdb} wiki={wiki} title={game.title} onSearch={() => setIgdbPicking(true)} onWikiSearch={() => setWikiPicking(true)} />
         <GameNotesSection gameId={game.id} shots={shots} />
       </section>
 
@@ -299,6 +309,7 @@ export function GamePage({ game, index, settings, launchers, running, libraryVer
 
       <aside className="gp-side">
         <div className={'gp-poster cover-' + cover.status} style={coverStyle(game, index)}><CoverLayer src={cover.src} status={cover.status} />{cover.status !== 'loaded' && <span>{game.title}</span>}</div>
+        {wiki.coverCredit && <ImageCredit image={wiki.coverCredit} className="gp-cover-credit" />}
         <div className="gp-side-block"><div className="detail-label">STORES</div>
           {game.routes.length === 0 && <div className="muted-text">No launch routes</div>}
           {game.routes.map((item, i) => <div key={item.sourceId + '-' + i}>
@@ -336,7 +347,7 @@ export function GamePage({ game, index, settings, launchers, running, libraryVer
           {emuError && <div className="form-error" role="alert">{emuError}</div>}
         </div>
         <LauncherBlock game={game} launchers={launchers} libraryVersion={libraryVersion} onOpenLink={() => actions.linkLauncher(game)} onUnassign={launcherId => actions.unassignLauncher(game, launcherId)} />
-        <GenreBlock game={game} view={igdb} />
+        <GenreBlock game={game} view={igdb} wiki={wiki} />
         <YourScore gameId={game.id} />
         <IgdbRatings view={igdb} />
         <ControllerBlock gameId={game.id} state={inputState} />

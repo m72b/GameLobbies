@@ -6,15 +6,15 @@ import { ChevronLeft, ChevronRight, X } from 'lucide-react'
 // Bundled (SIL Open Font License), never loaded from the network: regular and bold only.
 import '@fontsource/quantico/400.css'
 import '@fontsource/quantico/700.css'
-import type { Game, IgdbMetadataView, IgdbRating, IgdbSearchResult, IgdbTimeToBeat } from '../shared/types'
+import type { Game, IgdbMetadataView, IgdbRating, IgdbSearchResult, IgdbTimeToBeat, WikiView } from '../shared/types'
+import { mergeAbout } from '../shared/about'
+import { WikipediaCredit } from './wiki-details'
 import { Spinner } from './loading-image'
 import { useKeysUi } from './api-keys'
 import { coverSrc, useCoverStatus } from './cover'
 
 const emptyView: IgdbMetadataView = { configured: false, pending: false, checked: false }
 
-/** IGDB release dates are UTC midnight; formatting in UTC keeps the right day. */
-const formatRelease = (ms?: number) => ms === undefined ? '' : new Date(ms).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' })
 const releaseYear = (ms?: number) => ms === undefined ? '' : String(new Date(ms).getUTCFullYear())
 
 /** IGDB's required attribution, shown wherever IGDB data appears. */
@@ -94,43 +94,57 @@ export function useIgdb(gameId: string) {
   return { view, setView }
 }
 
-function names(list: string[]) {
-  return list.length ? list.join(', ') : undefined
+/** "Facts from Wikidata (CC0)" with a link to the item. */
+function WikidataAttribution({ url }: { url?: string }) {
+  return <span className="igdb-attribution">Facts from {url ? <a href={url}>Wikidata</a> : 'Wikidata'} (CC0)</span>
 }
 
-/** Left column, under Activity: description and facts. Renders nothing without data, except a quiet hint. */
-export function IgdbAbout({ view, title, onSearch }: { view: IgdbMetadataView; title: string; onSearch(): void }) {
+/**
+ * Left column, under Activity: description and facts. IGDB's values come first; Wikidata and
+ * Wikipedia (built in, no key) fill only what IGDB has not got. Renders nothing without data,
+ * except a quiet hint.
+ */
+export function IgdbAbout({ view, wiki, title, onSearch, onWikiSearch }: { view: IgdbMetadataView; wiki: WikiView; title: string; onSearch(): void; onWikiSearch(): void }) {
   const [more, setMore] = useState(false)
   const metadata = view.metadata
+  const wikiData = wiki.enabled ? wiki.metadata : undefined
   const hasImages = (view.images ?? []).length > 0
   useEffect(() => { setMore(false) }, [metadata?.igdbId])
-  if (!metadata) {
-    if (view.configured && view.checked && !view.pending) {
-      return <div className="gp-igdb-hint muted-text">No IGDB match for this game.<button className="link-button" onClick={onSearch}>Search IGDB</button></div>
-    }
-    return null
+  const ambiguous = wiki.enabled && wiki.status === 'ambiguous' && !wiki.pending
+  if (!metadata && !wikiData) {
+    const igdbHint = view.configured && view.checked && !view.pending
+    if (!igdbHint && !ambiguous) return null
+    return <div className="gp-igdb-hint muted-text">
+      {igdbHint && <>No IGDB match for this game.<button className="link-button" onClick={onSearch}>Search IGDB</button></>}
+      {ambiguous && <>Several Wikidata items match this title.<button className="link-button" onClick={onWikiSearch}>Choose on Wikidata</button></>}
+    </div>
   }
+  const about = mergeAbout(metadata, wikiData)
   const facts: Array<[string, string | undefined]> = [
-    ['Developer', names(metadata.developers)],
-    ['Publisher', names(metadata.publishers)],
-    ['Released', formatRelease(metadata.releaseDate) || undefined]
+    ['Developer', about.developers?.value],
+    ['Publisher', about.publishers?.value],
+    ['Released', about.released?.value],
+    ['Platforms', about.platforms?.value]
   ]
+  const description = about.description
   return <section className="gp-about">
     <h2>About</h2>
-    {metadata.summary
-      ? <p className="gp-about-text">{metadata.summary}</p>
-      : <div className="muted-text">IGDB has no description for this game.</div>}
-    {metadata.storyline && (more
+    {description
+      ? <><p className="gp-about-text">{description.text}</p>{description.source === 'wikipedia' && <WikipediaCredit url={description.url} title={description.title} licence={wiki.textLicence} />}</>
+      : metadata && <div className="muted-text">IGDB has no description for this game.</div>}
+    {metadata?.storyline && (more
       ? <><div className="detail-label gp-about-label">STORYLINE</div><p className="gp-about-text">{metadata.storyline}</p><button className="link-button gp-about-more" onClick={() => setMore(false)}>Less</button></>
       : <button className="link-button gp-about-more" onClick={() => setMore(true)}>More: storyline</button>)}
     {facts.some(([, value]) => value) && <div className="gp-facts">
       {facts.map(([label, value]) => value ? <div key={label}><span>{label}</span><b>{value}</b></div> : null)}
     </div>}
-    {view.timeToBeat && <TimeToBeat time={view.timeToBeat} title={metadata.name || title} />}
+    {view.timeToBeat && <TimeToBeat time={view.timeToBeat} title={metadata?.name || title} />}
     <div className="gp-igdb-links">
-      {metadata.url && <a className="external-link" href={metadata.url}>View on IGDB</a>}
-      <button className="link-button" onClick={onSearch} title={view.source === 'user' ? 'You chose this IGDB entry' : 'Matched automatically'}>Wrong game? Search IGDB</button>
-      <IgdbAttribution images={hasImages} />
+      {metadata?.url && <a className="external-link" href={metadata.url}>View on IGDB</a>}
+      {(metadata || view.configured) && <button className="link-button" onClick={onSearch} title={view.source === 'user' ? 'You chose this IGDB entry' : 'Matched automatically'}>{metadata ? 'Wrong game? Search IGDB' : 'Search IGDB'}</button>}
+      {wiki.enabled && <button className="link-button" onClick={onWikiSearch} title={wiki.source === 'user' ? 'You chose this Wikidata item' : 'Matched automatically'}>{wikiData ? 'Wrong item? Find on Wikidata' : 'Find on Wikidata'}</button>}
+      {about.usesIgdb && <IgdbAttribution images={hasImages} />}
+      {about.usesWikidata && <WikidataAttribution url={wiki.itemUrl} />}
     </div>
   </section>
 }
@@ -165,16 +179,22 @@ export function IgdbRatings({ view }: { view: IgdbMetadataView }) {
   </div>
 }
 
-/** The GENRE block: the user's genre stays first; IGDB's genres are shown alongside (never saved). */
-export function GenreBlock({ game, view }: { game: Game; view: IgdbMetadataView }) {
+/**
+ * The GENRE block: the user's genre stays first; IGDB's genres are shown alongside (never saved).
+ * Without IGDB genres and without the user's own, Wikidata's genres are shown instead.
+ */
+export function GenreBlock({ game, view, wiki }: { game: Game; view: IgdbMetadataView; wiki?: WikiView }) {
   const userGenre = game.genre?.trim()
-  const igdbGenres = (view.metadata?.genres ?? []).filter(genre => genre.toLocaleLowerCase() !== userGenre?.toLocaleLowerCase())
+  const merged = mergeAbout(view.metadata, wiki?.enabled ? wiki.metadata : undefined, userGenre)
+  const fromWikidata = merged.genres.source === 'wikidata'
+  const igdbGenres = merged.genres.values
   // The ratings block below carries the attribution when it is shown.
   const hasRatings = !!(view.metadata?.criticRating || view.metadata?.userRating)
   return <div className="gp-side-block"><div className="detail-label">GENRE</div>
     {userGenre ? <div className="muted-text">{userGenre}</div> : igdbGenres.length === 0 && <div className="muted-text">Not set</div>}
-    {igdbGenres.length > 0 && <div className="chip-group compact" title="Genres from IGDB">{igdbGenres.map(genre => <span key={genre} className="chip static">{genre}</span>)}</div>}
-    {igdbGenres.length > 0 && !hasRatings && <IgdbAttribution className="gp-side-attribution" />}
+    {igdbGenres.length > 0 && <div className="chip-group compact" title={fromWikidata ? 'Genres from Wikidata' : 'Genres from IGDB'}>{igdbGenres.map(genre => <span key={genre} className="chip static">{genre}</span>)}</div>}
+    {igdbGenres.length > 0 && !hasRatings && !fromWikidata && <IgdbAttribution className="gp-side-attribution" />}
+    {fromWikidata && <span className="igdb-attribution gp-side-attribution">Genres from Wikidata (CC0)</span>}
   </div>
 }
 

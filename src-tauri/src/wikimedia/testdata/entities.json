@@ -1,0 +1,982 @@
+{
+ "entities": {
+  "Q193581": {
+   "type": "item",
+   "id": "Q193581",
+   "labels": {
+    "en": {
+     "language": "en",
+     "value": "Half-Life 2"
+    }
+   },
+   "descriptions": {
+    "en": {
+     "language": "en",
+     "value": "2004 video game"
+    }
+   },
+   "aliases": {},
+   "claims": {
+    "P31": [
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "property": "P",
+       "datavalue": {
+        "value": {
+         "entity-type": "item",
+         "id": "Q7889"
+        },
+        "type": "wikibase-entityid"
+       }
+      },
+      "type": "statement",
+      "rank": "normal"
+     }
+    ],
+    "P1733": [
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "datavalue": {
+        "value": "220",
+        "type": "string"
+       }
+      },
+      "type": "statement",
+      "rank": "normal"
+     }
+    ],
+    "P5794": [
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "datavalue": {
+        "value": "half-life-2",
+        "type": "string"
+       }
+      },
+      "type": "statement",
+      "rank": "normal"
+     }
+    ],
+    "P178": [
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "property": "P",
+       "datavalue": {
+        "value": {
+         "entity-type": "item",
+         "id": "Q193559"
+        },
+        "type": "wikibase-entityid"
+       }
+      },
+      "type": "statement",
+      "rank": "normal"
+     }
+    ],
+    "P123": [
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "property": "P",
+       "datavalue": {
+        "value": {
+         "entity-type": "item",
+         "id": "Q193559"
+        },
+        "type": "wikibase-entityid"
+       }
+      },
+      "type": "statement",
+      "rank": "normal"
+     }
+    ],
+    "P136": [
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "property": "P",
+       "datavalue": {
+        "value": {
+         "entity-type": "item",
+         "id": "Q185029"
+        },
+        "type": "wikibase-entityid"
+       }
+      },
+      "type": "statement",
+      "rank": "normal"
+     },
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "datavalue": {
+        "value": {
+         "id": "Qevil"
+        }
+       }
+      },
+      "rank": "normal"
+     }
+    ],
+    "P400": [
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "property": "P",
+       "datavalue": {
+        "value": {
+         "entity-type": "item",
+         "id": "Q1406"
+        },
+        "type": "wikibase-entityid"
+       }
+      },
+      "type": "statement",
+      "rank": "normal"
+     },
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "property": "P",
+       "datavalue": {
+        "value": {
+         "entity-type": "item",
+         "id": "Q999999999"
+        },
+        "type": "wikibase-entityid"
+       }
+      },
+      "type": "statement",
+      "rank": "deprecated"
+     },
+     {
+      "mainsnak": {
+       "snaktype": "novalue",
+       "property": "P"
+      },
+      "type": "statement",
+      "rank": "normal"
+     }
+    ],
+    "P154": [
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "datavalue": {
+        "value": "Half-Life 2 text logo.svg",
+        "type": "string"
+       }
+      },
+      "type": "statement",
+      "rank": "normal"
+     }
+    ],
+    "P577": [
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "datavalue": {
+        "value": {
+         "time": "+2004-11-16T00:00:00Z",
+         "timezone": 0,
+         "before": 0,
+         "after": 0,
+         "precision": 11,
+         "calendarmodel": "http://www.wikidata.org/entity/Q1985727"
+        },
+        "type": "time"
+       }
+      },
+      "type": "statement",
+      "rank": "normal"
+     },
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "datavalue": {
+        "value": {
+         "time": "+2005-11-15T00:00:00Z",
+         "timezone": 0,
+         "before": 0,
+         "after": 0,
+         "precision": 11,
+         "calendarmodel": "http://www.wikidata.org/entity/Q1985727"
+        },
+        "type": "time"
+       }
+      },
+      "type": "statement",
+      "rank": "normal"
+     }
+    ]
+   },
+   "sitelinks": {
+    "enwiki": {
+     "site": "enwiki",
+     "title": "Half-Life 2",
+     "badges": []
+    }
+   }
+  },
+  "Q189784": {
+   "type": "item",
+   "id": "Q189784",
+   "labels": {
+    "en": {
+     "language": "mul",
+     "value": "Doom"
+    }
+   },
+   "descriptions": {
+    "en": {
+     "language": "en",
+     "value": "1993 video game"
+    }
+   },
+   "aliases": {
+    "en": [
+     {
+      "language": "en",
+      "value": "Doom 1993"
+     }
+    ]
+   },
+   "claims": {
+    "P31": [
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "property": "P",
+       "datavalue": {
+        "value": {
+         "entity-type": "item",
+         "id": "Q7889"
+        },
+        "type": "wikibase-entityid"
+       }
+      },
+      "type": "statement",
+      "rank": "normal"
+     }
+    ],
+    "P1733": [
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "datavalue": {
+        "value": "2280",
+        "type": "string"
+       }
+      },
+      "type": "statement",
+      "rank": "normal"
+     }
+    ],
+    "P5794": [
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "datavalue": {
+        "value": "doom",
+        "type": "string"
+       }
+      },
+      "type": "statement",
+      "rank": "normal"
+     }
+    ],
+    "P2725": [
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "datavalue": {
+        "value": "game/the_ultimate_doom",
+        "type": "string"
+       }
+      },
+      "type": "statement",
+      "rank": "normal"
+     },
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "datavalue": {
+        "value": "game/doom_1993",
+        "type": "string"
+       }
+      },
+      "type": "statement",
+      "rank": "normal"
+     }
+    ],
+    "P178": [
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "property": "P",
+       "datavalue": {
+        "value": {
+         "entity-type": "item",
+         "id": "Q1051"
+        },
+        "type": "wikibase-entityid"
+       }
+      },
+      "type": "statement",
+      "rank": "normal"
+     }
+    ],
+    "P400": [
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "property": "P",
+       "datavalue": {
+        "value": {
+         "entity-type": "item",
+         "id": "Q1406"
+        },
+        "type": "wikibase-entityid"
+       }
+      },
+      "type": "statement",
+      "rank": "normal"
+     },
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "property": "P",
+       "datavalue": {
+        "value": {
+         "entity-type": "item",
+         "id": "Q170434"
+        },
+        "type": "wikibase-entityid"
+       }
+      },
+      "type": "statement",
+      "rank": "normal"
+     }
+    ],
+    "P136": [
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "property": "P",
+       "datavalue": {
+        "value": {
+         "entity-type": "item",
+         "id": "Q185029"
+        },
+        "type": "wikibase-entityid"
+       }
+      },
+      "type": "statement",
+      "rank": "normal"
+     }
+    ],
+    "P18": [
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "datavalue": {
+        "value": "Doom classic box art.png",
+        "type": "string"
+       }
+      },
+      "type": "statement",
+      "rank": "normal"
+     }
+    ],
+    "P154": [
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "datavalue": {
+        "value": "Doom – Game’s logo.svg",
+        "type": "string"
+       }
+      },
+      "type": "statement",
+      "rank": "normal"
+     }
+    ],
+    "P577": [
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "datavalue": {
+        "value": {
+         "time": "+1993-00-00T00:00:00Z",
+         "timezone": 0,
+         "before": 0,
+         "after": 0,
+         "precision": 9,
+         "calendarmodel": "http://www.wikidata.org/entity/Q1985727"
+        },
+        "type": "time"
+       }
+      },
+      "type": "statement",
+      "rank": "normal"
+     },
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "datavalue": {
+        "value": {
+         "time": "+1993-12-10T00:00:00Z",
+         "timezone": 0,
+         "before": 0,
+         "after": 0,
+         "precision": 11,
+         "calendarmodel": "http://www.wikidata.org/entity/Q1985727"
+        },
+        "type": "time"
+       }
+      },
+      "type": "statement",
+      "rank": "normal"
+     },
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "datavalue": {
+        "value": {
+         "time": "+1994-11-14T00:00:00Z",
+         "timezone": 0,
+         "before": 0,
+         "after": 0,
+         "precision": 11,
+         "calendarmodel": "http://www.wikidata.org/entity/Q1985727"
+        },
+        "type": "time"
+       }
+      },
+      "type": "statement",
+      "rank": "normal"
+     }
+    ]
+   },
+   "sitelinks": {
+    "enwiki": {
+     "site": "enwiki",
+     "title": "Doom (1993 video game)",
+     "badges": []
+    }
+   }
+  },
+  "Q20711315": {
+   "type": "item",
+   "id": "Q20711315",
+   "labels": {
+    "en": {
+     "language": "en",
+     "value": "Doom"
+    }
+   },
+   "descriptions": {
+    "en": {
+     "language": "en",
+     "value": "2016 video game"
+    }
+   },
+   "aliases": {},
+   "claims": {
+    "P31": [
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "property": "P",
+       "datavalue": {
+        "value": {
+         "entity-type": "item",
+         "id": "Q7889"
+        },
+        "type": "wikibase-entityid"
+       }
+      },
+      "type": "statement",
+      "rank": "normal"
+     }
+    ],
+    "P1733": [
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "datavalue": {
+        "value": "379720",
+        "type": "string"
+       }
+      },
+      "type": "statement",
+      "rank": "normal"
+     }
+    ],
+    "P400": [
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "property": "P",
+       "datavalue": {
+        "value": {
+         "entity-type": "item",
+         "id": "Q1406"
+        },
+        "type": "wikibase-entityid"
+       }
+      },
+      "type": "statement",
+      "rank": "normal"
+     },
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "property": "P",
+       "datavalue": {
+        "value": {
+         "entity-type": "item",
+         "id": "Q48263"
+        },
+        "type": "wikibase-entityid"
+       }
+      },
+      "type": "statement",
+      "rank": "normal"
+     }
+    ],
+    "P577": [
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "datavalue": {
+        "value": {
+         "time": "+2016-05-13T00:00:00Z",
+         "timezone": 0,
+         "before": 0,
+         "after": 0,
+         "precision": 11,
+         "calendarmodel": "http://www.wikidata.org/entity/Q1985727"
+        },
+        "type": "time"
+       }
+      },
+      "type": "statement",
+      "rank": "normal"
+     }
+    ]
+   },
+   "sitelinks": {
+    "enwiki": {
+     "site": "enwiki",
+     "title": "Doom (2016 video game)",
+     "badges": []
+    }
+   }
+  },
+  "Q1241843": {
+   "type": "item",
+   "id": "Q1241843",
+   "labels": {
+    "en": {
+     "language": "en",
+     "value": "Doom"
+    }
+   },
+   "descriptions": {
+    "en": {
+     "language": "en",
+     "value": "2005 film"
+    }
+   },
+   "aliases": {},
+   "claims": {
+    "P31": [
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "property": "P",
+       "datavalue": {
+        "value": {
+         "entity-type": "item",
+         "id": "Q11424"
+        },
+        "type": "wikibase-entityid"
+       }
+      },
+      "type": "statement",
+      "rank": "normal"
+     }
+    ],
+    "P577": [
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "datavalue": {
+        "value": {
+         "time": "+2005-10-21T00:00:00Z",
+         "timezone": 0,
+         "before": 0,
+         "after": 0,
+         "precision": 11,
+         "calendarmodel": "http://www.wikidata.org/entity/Q1985727"
+        },
+        "type": "time"
+       }
+      },
+      "type": "statement",
+      "rank": "normal"
+     }
+    ]
+   },
+   "sitelinks": {}
+  },
+  "Q221164": {
+   "type": "item",
+   "id": "Q221164",
+   "labels": {
+    "en": {
+     "language": "mul",
+     "value": "Fallout 3"
+    }
+   },
+   "descriptions": {
+    "en": {
+     "language": "en",
+     "value": "2008 video game"
+    }
+   },
+   "aliases": {},
+   "claims": {
+    "P31": [
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "property": "P",
+       "datavalue": {
+        "value": {
+         "entity-type": "item",
+         "id": "Q7889"
+        },
+        "type": "wikibase-entityid"
+       }
+      },
+      "type": "statement",
+      "rank": "normal"
+     }
+    ],
+    "P1733": [
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "datavalue": {
+        "value": "22300",
+        "type": "string"
+       }
+      },
+      "type": "statement",
+      "rank": "normal"
+     }
+    ],
+    "P5794": [
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "datavalue": {
+        "value": "fallout-3",
+        "type": "string"
+       }
+      },
+      "type": "statement",
+      "rank": "normal"
+     }
+    ],
+    "P18": [
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "datavalue": {
+        "value": "Fallout 3 cover (cropped).png",
+        "type": "string"
+       }
+      },
+      "type": "statement",
+      "rank": "normal"
+     }
+    ],
+    "P154": [
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "datavalue": {
+        "value": "Fallout 3 logo transparent.svg",
+        "type": "string"
+       }
+      },
+      "type": "statement",
+      "rank": "normal"
+     }
+    ],
+    "P400": [
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "property": "P",
+       "datavalue": {
+        "value": {
+         "entity-type": "item",
+         "id": "Q1406"
+        },
+        "type": "wikibase-entityid"
+       }
+      },
+      "type": "statement",
+      "rank": "normal"
+     }
+    ],
+    "P577": [
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "datavalue": {
+        "value": {
+         "time": "+2008-10-28T00:00:00Z",
+         "timezone": 0,
+         "before": 0,
+         "after": 0,
+         "precision": 11,
+         "calendarmodel": "http://www.wikidata.org/entity/Q1985727"
+        },
+        "type": "time"
+       }
+      },
+      "type": "statement",
+      "rank": "normal"
+     }
+    ]
+   },
+   "sitelinks": {
+    "enwiki": {
+     "site": "enwiki",
+     "title": "Fallout 3",
+     "badges": []
+    }
+   }
+  },
+  "Q108022844": {
+   "type": "item",
+   "id": "Q108022844",
+   "labels": {
+    "en": {
+     "language": "en",
+     "value": "Fallout 3: Game Of The Year Edition"
+    }
+   },
+   "descriptions": {
+    "en": {
+     "language": "en",
+     "value": "video game edition"
+    }
+   },
+   "aliases": {},
+   "claims": {
+    "P31": [
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "property": "P",
+       "datavalue": {
+        "value": {
+         "entity-type": "item",
+         "id": "Q60997816"
+        },
+        "type": "wikibase-entityid"
+       }
+      },
+      "type": "statement",
+      "rank": "normal"
+     }
+    ],
+    "P629": [
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "property": "P",
+       "datavalue": {
+        "value": {
+         "entity-type": "item",
+         "id": "Q221164"
+        },
+        "type": "wikibase-entityid"
+       }
+      },
+      "type": "statement",
+      "rank": "normal"
+     }
+    ],
+    "P1733": [
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "datavalue": {
+        "value": "22370",
+        "type": "string"
+       }
+      },
+      "type": "statement",
+      "rank": "normal"
+     }
+    ],
+    "P577": [
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "datavalue": {
+        "value": {
+         "time": "+2009-10-13T00:00:00Z",
+         "timezone": 0,
+         "before": 0,
+         "after": 0,
+         "precision": 11,
+         "calendarmodel": "http://www.wikidata.org/entity/Q1985727"
+        },
+        "type": "time"
+       }
+      },
+      "type": "statement",
+      "rank": "normal"
+     }
+    ]
+   },
+   "sitelinks": {}
+  },
+  "Q14565978": {
+   "type": "item",
+   "id": "Q14565978",
+   "labels": {
+    "en": {
+     "language": "en",
+     "value": "Papers, Please"
+    }
+   },
+   "descriptions": {
+    "en": {
+     "language": "en",
+     "value": "2013 video game"
+    }
+   },
+   "aliases": {},
+   "claims": {
+    "P31": [
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "property": "P",
+       "datavalue": {
+        "value": {
+         "entity-type": "item",
+         "id": "Q7889"
+        },
+        "type": "wikibase-entityid"
+       }
+      },
+      "type": "statement",
+      "rank": "normal"
+     }
+    ],
+    "P1733": [
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "datavalue": {
+        "value": "239030",
+        "type": "string"
+       }
+      },
+      "type": "statement",
+      "rank": "normal"
+     }
+    ],
+    "P154": [
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "datavalue": {
+        "value": "Papers Please - Title Logo.png",
+        "type": "string"
+       }
+      },
+      "type": "statement",
+      "rank": "normal"
+     }
+    ],
+    "P18": [
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "datavalue": {
+        "value": "Papers Please cover.jpg",
+        "type": "string"
+       }
+      },
+      "type": "statement",
+      "rank": "normal"
+     }
+    ],
+    "P400": [
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "property": "P",
+       "datavalue": {
+        "value": {
+         "entity-type": "item",
+         "id": "Q1406"
+        },
+        "type": "wikibase-entityid"
+       }
+      },
+      "type": "statement",
+      "rank": "normal"
+     }
+    ],
+    "P577": [
+     {
+      "mainsnak": {
+       "snaktype": "value",
+       "datavalue": {
+        "value": {
+         "time": "+2013-08-08T00:00:00Z",
+         "timezone": 0,
+         "before": 0,
+         "after": 0,
+         "precision": 11,
+         "calendarmodel": "http://www.wikidata.org/entity/Q1985727"
+        },
+        "type": "time"
+       }
+      },
+      "type": "statement",
+      "rank": "normal"
+     }
+    ]
+   },
+   "sitelinks": {
+    "enwiki": {
+     "site": "enwiki",
+     "title": "Papers, Please",
+     "badges": []
+    }
+   }
+  },
+  "Q4": {
+   "id": "Q4",
+   "missing": ""
+  }
+ },
+ "success": 1
+}

@@ -66,7 +66,9 @@ export interface Settings { scanIntervalHours: number; posterWidth: number; show
   /** Motion in the interface: always animate, follow Windows, short fades only, or no animation at all. Default "system". */
   motion: MotionPreference
   /** Stores that library scans skip (distinct `StoreId`s). Default []. */
-  disabledStores: StoreId[] }
+  disabledStores: StoreId[]
+  /** The built-in Wikipedia / Wikidata / Commons provider (no key needed). Default true. */
+  wikimediaEnabled: boolean }
 /** `Settings.motion`: "full" always animates (whatever Windows prefers), "system" follows the Windows setting, "reduced" keeps only short fades, "off" turns every animation off. */
 export type MotionPreference = 'system' | 'full' | 'reduced' | 'off'
 /** Grid styles accepted by `Settings.steamGridDbStyles` (the backend rejects anything else). */
@@ -480,7 +482,7 @@ export interface TrackingAPI { status(): Promise<RunningGame[]>; onChanged(callb
  * Entries may be `lobby-cover://<name>` (a file chosen with chooseHeroFile/chooseLogoFile):
  * pass every entry through `coverUrl()` from lobby-api.ts before using it as an image source.
  */
-export interface GameArt { hero: string[]; logo: string[] }
+export interface GameArt { hero: string[]; logo: string[]; /** Licence and credit of each Wikimedia Commons entry in `hero`/`logo`, matched by `display` (the listed value). */ credits?: WikiImage[] }
 /** Logo placements accepted by `art.setLogoLayout` (the backend rejects anything else). */
 export const logoPositions = ['bottom-left', 'top-center', 'center', 'bottom-center'] as const
 export type LogoPosition = typeof logoPositions[number]
@@ -642,6 +644,30 @@ export interface SetupInfo { state: SetupState | null; show: boolean; banner: bo
 /** Only these fields; `completed` / `skipped` may only be true (Rust sets the time). */
 export interface SetupPatch { choices?: Partial<Record<SetupStore, SetupChoice>>; completed?: true; skipped?: true }
 export interface SetupAPI { get(): Promise<SetupInfo>; save(patch: SetupPatch): Promise<SetupInfo> }
+/**
+ * The built-in Wikidata / Wikipedia / Wikimedia Commons provider (`window.lobby.wikimedia`). No
+ * key; off when `Settings.wikimediaEnabled` is false (then `enabled` is false and only the credit
+ * of a Commons cover already in use is reported).
+ * - get(gameId): the cached view at once; a background lookup follows when needed (`onMetadata`).
+ * - search(gameId, query?): game items for the title or `query`; choose(gameId, qid) keeps the
+ *   user's pick (it wins over automatic matches); resetMatch forgets it.
+ * - useLogo / useCover(gameId, src): `src` must be one of this game's offered `logos` / `covers`.
+ * Text is plain; render it as text. Release dates are `YYYY-MM-DD`, `YYYY-MM` or `YYYY`.
+ */
+export interface WikiImage { file: string; src: string; display: string; kind: 'logo' | 'cover'; width: number; height: number; originalWidth: number; originalHeight: number; licence: string; licenceUrl?: string; artist?: string; credit?: string; sourcePage: string; attributionRequired: boolean; restrictions?: string; lowTrust: boolean }
+export interface WikiArticle { title: string; url: string; text: string }
+export interface WikiMetadata { qid: string; label: string; description?: string; release?: string; platforms: string[]; developers: string[]; publishers: string[]; genres: string[]; steam: string[]; gog: string[]; epic: string[]; igdb: string[]; mobygames: string[]; article?: WikiArticle }
+export interface WikiCandidate { qid: string; label: string; description?: string; year?: number }
+export interface WikiView { enabled: boolean; pending: boolean; checked: boolean; status?: 'matched' | 'none' | 'ambiguous'; metadata?: WikiMetadata; source?: 'auto' | 'user'; matchedBy?: string; itemUrl?: string; fetchedAt?: number; candidates: WikiCandidate[]; logos: WikiImage[]; covers: WikiImage[]; coverCredit?: WikiImage; textLicence?: { name: string; url: string } }
+export interface WikimediaAPI {
+  get(gameId: string): Promise<WikiView>
+  search(gameId: string, query?: string): Promise<WikiCandidate[]>
+  choose(gameId: string, qid: string): Promise<WikiView>
+  resetMatch(gameId: string): Promise<WikiView>
+  useLogo(gameId: string, src: string): Promise<GamePageCustom>
+  useCover(gameId: string, src: string): Promise<Game[]>
+  onMetadata(callback: (event: IgdbMetadataEvent) => void): () => void
+}
 export interface IgdbBulkProgress { running: boolean; done: number; total: number; updated: number; notFound: number; failed: number; message?: string }
 export interface IgdbMetadataEvent { gameId: string; changed: boolean }
 export interface IgdbAPI {
@@ -739,6 +765,7 @@ export interface LobbyAPI {
   tracking: TrackingAPI
   art: ArtAPI
   igdb: IgdbAPI
+  wikimedia: WikimediaAPI
   screenshots: ScreenshotsAPI
   notes: NotesAPI
   updates: UpdatesAPI

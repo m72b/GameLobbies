@@ -1,0 +1,44 @@
+{
+ "searchinfo": {
+  "search": "Doom"
+ },
+ "search": [
+  {
+   "id": "Q189784",
+   "title": "Q189784",
+   "label": "Doom",
+   "description": "1993 video game",
+   "match": {
+    "type": "label",
+    "language": "mul",
+    "text": "Doom"
+   }
+  },
+  {
+   "id": "Q20711315",
+   "title": "Q20711315",
+   "label": "Doom",
+   "description": "2016 video game",
+   "match": {
+    "type": "label",
+    "language": "en",
+    "text": "Doom"
+   }
+  },
+  {
+   "id": "Q1241843",
+   "label": "Doom",
+   "description": "2005 film",
+   "match": {
+    "type": "label",
+    "language": "en",
+    "text": "Doom"
+   }
+  },
+  {
+   "id": "Q../x",
+   "label": "bad"
+  }
+ ],
+ "success": 1
+}

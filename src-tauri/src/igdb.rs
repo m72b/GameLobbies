@@ -1136,7 +1136,7 @@ impl IgdbState {
             .remove(game_id);
     }
 
-    fn is_in_flight(&self, game_id: &str) -> bool {
+    pub(crate) fn is_in_flight(&self, game_id: &str) -> bool {
         self.in_flight
             .lock()
             .unwrap_or_else(|p| p.into_inner())

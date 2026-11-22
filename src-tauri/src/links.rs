@@ -1531,6 +1531,7 @@ pub fn link(
         )?;
         tx.execute("DELETE FROM install_sizes WHERE gameId=?", [sid])?;
         tx.execute("DELETE FROM game_art WHERE gameId=?", [sid])?;
+        tx.execute("DELETE FROM wikimedia_match WHERE gameId=?", [sid])?;
         // Entries linked into this one now belong to the kept game.
         tx.execute(
             "UPDATE game_links SET gameId=?1 WHERE gameId=?2",
@@ -1601,6 +1602,10 @@ pub fn link(
     tx.execute("DELETE FROM game_art WHERE gameId=?", [&keep_id])?;
     tx.execute(
         "DELETE FROM game_metadata WHERE gameId=? AND source<>'user'",
+        [&keep_id],
+    )?;
+    tx.execute(
+        "DELETE FROM wikimedia_match WHERE gameId=? AND source<>'user'",
         [&keep_id],
     )?;
     tx.commit()?;
@@ -2096,6 +2101,10 @@ pub fn unlink(conn: &mut Connection, game_id: &str, route: &RouteRef) -> Result<
     }
     tx.execute(
         "DELETE FROM game_metadata WHERE gameId=? AND source<>'user'",
+        [game_id],
+    )?;
+    tx.execute(
+        "DELETE FROM wikimedia_match WHERE gameId=? AND source<>'user'",
         [game_id],
     )?;
     crate::health::remember_separate(&tx, game_id, &p.new_id)?;

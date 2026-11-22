@@ -1,0 +1,85 @@
+{
+ "entities": {
+  "Q193559": {
+   "type": "item",
+   "id": "Q193559",
+   "labels": {
+    "en": {
+     "language": "en",
+     "value": "Valve Corporation"
+    }
+   }
+  },
+  "Q19610114": {
+   "type": "item",
+   "id": "Q19610114",
+   "labels": {
+    "en": {
+     "language": "mul",
+     "value": "Nintendo Switch"
+    }
+   }
+  },
+  "Q1406": {
+   "type": "item",
+   "id": "Q1406",
+   "labels": {
+    "en": {
+     "language": "en",
+     "value": "Microsoft Windows"
+    }
+   }
+  },
+  "Q170434": {
+   "type": "item",
+   "id": "Q170434",
+   "labels": {
+    "en": {
+     "language": "en",
+     "value": "DOS"
+    }
+   }
+  },
+  "Q1051": {
+   "type": "item",
+   "id": "Q1051",
+   "labels": {
+    "en": {
+     "language": "mul",
+     "value": "id Software"
+    }
+   }
+  },
+  "Q185029": {
+   "type": "item",
+   "id": "Q185029",
+   "labels": {
+    "en": {
+     "language": "en",
+     "value": "first-person shooter"
+    }
+   }
+  },
+  "Q48263": {
+   "type": "item",
+   "id": "Q48263",
+   "labels": {
+    "en": {
+     "language": "mul",
+     "value": "PlayStation 4"
+    }
+   }
+  },
+  "Q0": {
+   "type": "item",
+   "id": "Q0",
+   "labels": {
+    "en": {
+     "language": "en",
+     "value": "bad"
+    }
+   }
+  }
+ },
+ "success": 1
+}

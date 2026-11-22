@@ -45,6 +45,7 @@ mod tray;
 mod types;
 mod updater;
 mod validation;
+mod wikimedia;
 mod windows;
 
 use state::AppState;
@@ -229,6 +230,7 @@ pub fn run() {
                 local_scan_lock: tokio::sync::Mutex::new(()),
                 covers: Default::default(),
                 igdb: Default::default(),
+                wikimedia: Default::default(),
                 picks: Default::default(),
                 pending_launches: Default::default(),
                 accounts: accounts::AccountsState::new(fresh_install),
@@ -260,6 +262,8 @@ pub fn run() {
             }
             // Off the UI path: a few seconds after launch, cache remote covers locally.
             covercache::spawn_startup(app.handle());
+            // Free facts and logos for games that have none yet (no key needed; can be turned off).
+            wikimedia::spawn_auto(app.handle(), std::time::Duration::from_secs(20));
             Ok(())
         })
         .invoke_handler(main_window_only(tauri::generate_handler![
@@ -392,6 +396,12 @@ pub fn run() {
             commands::igdb_fetch_all,
             commands::igdb_cancel_fetch_all,
             commands::igdb_progress,
+            commands::wikimedia_get,
+            commands::wikimedia_search,
+            commands::wikimedia_choose,
+            commands::wikimedia_reset_match,
+            commands::wikimedia_use_logo,
+            commands::wikimedia_use_cover,
             storage::storage_list,
             storage::storage_rescan,
             storage::storage_uninstall,
