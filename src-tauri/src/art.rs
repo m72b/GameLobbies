@@ -332,19 +332,18 @@ pub async fn get(state: &AppState, game_id: &str) -> Result<GameArt> {
             }
         },
     };
-    let wiki = crate::wikimedia::logo_urls(&state.db.lock(), game_id);
-    let art = with_custom(with_wikimedia(combine(&game, sgdb), wiki), custom);
-    // Commons images restored from a backup have no credit record yet: look them up first.
-    let commons: Vec<String> = art
-        .hero
-        .iter()
-        .chain(&art.logo)
-        .filter(|v| crate::wikimedia::licence::valid_image_url(v))
-        .cloned()
-        .collect();
-    crate::wikimedia::restore_credits(state, &commons).await;
     let conn = state.db.lock();
+    let wiki = crate::wikimedia::logo_urls(&conn, game_id);
+    let art = with_custom(with_wikimedia(combine(&game, sgdb), wiki), custom);
     Ok(with_credits(&conn, &state.covers_dir(), art))
+}
+
+/// The Commons images of a game's page art that have no credit record yet (they are left out
+/// until `wikimedia::spawn_restore_credits` finds their credit).
+pub fn uncredited(conn: &Connection, game_id: &str) -> Vec<String> {
+    let custom = db::page_custom(conn, game_id).unwrap_or_default();
+    let values: Vec<String> = [custom.hero, custom.logo].into_iter().flatten().collect();
+    crate::wikimedia::uncredited(conn, &values)
 }
 
 /// Free Commons logos go after Steam's and SteamGridDB's, as fallbacks (never ahead of them).

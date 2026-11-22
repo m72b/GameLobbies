@@ -272,7 +272,8 @@ pub fn parse_entity(entity: &Value) -> Option<Entity> {
     })
 }
 
-fn json(body: &str) -> Result<Value, WikiError> {
+/// A JSON body; an API error body (`{"error":{"code":...}}`) is an `Err`.
+pub(crate) fn json(body: &str) -> Result<Value, WikiError> {
     let value: Value =
         serde_json::from_str(body).map_err(|_| WikiError::Invalid("the response is not JSON."))?;
     if let Some(code) = value

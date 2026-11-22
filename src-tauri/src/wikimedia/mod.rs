@@ -609,11 +609,98 @@ async fn fetch_labels(
     Ok(())
 }
 
-/// Commons image info for files → the free ones by [`licence::file_key`].
+/// What Commons said about one file.
+#[derive(Debug, Clone, PartialEq)]
+pub enum FileVerdict {
+    /// Hosted by Commons under a free licence.
+    Free(Box<CommonsImage>),
+    /// Explicitly missing, or its image info failed the licence filter.
+    Refused,
+}
+
+/// The verdicts in one Commons `prop=imageinfo` answer (formatversion 2), by requested file key.
+/// Requested names follow `normalized` and `redirects` (a renamed file is its new page). A file
+/// the answer says nothing definite about (absent, or a page without image info) has no verdict.
+/// An API error body or an answer without `query.pages` is an error: it decides nothing.
+pub fn parse_imageinfo(
+    body: &str,
+    requested: &[String],
+) -> Result<HashMap<String, FileVerdict>, WikiError> {
+    let value = parse::json(body)?;
+    let query = value
+        .get("query")
+        .ok_or(WikiError::Invalid("the Commons answer has no query."))?;
+    let pages = query
+        .get("pages")
+        .and_then(serde_json::Value::as_array)
+        .ok_or(WikiError::Invalid("the Commons answer has no pages."))?;
+    let mut by_title: HashMap<String, FileVerdict> = HashMap::new();
+    for page in pages {
+        let Some(title) = page.get("title").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        let key = licence::file_key(title);
+        let missing = page
+            .get("missing")
+            .is_some_and(|m| m.as_bool() != Some(false));
+        let has_info = page
+            .get("imageinfo")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|a| !a.is_empty());
+        let verdict = if missing {
+            FileVerdict::Refused
+        } else if has_info {
+            match licence::check_page(page) {
+                Ok(image) => FileVerdict::Free(Box::new(image)),
+                Err(reason) => {
+                    log::debug!("Wikimedia: refused {title}: {reason}");
+                    FileVerdict::Refused
+                }
+            }
+        } else {
+            continue;
+        };
+        by_title.insert(key, verdict);
+    }
+    let pairs = |name: &str| -> Vec<(String, String)> {
+        query
+            .get(name)
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|p| {
+                Some((
+                    licence::file_key(p.get("from")?.as_str()?),
+                    licence::file_key(p.get("to")?.as_str()?),
+                ))
+            })
+            .collect()
+    };
+    let moves: Vec<(String, String)> = pairs("normalized")
+        .into_iter()
+        .chain(pairs("redirects"))
+        .collect();
+    let mut out = HashMap::new();
+    for key in requested {
+        let mut at = key.clone();
+        for _ in 0..4 {
+            match moves.iter().find(|(from, _)| *from == at) {
+                Some((_, to)) if *to != at => at = to.clone(),
+                _ => break,
+            }
+        }
+        if let Some(v) = by_title.get(&at) {
+            out.insert(key.clone(), v.clone());
+        }
+    }
+    Ok(out)
+}
+
+/// Commons verdicts for files, by [`licence::file_key`] of the requested names.
 async fn fetch_images(
     api: &Api<'_>,
     files: Vec<String>,
-) -> Result<HashMap<String, CommonsImage>, WikiError> {
+) -> Result<HashMap<String, FileVerdict>, WikiError> {
     let mut keys: Vec<String> = files.iter().map(|f| licence::file_key(f)).collect();
     keys.sort();
     keys.dedup();
@@ -631,6 +718,7 @@ async fn fetch_images(
                 &[
                     ("action", "query"),
                     ("titles", &titles),
+                    ("redirects", "1"),
                     ("prop", "imageinfo"),
                     ("iiprop", "url|size|mime|extmetadata"),
                     ("iiextmetadatafilter", "LicenseShortName|License|UsageTerms|Artist|Credit|AttributionRequired|Restrictions|NonFree|Copyrighted|LicenseUrl"),
@@ -638,29 +726,20 @@ async fn fetch_images(
                 ],
             )
             .await?;
-        let value: serde_json::Value = serde_json::from_str(&body)
-            .map_err(|_| WikiError::Invalid("the Commons response is not JSON."))?;
-        for page in value
-            .get("query")
-            .and_then(|q| q.get("pages"))
-            .and_then(serde_json::Value::as_array)
-            .into_iter()
-            .flatten()
-        {
-            match licence::check_page(page) {
-                Ok(image) => {
-                    out.insert(image.file.clone(), image);
-                }
-                Err(reason) => log::debug!(
-                    "Wikimedia: skipped {}: {reason}",
-                    page.get("title")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or("a file")
-                ),
-            }
-        }
+        out.extend(parse_imageinfo(&body, chunk)?);
     }
     Ok(out)
+}
+
+/// Only the free files of [`fetch_images`].
+fn free_only(verdicts: HashMap<String, FileVerdict>) -> HashMap<String, CommonsImage> {
+    verdicts
+        .into_iter()
+        .filter_map(|(k, v)| match v {
+            FileVerdict::Free(image) => Some((k, *image)),
+            FileVerdict::Refused => None,
+        })
+        .collect()
 }
 
 async fn fetch_extracts(
@@ -913,7 +992,7 @@ pub async fn resolve_batch(api: &Api<'_>, inputs: &[GameInput]) -> Result<Vec<Ou
     let images = if files.is_empty() {
         HashMap::new()
     } else {
-        fetch_images(api, files).await?
+        free_only(fetch_images(api, files).await?)
     };
     let titles: Vec<String> = matched.iter().filter_map(|e| e.enwiki.clone()).collect();
     let extracts = if titles.is_empty() {
@@ -1141,6 +1220,8 @@ pub fn credits_for(
 /// After Wikimedia limits requests, nothing is asked for this long.
 const RATE_LIMIT_PAUSE: Duration = Duration::from_secs(10 * 60);
 const IMAGE_TIMEOUT: Duration = Duration::from_secs(45);
+/// An uncredited Commons image is looked up again at most this often.
+pub const CREDIT_RETRY_AFTER: Duration = Duration::from_secs(60 * 60);
 
 /// Run-time state (in [`AppState`]).
 #[derive(Default)]
@@ -1154,6 +1235,8 @@ pub struct WikimediaState {
     limited_until: StdMutex<Option<Instant>>,
     client: OnceLock<reqwest::Client>,
     image_client: OnceLock<reqwest::Client>,
+    /// When each uncredited Commons URL was last looked up (see [`CREDIT_RETRY_AFTER`]).
+    credit_tried: StdMutex<HashMap<String, Instant>>,
 }
 
 impl WikimediaState {
@@ -1190,6 +1273,20 @@ impl WikimediaState {
             map.remove(id);
         }
     }
+    /// The URLs not looked up within [`CREDIT_RETRY_AFTER`] of `now`, marked as looked up now.
+    pub fn claim_credit_lookups(&self, urls: Vec<String>, now: Instant) -> Vec<String> {
+        let mut tried = self.credit_tried.lock().unwrap_or_else(|p| p.into_inner());
+        tried.retain(|_, at| now.saturating_duration_since(*at) < CREDIT_RETRY_AFTER);
+        let mut out = Vec::new();
+        for url in urls {
+            if !tried.contains_key(&url) && !out.contains(&url) {
+                tried.insert(url.clone(), now);
+                out.push(url);
+            }
+        }
+        out
+    }
+
     /// Whether requests are paused after Wikimedia limited them.
     pub fn rate_limited(&self) -> bool {
         self.limited_until
@@ -1338,9 +1435,10 @@ pub fn file_of_url(url: &str) -> Option<String> {
 }
 
 /// Checks Commons images again by their file names: each URL whose file Commons still offers
-/// under a free licence gets a fresh credit record (`Some(true)`); one whose file is gone or no
-/// longer free gets `Some(false)` and its credit record is removed. Network errors decide
-/// nothing (`Err`).
+/// under a free licence gets a fresh credit record (`true`); one whose page explicitly came back
+/// missing, or whose image info fails the licence filter, gets `false` and loses its credit
+/// record. Files the answer says nothing definite about get no verdict, and errors (network, API
+/// error bodies, odd answers) decide nothing (`Err`).
 pub async fn recheck(
     api: &Api<'_>,
     db: &db::Db,
@@ -1358,21 +1456,22 @@ pub async fn recheck(
     let mut out = HashMap::new();
     for (url, file) in files {
         match found.get(&file) {
-            Some(image) => {
+            Some(FileVerdict::Free(image)) => {
                 // The credit is the file's; the chosen display URL stays as it was.
                 let image = CommonsImage {
                     src: url.clone(),
-                    ..image.clone()
+                    ..(**image).clone()
                 };
                 if let Err(e) = put_images(&conn, &[&image], now_ms()) {
                     log::warn!("Could not store a Wikimedia credit: {e:#}");
                 }
                 out.insert(url, true);
             }
-            None => {
+            Some(FileVerdict::Refused) => {
                 let _ = conn.execute("DELETE FROM wikimedia_images WHERE url=?", [&url]);
                 out.insert(url, false);
             }
+            None => {}
         }
     }
     Ok(out)
@@ -1453,31 +1552,43 @@ async fn recheck_chosen(state: &AppState, api: &Api<'_>, game_ids: &[String]) ->
     changed
 }
 
-/// Restores missing credit records for Commons images about to be shown (a backup restored on
-/// another PC has the URLs but not their credits). Only with the provider on and not paused.
-pub async fn restore_credits(state: &AppState, urls: &[String]) {
-    let missing: Vec<String> = {
-        let conn = state.db.lock();
-        if !enabled(&conn) {
+/// Commons images about to be shown on a game page whose credit record is missing (a backup
+/// restored on another PC has the URLs but not their credits).
+pub fn uncredited(conn: &Connection, values: &[String]) -> Vec<String> {
+    values
+        .iter()
+        .filter(|u| licence::valid_image_url(u) && image(conn, u).is_none())
+        .cloned()
+        .collect()
+}
+
+/// Looks up the credits of `urls` on Commons in the background (only with the provider on,
+/// not paused, and at most once per URL per [`CREDIT_RETRY_AFTER`]), then tells the game page to
+/// reload its art when any came back. The page never waits for it.
+pub fn spawn_restore_credits(app: &AppHandle, game_id: &str, urls: Vec<String>) {
+    let state = app.state::<AppState>();
+    if urls.is_empty() || !enabled(&state.db.lock()) || state.wikimedia.rate_limited() {
+        return;
+    }
+    let urls = state.wikimedia.claim_credit_lookups(urls, Instant::now());
+    if urls.is_empty() {
+        return;
+    }
+    let app = app.clone();
+    let game_id = game_id.to_string();
+    tauri::async_runtime::spawn(async move {
+        let state = app.state::<AppState>();
+        let Ok(api) = state.wikimedia.api() else {
             return;
+        };
+        match state.wikimedia.note(recheck(&api, &state.db, &urls).await) {
+            Ok(verdicts) if verdicts.values().any(|ok| *ok) => {
+                let _ = app.emit("art:changed", serde_json::json!({ "gameId": game_id }));
+            }
+            Ok(_) => {}
+            Err(e) => log::warn!("Could not look up Wikimedia credits: {e}"),
         }
-        urls.iter()
-            .filter(|u| licence::valid_image_url(u) && image(&conn, u).is_none())
-            .cloned()
-            .collect()
-    };
-    if missing.is_empty() {
-        return;
-    }
-    let Ok(api) = state.wikimedia.api() else {
-        return;
-    };
-    if let Err(e) = state
-        .wikimedia
-        .note(recheck(&api, &state.db, &missing).await)
-    {
-        log::warn!("Could not look up Wikimedia credits: {e}");
-    }
+    });
 }
 
 /// Resolves and stores a batch; emits per game. Errors fail the batch.

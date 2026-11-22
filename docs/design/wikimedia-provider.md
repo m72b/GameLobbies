@@ -113,14 +113,19 @@ precise ones win (so a stray year-only claim never beats a full date), then the 
   user choice; an automatic result for a different item (for example one that raced the user's
   choice) is not stored, and a refresh of the chosen item updates it and keeps it the user's.
 - Credits: a Commons image is shown only with a valid credit record. Commons URLs restored from a
-  backup (which has no credit records) are looked up again by their file name on Commons before
-  the page shows them, and stay hidden unless the file passes the licence filter again. Choosing a
+  backup (which has no credit records) stay hidden while their file name is looked up on Commons in
+  the background (at most once per URL per hour, in memory); when the file passes the licence
+  filter again the page gets `art:changed` and shows it with its credit. The page never waits. Choosing a
   Commons hero or logo needs its credit record (`wikimedia_use_logo` writes it; `art_set_logo`
   refuses a Commons URL without one); backups keep the URL syntax check only, and credits are not
   added to backups (they are public facts, refetched by file name, and keeping backups free of
   scraped data avoids a format change). With every refresh, the Commons images the user chose
   (hero, logo, cover) are checked again; one that Commons no longer offers as a free file is
-  removed (hero/logo back to automatic art, cover back to the default cover) with its credit.
+  removed (hero/logo back to automatic art, cover back to the default cover) with its credit. Only
+  an explicit answer decides: the file's page came back `missing`, or with image info that fails
+  the licence filter. Renamed files are followed (`redirects=1`, normalization and redirect
+  mapping). API error bodies, answers without `query.pages`, network errors and files the answer
+  says nothing definite about change nothing.
 - Lookups: when a game page opens (after a running IGDB lookup for that game, so its IGDB id can
   help), and in the background 20 s after start-up and after scans, in batches of 10, stopping when
   the setting is turned off, when Wikimedia rate-limits, or after three failed batches in a row.

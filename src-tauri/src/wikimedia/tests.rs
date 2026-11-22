@@ -818,3 +818,165 @@ fn a_rate_limit_pauses_every_request() {
     assert!(state.rate_limited());
     assert_eq!(state.api().err(), Some(WikiError::RateLimited));
 }
+
+// -- confirmation review ----------------------------------------------------------
+
+fn info_page(title: &str, licence: &str) -> serde_json::Value {
+    let name = title.trim_start_matches("File:").replace(' ', "_");
+    serde_json::json!({
+        "ns": 6, "title": title, "imagerepository": "local",
+        "imageinfo": [{
+            "width": 400, "height": 100, "mime": "image/png",
+            "url": format!("https://upload.wikimedia.org/wikipedia/commons/a/ab/{name}"),
+            "descriptionurl": format!("https://commons.wikimedia.org/wiki/{}", title.replace(' ', "_")),
+            "extmetadata": {"License": {"value": licence}, "LicenseShortName": {"value": ""}}
+        }]
+    })
+}
+
+#[test]
+fn only_explicit_answers_decide_about_a_file() {
+    let want = |names: &[&str]| {
+        names
+            .iter()
+            .map(|n| licence::file_key(n))
+            .collect::<Vec<_>>()
+    };
+    // API errors and answers without pages are errors, never "gone".
+    assert!(parse_imageinfo(
+        r#"{"error":{"code":"internal_api_error","info":"x"}}"#,
+        &want(&["A.png"])
+    )
+    .is_err());
+    assert!(parse_imageinfo(r#"{"batchcomplete":true}"#, &want(&["A.png"])).is_err());
+    assert!(parse_imageinfo(r#"{"query":{}}"#, &want(&["A.png"])).is_err());
+    let body = serde_json::json!({"query": {
+        "redirects": [{"from": "File:Old name.png", "to": "File:New name.png"}],
+        "pages": [
+            info_page("File:New name.png", "cc0"),
+            info_page("File:Nc.png", "cc-by-nc-4.0"),
+            {"ns": 6, "title": "File:Deleted.png", "missing": true, "imagerepository": ""},
+            {"ns": 6, "title": "File:No info.png", "imagerepository": "local"}
+        ]
+    }})
+    .to_string();
+    let got = parse_imageinfo(
+        &body,
+        &want(&[
+            "Old name.png",
+            "Nc.png",
+            "Deleted.png",
+            "No info.png",
+            "Not asked about.png",
+        ]),
+    )
+    .unwrap();
+    // A renamed file follows the redirect.
+    assert!(matches!(&got["Old name.png"], FileVerdict::Free(i) if i.file == "New name.png"));
+    assert_eq!(got["Nc.png"], FileVerdict::Refused);
+    assert_eq!(got["Deleted.png"], FileVerdict::Refused);
+    // Nothing definite: no verdict.
+    assert!(!got.contains_key("No info.png"));
+    assert!(!got.contains_key("Not asked about.png"));
+}
+
+#[tokio::test]
+async fn odd_commons_answers_leave_chosen_images_and_credits_in_place() {
+    for body in [
+        r#"{"error":{"code":"readonly","info":"x"}}"#,
+        r#"{"batchcomplete":true}"#,
+        r#"{"query":{"pages":[{"ns":6,"title":"File:Chosen.png","imagerepository":"local"}]}}"#,
+    ] {
+        let reply = body.to_string();
+        let (base, _) = serve(Arc::new(move |_: &Req| json_reply(&reply))).await;
+        let limiter = Limiter::default();
+        let api = Api::new(Endpoints::local(&base), &limiter).unwrap();
+        let db = library(&["a"]);
+        let chosen = logo("Chosen.png");
+        put_images(&db.lock(), &[&chosen], 1).unwrap();
+        if let Ok(verdicts) = recheck(&api, &db, std::slice::from_ref(&chosen.src)).await {
+            assert!(verdicts.is_empty(), "{body}");
+        }
+        assert!(
+            image(&db.lock(), &chosen.src).is_some(),
+            "{body}: the credit stays"
+        );
+    }
+}
+
+#[tokio::test]
+async fn renamed_files_keep_their_credit_and_explicit_answers_still_remove() {
+    let body = serde_json::json!({"query": {
+        "redirects": [{"from": "File:Chosen.png", "to": "File:Chosen renamed.png"}],
+        "pages": [
+            info_page("File:Chosen renamed.png", "pd"),
+            info_page("File:Now nc.png", "cc-by-nc-sa-4.0"),
+            {"ns": 6, "title": "File:Deleted.png", "missing": true, "imagerepository": ""}
+        ]
+    }})
+    .to_string();
+    let (base, log) = serve(Arc::new(move |_: &Req| json_reply(&body))).await;
+    let limiter = Limiter::default();
+    let api = Api::new(Endpoints::local(&base), &limiter).unwrap();
+    let db = library(&["a"]);
+    let urls: Vec<String> = ["Chosen.png", "Now nc.png", "Deleted.png"]
+        .iter()
+        .map(|f| logo(f).src)
+        .collect();
+    for f in ["Chosen.png", "Now nc.png", "Deleted.png"] {
+        put_images(&db.lock(), &[&logo(f)], 1).unwrap();
+    }
+    let verdicts = recheck(&api, &db, &urls).await.unwrap();
+    assert!(verdicts[&urls[0]]);
+    assert!(!verdicts[&urls[1]] && !verdicts[&urls[2]]);
+    let conn = db.lock();
+    // The chosen display URL keeps its (renamed file's) credit.
+    assert_eq!(image(&conn, &urls[0]).unwrap().file, "Chosen renamed.png");
+    assert!(image(&conn, &urls[1]).is_none() && image(&conn, &urls[2]).is_none());
+    assert_eq!(
+        log.lock().unwrap()[0].param("redirects").as_deref(),
+        Some("1")
+    );
+}
+
+#[test]
+fn credit_lookups_wait_an_hour_per_url() {
+    let state = WikimediaState::default();
+    let start = Instant::now();
+    let a = "https://upload.wikimedia.org/wikipedia/commons/a/ab/A.png".to_string();
+    let b = "https://upload.wikimedia.org/wikipedia/commons/a/ab/B.png".to_string();
+    assert_eq!(
+        state.claim_credit_lookups(vec![a.clone(), a.clone()], start),
+        vec![a.clone()]
+    );
+    // Within the hour: only the new URL.
+    let soon = start + Duration::from_secs(60);
+    assert_eq!(
+        state.claim_credit_lookups(vec![a.clone(), b.clone()], soon),
+        vec![b.clone()]
+    );
+    assert!(state
+        .claim_credit_lookups(vec![a.clone(), b.clone()], soon)
+        .is_empty());
+    // After it: again.
+    let later = start + CREDIT_RETRY_AFTER + Duration::from_secs(61);
+    assert_eq!(
+        state.claim_credit_lookups(vec![a.clone(), b.clone()], later),
+        vec![a, b]
+    );
+}
+
+#[test]
+fn uncredited_commons_art_is_listed_for_a_background_lookup() {
+    let db = library(&["a"]);
+    let conn = db.lock();
+    let bare = logo("Bare.png");
+    let credited = logo("Credited.png");
+    put_images(&conn, &[&credited], 1).unwrap();
+    conn.execute(
+        "INSERT INTO game_page_custom(gameId,hero,logo,updatedAt) VALUES('a',?1,?2,1)",
+        [&credited.src, &bare.src],
+    )
+    .unwrap();
+    assert_eq!(crate::art::uncredited(&conn, "a"), vec![bare.src]);
+}

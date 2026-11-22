@@ -764,8 +764,17 @@ pub async fn tracking_set_excluded(
 
 /// Hero/logo candidate URLs for the game page; empty lists when nothing is available.
 #[tauri::command]
-pub async fn art_get(state: State<'_, AppState>, game_id: String) -> CmdResult<GameArt> {
-    art::get(&state, &game_id).await.map_err(err)
+pub async fn art_get(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    game_id: String,
+) -> CmdResult<GameArt> {
+    let art = art::get(&state, &game_id).await.map_err(err)?;
+    // Commons images without a credit record (from a backup) are looked up in the background;
+    // `art:changed` follows when one is confirmed.
+    let missing = art::uncredited(&state.db.lock(), &game_id);
+    crate::wikimedia::spawn_restore_credits(&app, &game_id, missing);
+    Ok(art)
 }
 
 // ---------------------------------------------------------------------------
