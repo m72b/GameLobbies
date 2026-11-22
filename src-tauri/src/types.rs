@@ -276,6 +276,15 @@ pub struct Settings {
     /// Minimize Game Lobby when a game is started from it. Stored settings without it default to on.
     #[serde(default = "default_true")]
     pub minimize_on_launch: bool,
+    /// Start Game Lobby when Windows starts (a per-user Run entry; see the autostart module).
+    #[serde(default)]
+    pub launch_on_boot: bool,
+    /// Minimizing the main window hides it to the tray icon (see the tray module).
+    #[serde(default)]
+    pub minimize_to_tray: bool,
+    /// The main window's close button hides it to the tray icon instead of exiting (see the tray module).
+    #[serde(default)]
+    pub close_to_tray: bool,
     /// Motion in the interface: "full" (always animate), "system" (follow Windows' animation setting), "reduced" (short
     /// fades only) or "off" (no animation). Stored settings without it follow Windows.
     #[serde(default = "default_motion")]
@@ -319,6 +328,9 @@ impl Default for Settings {
             auto_check_updates: true,
             disabled_stores: Vec::new(),
             minimize_on_launch: true,
+            launch_on_boot: false,
+            minimize_to_tray: false,
+            close_to_tray: false,
             motion: default_motion(),
         }
     }

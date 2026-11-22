@@ -27,6 +27,7 @@ fn notify_library(app: &AppHandle) {
 }
 
 fn notify_settings(app: &AppHandle, settings: Settings) -> Settings {
+    crate::tray::apply_settings(app, &settings);
     let _ = app.emit("settings:changed", &settings);
     settings
 }
@@ -78,7 +79,7 @@ pub fn window_is_maximized(window: WebviewWindow) -> CmdResult<bool> {
 
 #[tauri::command]
 pub fn app_quit(app: AppHandle) {
-    app.exit(0);
+    crate::tray::quit(&app);
 }
 
 // ---------------------------------------------------------------------------

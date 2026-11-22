@@ -85,6 +85,9 @@ const SETTINGS_KEYS: &[&str] = &[
     "autoCheckUpdates",
     "disabledStores",
     "minimizeOnLaunch",
+    "launchOnBoot",
+    "minimizeToTray",
+    "closeToTray",
     "motion",
 ];
 /// Settings keys of older versions that are dropped (not rejected) when a backup is imported.
@@ -694,6 +697,9 @@ pub fn settings_patch(value: &Value) -> Result<Map<String, Value>> {
         "detectExternalLaunches",
         "autoCheckUpdates",
         "minimizeOnLaunch",
+        "launchOnBoot",
+        "minimizeToTray",
+        "closeToTray",
     ] {
         bool_field(&map, key)?;
     }
@@ -1479,6 +1485,16 @@ mod tests {
             false
         );
         assert!(settings_patch(&json!({ "minimizeOnLaunch": "yes" })).is_err());
+        // Startup and tray options: booleans, all off unless chosen (also for older stored settings).
+        for key in ["launchOnBoot", "minimizeToTray", "closeToTray"] {
+            assert_eq!(settings_patch(&json!({ key: true })).unwrap()[key], true);
+            assert_eq!(settings_patch(&json!({ key: false })).unwrap()[key], false);
+            for bad in [json!("yes"), json!(1), json!([])] {
+                assert!(settings_patch(&json!({ key: bad })).is_err(), "{key} {bad}");
+            }
+        }
+        let fresh = crate::types::Settings::default();
+        assert!(!fresh.launch_on_boot && !fresh.minimize_to_tray && !fresh.close_to_tray);
         for ok in ["system", "full", "reduced", "off"] {
             assert_eq!(
                 settings_patch(&json!({ "motion": ok })).unwrap()["motion"],

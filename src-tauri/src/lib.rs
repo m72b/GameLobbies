@@ -2,6 +2,7 @@
 
 mod applog;
 mod art;
+mod autostart;
 mod catalog;
 mod commands;
 mod covercache;
@@ -39,6 +40,7 @@ mod steamgriddb;
 mod storage;
 mod theme;
 mod tracker;
+mod tray;
 mod types;
 mod updater;
 mod validation;
@@ -127,7 +129,12 @@ fn with_single_instance(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<t
     if data_dir_override().is_some() {
         return builder;
     }
-    builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+    builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+        // A start by Windows' Run entry while Game Lobby already runs (e.g. started by hand just
+        // before sign-in finished) must not pop the window up.
+        if autostart::started_by_autostart(&args) {
+            return;
+        }
         log::info!("A second copy of Game Lobby was started; showing the running one.");
         if let Err(e) = windows::focus_main(app) {
             log::warn!("Could not show the main window: {e}");
@@ -141,6 +148,7 @@ pub fn run() {
         // Signed updates; used only by the `updates_*` commands (no webview permissions).
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(updater::Updates::default())
+        .on_window_event(tray::on_window_event)
         .register_uri_scheme_protocol("lobby-cover", cover_protocol)
         .register_uri_scheme_protocol("lobby-shot", screenshots::protocol)
         .setup(|app| {
@@ -179,7 +187,8 @@ pub fn run() {
                     notice.error.as_deref().unwrap_or("none")
                 ),
             }
-            let hours = db::get_settings(&database.lock())?.scan_interval_hours;
+            let startup = db::get_settings(&database.lock())?;
+            let hours = startup.scan_interval_hours;
             app.manage(AppState {
                 db: database,
                 data_dir,
@@ -196,7 +205,13 @@ pub fn run() {
             });
             scan::configure_schedule(app.handle(), hours);
             tracker::start(app.handle());
-            windows::create(app.handle())?;
+            let mode = tray::init(
+                app.handle(),
+                &startup,
+                autostart::started_by_autostart(std::env::args()),
+            );
+            tray::sync_autostart(startup.launch_on_boot);
+            windows::create(app.handle(), mode)?;
             if let Some(notice) = repair {
                 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
                 app.dialog()
