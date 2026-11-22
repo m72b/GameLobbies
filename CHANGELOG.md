@@ -2,7 +2,7 @@
 
 All notable changes to Game Lobby are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.9.0] — 2026-11-22
 
 ### Game details without a key: Wikidata, Wikipedia and Wikimedia Commons
 - New built-in game details source that needs no key: release date, platforms, developer, publisher and genres from Wikidata (CC0), the first paragraph of the English Wikipedia article when IGDB has no description (shown with *From Wikipedia*, a link to the article and CC BY-SA 4.0), and free logos, plus a cover where a free one exists, from Wikimedia Commons, each credited with author, licence and a link to its file page. On by default; **Use Wikipedia & Wikidata (no key needed)** in **Settings → API keys** and **Settings → Playtime and Stats** turns it off.
