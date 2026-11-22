@@ -2,7 +2,7 @@
 
 All notable changes to Game Lobby are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.8.0] — 2026-11-22
 
 ### Store accounts and first-time setup
 - New first-time setup inside the main window when the library is empty: welcome, the stores you use, how to use each (sign in, installed files only or skip), Steam sign-in and API key, library folders, optional keys, then **Finish and scan**. Every step can be skipped. Existing libraries get a dismissible **Add store accounts** banner instead.
