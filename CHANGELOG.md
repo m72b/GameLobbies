@@ -21,6 +21,10 @@ All notable changes to Game Lobby are listed here. The format follows [Keep a Ch
 - Logs and the diagnostics report also redact OAuth codes, `gamekeys`, every `openid.*` value, `Cookie` / `Set-Cookie` headers and JSON Web Tokens.
 - Technical: new commands `accounts_status`, `accounts_sign_in`, `accounts_cancel_sign_in`, `accounts_sign_out`, `accounts_set_mode`, `accounts_sync`, `setup_get`, `setup_save` (enum inputs only); event `accounts:changed` (main window only); settings section id `accounts`. New `settings` row `setup` (not in backups) and `library_connections` rows `account:<store>`; no schema version change.
 
+### Interface
+- **Settings → Startup and Behavior** now works: **Launch on boot**, **Minimize to tray** and **Close to tray** (all off by default). Launch on boot writes a per-user Windows startup entry (`HKCU\...\Run`, value `Game Lobby`, the quoted program path plus `--autostart`, never `HKLM`) and starts minimized, in the tray when a tray option is on; it is checked at every start and on every settings change, so a moved program path is corrected and turning the option off removes the entry (the uninstaller removes it too). A tray icon (tooltip "Game Lobby", left-click opens the window, menu **Open Game Lobby** and **Quit**) exists only while Minimize to tray or Close to tray is on. Minimizing hides the window to the tray; the close button hides it and Game Lobby keeps running (playtime tracking continues), with a one-time hint the next time the window is shown. Quit from the tray, the side rail's Quit and update installs exit for real, and a second launch shows the hidden window.
+- Technical: new stored settings `launchOnBoot`, `minimizeToTray` and `closeToTray` (booleans; older settings default to off); the `tray-icon` feature of the `tauri` crate; new event `tray:hint`. No new commands or permissions.
+
 ## [0.7.0] — 2026-11-19
 
 ### Statistics

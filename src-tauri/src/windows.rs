@@ -1,6 +1,7 @@
 //! Window creation with navigation guards: the webviews may only show the app's own
 //! pages; allow-listed external links open in the default browser instead.
 
+use crate::tray::StartMode;
 use tauri::webview::Color;
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use url::Url;
@@ -94,8 +95,9 @@ fn open_if_allowed_external(url: &Url) {
 pub const SETTINGS_SECTIONS: [&str; 5] =
     ["updates", "cover-art", "metadata", "api-keys", "accounts"];
 
-pub fn create(app: &AppHandle) -> tauri::Result<()> {
-    WebviewWindowBuilder::new(app, MAIN, WebviewUrl::App("index.html".into()))
+pub fn create(app: &AppHandle, mode: StartMode) -> tauri::Result<()> {
+    let window = WebviewWindowBuilder::new(app, MAIN, WebviewUrl::App("index.html".into()))
+        .visible(mode != StartMode::Hidden)
         .title("Game Lobby")
         .inner_size(1440.0, 900.0)
         .min_inner_size(800.0, 600.0)
@@ -109,6 +111,9 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
             false
         })
         .build()?;
+    if mode == StartMode::Minimized {
+        window.minimize()?;
+    }
     Ok(())
 }
 
@@ -122,6 +127,7 @@ pub fn open_settings_at(app: &AppHandle, section: Option<&str>) -> tauri::Result
     let _ = window.show();
     let _ = window.unminimize();
     window.set_focus()?;
+    crate::tray::announce_if_pending(app);
     app.emit_to(MAIN, "settings:open", section)
 }
 
@@ -134,9 +140,11 @@ pub fn focus_main(app: &AppHandle) -> tauri::Result<()> {
             if window.is_minimized().unwrap_or(false) {
                 window.unminimize()?;
             }
-            window.set_focus()
+            window.set_focus()?;
+            crate::tray::announce_if_pending(app);
+            Ok(())
         }
-        None => create(app),
+        None => create(app, StartMode::Show),
     }
 }
 

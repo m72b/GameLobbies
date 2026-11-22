@@ -127,7 +127,7 @@ export default function App() {
   }
   const notice = (message: string) => {
     setToast(message)
-    window.setTimeout(() => setToast(''), 2500)
+    window.setTimeout(() => setToast(''), message.length > 60 ? 6000 : 2500)
   }
   const launch = async (game: Game, route = 0) => {
     try {
@@ -372,6 +372,7 @@ export default function App() {
     const offTracking = window.lobby.tracking.onChanged(setRunning)
     const offSettings = window.lobby.settings.onChanged(setSettings)
     const offOpen = window.lobby.settings.onOpen(id => openSettingsRef.current(id))
+    const offTrayHint = window.lobby.app.onTrayHint(() => notice('Game Lobby is still running in the tray. Use the tray icon to open or quit it.'))
     const offSgdb = window.lobby.steamGridDb.onFetched(summary => { if (summary.updated > 0) notice('SteamGridDB added ' + summary.updated + ' cover' + (summary.updated === 1 ? '' : 's')) })
     const resize = () => setGridWidth(scrollRef.current?.clientWidth || window.innerWidth - 90)
     const observer = new ResizeObserver(resize)
@@ -440,6 +441,7 @@ export default function App() {
       offSettings()
       offOpen()
       offSgdb()
+      offTrayHint()
       observer.disconnect()
       window.removeEventListener('keydown', key)
     }

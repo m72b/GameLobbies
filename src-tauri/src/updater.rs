@@ -202,6 +202,8 @@ pub async fn updates_install(app: AppHandle, updates: State<'_, Updates>) -> Cmd
     tokio::time::sleep(READY_DELAY).await;
     // Windows: starts the installer in passive mode and exits; the installer starts the new
     // version when it is done. Other platforms return here with the new version in place.
+    // The installer ends this process; Close to tray must not get in its way.
+    crate::tray::allow_exit();
     update.install(&bytes).map_err(|e| describe(&e).message())?;
     app.restart()
 }
