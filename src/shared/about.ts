@@ -68,9 +68,9 @@ export function mergeAbout(igdb: IgdbMetadata | undefined, wiki: WikiMetadata | 
   }
 }
 
-/** "Logo: Valve, Public domain, via Wikimedia Commons" (the artist is left out when unknown). */
+/** "Logo: Valve, Public domain via Wikimedia Commons" (the artist is left out when unknown). */
 export function creditText(image: Pick<WikiImage, 'kind' | 'artist' | 'licence'>) {
-  const what = image.kind === 'cover' ? 'Cover' : 'Logo'
+  const what = image.kind === 'cover' ? 'Cover' : image.kind === 'hero' ? 'Hero' : 'Logo'
   return what + ': ' + [image.artist, image.licence].filter(Boolean).join(', ') + ' via Wikimedia Commons'
 }
 

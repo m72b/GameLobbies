@@ -322,7 +322,14 @@ fn user_choices_survive_automatic_results() {
     assert_eq!(metadata_of(&kept).unwrap().label, "Two, renamed");
     // ...and a chosen item that is gone keeps the choice as it was.
     assert!(!store(&conn, &outcome("a", Decision::None, "known", ""), 5).unwrap());
-    assert_eq!(cached(&conn, "a").unwrap().unwrap().fetched_at, 4);
+    let kept = cached(&conn, "a").unwrap().unwrap();
+    assert_eq!(
+        (kept.qid.as_deref(), kept.source.as_str()),
+        (Some("Q2"), "user")
+    );
+    // Its time moves on, so it isn't fetched again at once.
+    assert_eq!(kept.fetched_at, 5);
+    assert!(is_fresh(&kept, 5));
     // Games that don't exist get no row; deleting a game removes its row.
     assert!(!store(&conn, &outcome("ghost", Decision::None, "title", ""), 1).unwrap());
     db::remove_game(&conn, "a").unwrap();
@@ -458,7 +465,11 @@ fn image_records_keep_credits_and_referenced_urls_protect_cached_files() {
     .is_none());
     let credits = credits_for(
         &conn,
-        &[(chosen.src.clone(), "lobby-cover://cache-x.png".into())],
+        &[(
+            chosen.src.clone(),
+            "lobby-cover://cache-x.png".into(),
+            "hero",
+        )],
     );
     assert_eq!(credits[0].display, "lobby-cover://cache-x.png");
     // A chosen logo outlives the match.
@@ -546,13 +557,7 @@ fn inputs_come_from_the_library_and_the_igdb_cache() {
 }
 
 #[test]
-fn covers_are_only_set_for_games_without_any() {
-    let mut g = Game::default();
-    assert!(no_cover(&g));
-    g.default_cover = Some(" ".into());
-    assert!(no_cover(&g));
-    g.cover = Some("https://cdn2.steamgriddb.com/grid/a.png".into());
-    assert!(!no_cover(&g));
+fn cover_candidates_are_portrait_and_small_ones_are_marked() {
     let mut cover = logo("Box.png");
     cover.original_width = 400;
     cover.original_height = 600;
@@ -606,4 +611,210 @@ fn the_cover_cache_and_page_art_take_commons_uploads_only() {
         crate::art::with_custom(art, custom).logo[0],
         "lobby-cover://logo-a-1.png"
     );
+}
+
+// -- review fixes ------------------------------------------------------------
+
+#[tokio::test]
+async fn an_edition_whose_game_is_missing_is_asked_for_once() {
+    let body = serde_json::json!({"entities": {
+        "Q500": {"type": "item", "id": "Q500", "labels": {"en": {"language": "en", "value": "Game: Deluxe Edition"}},
+                 "claims": {
+                     "P31": [{"rank": "normal", "mainsnak": {"snaktype": "value", "datavalue": {"value": {"id": "Q60997816"}}}}],
+                     "P629": [{"rank": "normal", "mainsnak": {"snaktype": "value", "datavalue": {"value": {"id": "Q999"}}}}]
+                 }},
+        "Q999": {"id": "Q999", "missing": ""}
+    }})
+    .to_string();
+    let (base, log) = serve(Arc::new(move |req: &Req| match req.path() {
+        "/wikidata" if req.param("props").as_deref() == Some("labels") => {
+            json_reply(r#"{"entities":{}}"#)
+        }
+        "/wikidata" => json_reply(&body),
+        "/wikipedia" => json_reply(r#"{"query":{"pages":[]}}"#),
+        "/commons" => json_reply(r#"{"query":{"pages":[]}}"#),
+        _ => (404, vec![], vec![]),
+    }))
+    .await;
+    let limiter = Limiter::default();
+    let api = Api::new(Endpoints::local(&base), &limiter).unwrap();
+    let known = GameInput {
+        known: Some("Q500".into()),
+        ..input("g", "Game", None)
+    };
+    let out = resolve_batch(&api, &[known]).await.unwrap();
+    // The edition stands for itself when its game is gone.
+    assert_eq!(out[0].decision, Decision::Match("Q500".into()));
+    let entity_requests = log
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|r| {
+            r.path() == "/wikidata"
+                && r.param("action").as_deref() == Some("wbgetentities")
+                && r.param("props").as_deref() != Some("labels")
+        })
+        .count();
+    assert_eq!(entity_requests, 2, "the edition, then its game once");
+}
+
+#[test]
+fn automatic_results_never_replace_or_claim_a_users_choice() {
+    let db = library(&["a"]);
+    let conn = db.lock();
+    let mut chosen = row_for(
+        &outcome("a", Decision::Match("Q2".into()), "known", "Two"),
+        None,
+        1,
+    )
+    .unwrap();
+    chosen.source = "user".into();
+    chosen.matched_by = "user".into();
+    assert!(put(&conn, "a", &chosen).unwrap());
+    let previous = cached(&conn, "a").unwrap();
+    // The row for an automatic result is automatic, whatever was stored.
+    let row = row_for(
+        &outcome("a", Decision::Match("Q3".into()), "title", "Three"),
+        previous.as_ref(),
+        2,
+    )
+    .unwrap();
+    assert_eq!(row.source, "auto");
+    // A refresh that found another item (say it raced the user's choice) is not stored...
+    assert!(!store(
+        &conn,
+        &outcome("a", Decision::Match("Q3".into()), "title", "Three"),
+        2
+    )
+    .unwrap());
+    assert!(!store(
+        &conn,
+        &outcome(
+            "a",
+            Decision::Ambiguous(vec!["Q3".into(), "Q4".into()]),
+            "title",
+            ""
+        ),
+        3
+    )
+    .unwrap());
+    let kept = cached(&conn, "a").unwrap().unwrap();
+    assert_eq!(
+        (
+            kept.qid.as_deref(),
+            kept.source.as_str(),
+            kept.status.as_str()
+        ),
+        (Some("Q2"), "user", "matched")
+    );
+    assert_eq!(metadata_of(&kept).unwrap().label, "Two");
+    // ...a refresh of the chosen item is, and stays the user's.
+    assert!(store(
+        &conn,
+        &outcome("a", Decision::Match("Q2".into()), "known", "Two again"),
+        4
+    )
+    .unwrap());
+    let kept = cached(&conn, "a").unwrap().unwrap();
+    assert_eq!(
+        (kept.source.as_str(), kept.matched_by.as_str()),
+        ("user", "user")
+    );
+    assert_eq!(metadata_of(&kept).unwrap().label, "Two again");
+}
+
+#[test]
+fn commons_images_show_only_with_a_credit_and_are_chosen_only_with_one() {
+    let dir = std::env::temp_dir().join(format!("gl-wiki-{}", uuid::Uuid::new_v4()));
+    let db = library(&["a"]);
+    let conn = db.lock();
+    let credited = logo("Credited.png");
+    let bare = logo("Bare.png");
+    put_images(&conn, &[&credited], 1).unwrap();
+    let art = crate::types::GameArt {
+        hero: vec![
+            bare.src.clone(),
+            "https://cdn2.steamgriddb.com/hero/a.png".into(),
+        ],
+        logo: vec![credited.src.clone(), bare.src.clone()],
+        ..Default::default()
+    };
+    let art = crate::art::with_credits(&conn, &dir, art);
+    assert_eq!(art.hero, vec!["https://cdn2.steamgriddb.com/hero/a.png"]);
+    assert_eq!(art.logo, vec![credited.src.clone()]);
+    assert_eq!(art.credits.len(), 1);
+    assert_eq!(art.credits[0].kind, "logo");
+    // Choosing: only with a credit record.
+    let slot = crate::art::Slot::Logo;
+    assert!(crate::art::set_image(&conn, &dir, "a", slot, Some(&bare.src)).is_err());
+    assert_eq!(
+        crate::art::set_image(&conn, &dir, "a", slot, Some(&credited.src))
+            .unwrap()
+            .logo
+            .as_deref(),
+        Some(credited.src.as_str())
+    );
+    // Credits carry the slot they are shown in.
+    let hero = credits_for(&conn, &[(credited.src.clone(), "x".into(), "hero")]);
+    assert_eq!(hero[0].kind, "hero");
+}
+
+#[tokio::test]
+async fn chosen_images_are_rechecked_on_commons() {
+    let (base, _) = serve(Arc::new(fixtures)).await;
+    let limiter = Limiter::default();
+    let api = Api::new(Endpoints::local(&base), &limiter).unwrap();
+    let db = library(&["a"]);
+    let kept = "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d6/Half-Life_2_text_logo.svg/500px-Half-Life_2_text_logo.svg.png".to_string();
+    let gone =
+        "https://upload.wikimedia.org/wikipedia/commons/a/ab/Papers_Please_cover.jpg".to_string();
+    put_images(
+        &db.lock(),
+        &[&CommonsImage {
+            src: gone.clone(),
+            ..logo("Papers Please cover.jpg")
+        }],
+        1,
+    )
+    .unwrap();
+    let verdicts = recheck(&api, &db, &[kept.clone(), gone.clone()])
+        .await
+        .unwrap();
+    assert!(verdicts[&kept]);
+    assert!(!verdicts[&gone]);
+    let conn = db.lock();
+    let credit = image(&conn, &kept).unwrap();
+    assert_eq!(
+        (credit.file.as_str(), credit.licence.as_str()),
+        ("Half-Life 2 text logo.svg", "Public domain")
+    );
+    assert!(
+        image(&conn, &gone).is_none(),
+        "a file Commons no longer has loses its credit"
+    );
+    assert_eq!(
+        file_of_url(&kept).as_deref(),
+        Some("Half-Life 2 text logo.svg")
+    );
+    assert_eq!(
+        file_of_url("https://upload.wikimedia.org/wikipedia/commons/a/ab/Doom_%E2%80%93_logo.png")
+            .as_deref(),
+        Some("Doom – logo.png")
+    );
+    assert_eq!(
+        file_of_url("https://upload.wikimedia.org/wikipedia/en/a/ab/X.png"),
+        None
+    );
+}
+
+#[test]
+fn a_rate_limit_pauses_every_request() {
+    let state = WikimediaState::default();
+    assert!(!state.rate_limited());
+    assert!(state.api().is_ok());
+    let _ = state.note::<()>(Err(WikiError::Http(500)));
+    assert!(!state.rate_limited());
+    let _ = state.note::<()>(Err(WikiError::RateLimited));
+    assert!(state.rate_limited());
+    assert_eq!(state.api().err(), Some(WikiError::RateLimited));
 }

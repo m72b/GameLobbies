@@ -147,6 +147,14 @@ pub fn set_image(
     let value = value
         .map(|v| resolve_image_value(v, covers_dir))
         .transpose()?;
+    // A Commons image only with its credit (chosen through `wikimedia_use_logo`).
+    if let Some(v) = value.as_deref() {
+        if crate::wikimedia::licence::valid_image_url(v)
+            && crate::wikimedia::image(conn, v).is_none()
+        {
+            bail!("Choose Wikimedia images under Customize, so their credit can be shown.");
+        }
+    }
     update(conn, game_id, |custom| *slot.field(custom) = value)
 }
 
@@ -324,9 +332,18 @@ pub async fn get(state: &AppState, game_id: &str) -> Result<GameArt> {
             }
         },
     };
-    let conn = state.db.lock();
-    let wiki = crate::wikimedia::logo_urls(&conn, game_id);
+    let wiki = crate::wikimedia::logo_urls(&state.db.lock(), game_id);
     let art = with_custom(with_wikimedia(combine(&game, sgdb), wiki), custom);
+    // Commons images restored from a backup have no credit record yet: look them up first.
+    let commons: Vec<String> = art
+        .hero
+        .iter()
+        .chain(&art.logo)
+        .filter(|v| crate::wikimedia::licence::valid_image_url(v))
+        .cloned()
+        .collect();
+    crate::wikimedia::restore_credits(state, &commons).await;
+    let conn = state.db.lock();
     Ok(with_credits(&conn, &state.covers_dir(), art))
 }
 
@@ -340,19 +357,24 @@ pub fn with_wikimedia(mut art: GameArt, logos: Vec<String>) -> GameArt {
     art
 }
 
-/// Commons images are shown from the cover cache once downloaded, each with its credit.
-fn with_credits(conn: &Connection, covers_dir: &Path, mut art: GameArt) -> GameArt {
-    let mut pairs = Vec::new();
-    for list in [&mut art.hero, &mut art.logo] {
+/// Commons images are shown from the cover cache once downloaded, each with its credit. A
+/// Commons image without a valid credit record is never shown: it is left out of the list.
+pub fn with_credits(conn: &Connection, covers_dir: &Path, mut art: GameArt) -> GameArt {
+    let mut items = Vec::new();
+    for (list, kind) in [(&mut art.hero, "hero"), (&mut art.logo, "logo")] {
+        list.retain(|v| {
+            !crate::wikimedia::licence::valid_image_url(v)
+                || crate::wikimedia::image(conn, v).is_some()
+        });
         for value in list.iter_mut() {
             if crate::wikimedia::licence::valid_image_url(value) {
                 let display = crate::covercache::cached_value(conn, covers_dir, value);
-                pairs.push((value.clone(), display.clone()));
+                items.push((value.clone(), display.clone(), kind));
                 *value = display;
             }
         }
     }
-    art.credits = crate::wikimedia::credits_for(conn, &pairs);
+    art.credits = crate::wikimedia::credits_for(conn, &items);
     art
 }
 

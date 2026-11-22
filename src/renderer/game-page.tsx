@@ -151,6 +151,7 @@ export function GamePage({ game, index, settings, launchers, running, libraryVer
   const logoSrc = art.logo[logoIdx] ? coverUrl(art.logo[logoIdx]) : undefined
   // A Commons logo carries its credit (author, licence) on the page.
   const logoCredit = creditFor(art.credits, art.logo[logoIdx])
+  const heroCredit = creditFor(art.credits, art.hero[heroIdx])
   const cover = useCover(game)
   const route = game.routes[routeIdx]
   const playVia = playLauncher(route, launchers)
@@ -205,7 +206,10 @@ export function GamePage({ game, index, settings, launchers, running, libraryVer
           ? <FadeImg key={logoSrc} className="gp-logo" src={logoSrc} alt={game.title} onError={() => setLogoIdx(value => value + 1)} />
           : <h1 className="gp-title">{game.title}</h1>}
       </div>
-      {logoSrc && logoCredit && <ImageCredit image={logoCredit} className="gp-logo-credit" />}
+      {(heroSrc && heroCredit || logoSrc && logoCredit) && <div className="gp-art-credits">
+        {heroSrc && heroCredit && <ImageCredit image={heroCredit} />}
+        {logoSrc && logoCredit && <ImageCredit image={logoCredit} />}
+      </div>}
     </div>
 
     {wikiPicking && <WikiPicker game={game} view={wiki} onClose={closeWiki} onChosen={next => { setWiki(next); setWikiPicking(false) }} />}

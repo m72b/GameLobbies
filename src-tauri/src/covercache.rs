@@ -187,7 +187,8 @@ pub fn http_client(allow: Allow, timeout: Duration) -> reqwest::Result<reqwest::
                 attempt.error("redirect to a host that is not allowed")
             }
         }))
-        .user_agent(concat!("GameLobby/", env!("CARGO_PKG_VERSION")))
+        // Descriptive, as Wikimedia asks of automated clients; no personal data.
+        .user_agent(crate::wikimedia::http::USER_AGENT)
         .build()
 }
 

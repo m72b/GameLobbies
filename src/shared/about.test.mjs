@@ -57,6 +57,7 @@ test('Wikidata dates keep their precision', () => {
 test('Credits name the author and licence and are found by the shown value', () => {
   assert.equal(creditText({ kind: 'logo', artist: 'Valve', licence: 'Public domain' }), 'Logo: Valve, Public domain via Wikimedia Commons')
   assert.equal(creditText({ kind: 'cover', licence: 'CC BY 3.0' }), 'Cover: CC BY 3.0 via Wikimedia Commons')
+  assert.equal(creditText({ kind: 'hero', artist: 'A', licence: 'CC0' }), 'Hero: A, CC0 via Wikimedia Commons')
   const credits = [{ src: 'https://upload.wikimedia.org/wikipedia/commons/a/ab/L.png', display: 'lobby-cover://cache-1.png', kind: 'logo', licence: 'CC0' }]
   assert.equal(creditFor(credits, 'lobby-cover://cache-1.png'), credits[0])
   assert.equal(creditFor(credits, 'https://upload.wikimedia.org/wikipedia/commons/a/ab/L.png'), credits[0])

@@ -156,13 +156,20 @@ fn allowed(url: &url::Url, hosts: &[String], https_only: bool) -> bool {
             .is_some_and(|h| hosts.iter().any(|a| a.eq_ignore_ascii_case(h)))
 }
 
-/// Spaces requests at least `spacing` apart, across every caller (one per app).
+/// Makes requests serial (one at a time, held for the whole request including retries) and
+/// spaces their starts at least `spacing` apart, across every caller (one per app).
 #[derive(Default)]
 pub struct Limiter {
     next: tokio::sync::Mutex<Option<Instant>>,
+    turn: tokio::sync::Mutex<()>,
 }
 
 impl Limiter {
+    /// Held while one request (and its retries) runs; others wait their turn.
+    pub async fn turn(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.turn.lock().await
+    }
+
     pub async fn wait(&self, spacing: Duration) {
         let mut next = self.next.lock().await;
         if let Some(at) = *next {
@@ -275,8 +282,42 @@ fn is_maxlag(body: &str) -> bool {
         })
 }
 
+/// The HTTP client for these endpoints: timeouts, https only in production, redirects only
+/// between allowed hosts (each hop checked, at most two), the descriptive User-Agent.
+pub fn build_client(endpoints: &Endpoints) -> Result<reqwest::Client, WikiError> {
+    let hosts = endpoints.hosts.clone();
+    let https_only = endpoints.https_only;
+    reqwest::Client::builder()
+        .timeout(TIMEOUT)
+        .connect_timeout(CONNECT_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::custom(move |attempt| {
+            if attempt.previous().len() > MAX_REDIRECTS {
+                attempt.error("too many redirects")
+            } else if allowed(attempt.url(), &hosts, https_only) {
+                attempt.follow()
+            } else {
+                attempt.error("redirect to a host that is not allowed")
+            }
+        }))
+        .https_only(endpoints.https_only)
+        .user_agent(USER_AGENT)
+        .build()
+        .map_err(|e| WikiError::Network(e.without_url().to_string()))
+}
+
 impl<'a> Api<'a> {
+    #[cfg(test)]
     pub fn new(endpoints: Endpoints, limiter: &'a Limiter) -> Result<Self, WikiError> {
+        let http = build_client(&endpoints)?;
+        Self::with_client(endpoints, limiter, http)
+    }
+
+    /// With a client made by [`build_client`] for the same endpoints (kept by the app).
+    pub fn with_client(
+        endpoints: Endpoints,
+        limiter: &'a Limiter,
+        http: reqwest::Client,
+    ) -> Result<Self, WikiError> {
         for service in [
             Service::Wikidata,
             Service::Sparql,
@@ -287,24 +328,6 @@ impl<'a> Api<'a> {
                 return Err(WikiError::NotAllowed);
             }
         }
-        let hosts = endpoints.hosts.clone();
-        let https_only = endpoints.https_only;
-        let http = reqwest::Client::builder()
-            .timeout(TIMEOUT)
-            .connect_timeout(CONNECT_TIMEOUT)
-            .redirect(reqwest::redirect::Policy::custom(move |attempt| {
-                if attempt.previous().len() > MAX_REDIRECTS {
-                    attempt.error("too many redirects")
-                } else if allowed(attempt.url(), &hosts, https_only) {
-                    attempt.follow()
-                } else {
-                    attempt.error("redirect to a host that is not allowed")
-                }
-            }))
-            .https_only(endpoints.https_only)
-            .user_agent(USER_AGENT)
-            .build()
-            .map_err(|e| WikiError::Network(e.without_url().to_string()))?;
         Ok(Self {
             http,
             endpoints,
@@ -348,6 +371,7 @@ impl<'a> Api<'a> {
             "application/json"
         };
         let mut delays = self.endpoints.retry_delays.iter();
+        let _turn = self.limiter.turn().await;
         loop {
             self.limiter.wait(self.endpoints.spacing).await;
             let response = self

@@ -654,7 +654,7 @@ export interface SetupAPI { get(): Promise<SetupInfo>; save(patch: SetupPatch): 
  * - useLogo / useCover(gameId, src): `src` must be one of this game's offered `logos` / `covers`.
  * Text is plain; render it as text. Release dates are `YYYY-MM-DD`, `YYYY-MM` or `YYYY`.
  */
-export interface WikiImage { file: string; src: string; display: string; kind: 'logo' | 'cover'; width: number; height: number; originalWidth: number; originalHeight: number; licence: string; licenceUrl?: string; artist?: string; credit?: string; sourcePage: string; attributionRequired: boolean; restrictions?: string; lowTrust: boolean }
+export interface WikiImage { file: string; src: string; display: string; kind: 'hero' | 'logo' | 'cover'; width: number; height: number; originalWidth: number; originalHeight: number; licence: string; licenceUrl?: string; artist?: string; credit?: string; sourcePage: string; attributionRequired: boolean; restrictions?: string; lowTrust: boolean }
 export interface WikiArticle { title: string; url: string; text: string }
 export interface WikiMetadata { qid: string; label: string; description?: string; release?: string; platforms: string[]; developers: string[]; publishers: string[]; genres: string[]; steam: string[]; gog: string[]; epic: string[]; igdb: string[]; mobygames: string[]; article?: WikiArticle }
 export interface WikiCandidate { qid: string; label: string; description?: string; year?: number }

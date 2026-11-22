@@ -21,8 +21,9 @@
 //! Only missing information is filled: Wikidata values are shown where IGDB and the user have
 //! none, the game's title, genre and cover in the library are never changed, a Wikimedia logo
 //! is only an automatic fallback behind Steam and SteamGridDB (a chosen logo always wins), and
-//! a Wikimedia cover is set automatically only for a game with no cover at all (and only when
-//! the file is not low resolution). Choosing a logo or cover is the user's explicit "replace".
+//! a Wikimedia cover is never set automatically: covers are only offered in Customize. Choosing
+//! a logo or cover is the user's explicit "replace". A Commons image is never shown without its
+//! credit record; chosen ones are checked on Commons again with every refresh.
 
 pub mod http;
 pub mod licence;
@@ -41,7 +42,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex as StdMutex;
+use std::sync::{Mutex as StdMutex, OnceLock};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -510,17 +511,50 @@ pub fn input_for(conn: &Connection, game: &Game) -> GameInput {
     }
 }
 
+/// Items fetched so far, and every id ever asked for (so an id Wikidata doesn't return, such as
+/// a deleted edition base, is never asked for again).
+#[derive(Default)]
+pub struct Entities {
+    pub map: HashMap<String, Entity>,
+    requested: HashSet<String>,
+}
+
+/// How many rounds of edition → game lookups one call follows.
+const MAX_EDITION_ROUNDS: usize = 2;
+
 async fn fetch_entities(
     api: &Api<'_>,
-    entities: &mut HashMap<String, Entity>,
+    entities: &mut Entities,
     qids: impl IntoIterator<Item = String>,
 ) -> Result<(), WikiError> {
-    let mut wanted: Vec<String> = Vec::new();
-    for q in qids {
-        if parse::valid_qid(&q) && !entities.contains_key(&q) && !wanted.contains(&q) {
-            wanted.push(q);
+    let mut next: Vec<String> = qids.into_iter().collect();
+    for _ in 0..=MAX_EDITION_ROUNDS {
+        let wanted: Vec<String> = next
+            .drain(..)
+            .filter(|q| parse::valid_qid(q) && !entities.map.contains_key(q))
+            .filter(|q| entities.requested.insert(q.clone()))
+            .collect();
+        if wanted.is_empty() {
+            break;
         }
+        fetch_entity_ids(api, &mut entities.map, &wanted).await?;
+        // Editions: their game too (once).
+        next = entities
+            .map
+            .values()
+            .filter_map(matching::edition_base)
+            .filter(|b| !entities.map.contains_key(*b))
+            .map(str::to_string)
+            .collect();
     }
+    Ok(())
+}
+
+async fn fetch_entity_ids(
+    api: &Api<'_>,
+    entities: &mut HashMap<String, Entity>,
+    wanted: &[String],
+) -> Result<(), WikiError> {
     for chunk in wanted.chunks(ENTITY_BATCH) {
         let ids = chunk.join("|");
         let body = api
@@ -541,16 +575,6 @@ async fn fetch_entities(
                 entities.insert(key, entity);
             }
         }
-    }
-    // Editions: their game too.
-    let bases: Vec<String> = entities
-        .values()
-        .filter_map(matching::edition_base)
-        .filter(|b| !entities.contains_key(*b))
-        .map(str::to_string)
-        .collect();
-    if !bases.is_empty() {
-        Box::pin(fetch_entities(api, entities, bases)).await?;
     }
     Ok(())
 }
@@ -784,7 +808,7 @@ fn build(
 /// Resolves a batch of games: one SPARQL query for every external id, shared entity, label,
 /// image and article requests. A failure fails the whole batch (nothing is stored).
 pub async fn resolve_batch(api: &Api<'_>, inputs: &[GameInput]) -> Result<Vec<Outcome>, WikiError> {
-    let mut entities: HashMap<String, Entity> = HashMap::new();
+    let mut cache = Entities::default();
     let open: Vec<&GameInput> = inputs.iter().filter(|i| i.known.is_none()).collect();
     let steam: Vec<String> = open.iter().filter_map(|i| i.steam.clone()).collect();
     let igdb: Vec<String> = open.iter().filter_map(|i| i.igdb.clone()).collect();
@@ -806,15 +830,16 @@ pub async fn resolve_batch(api: &Api<'_>, inputs: &[GameInput]) -> Result<Vec<Ou
     };
     let mut wanted: Vec<String> = inputs.iter().filter_map(|i| i.known.clone()).collect();
     wanted.extend(rows.iter().map(|(_, _, q)| q.clone()));
-    fetch_entities(api, &mut entities, wanted).await?;
+    fetch_entities(api, &mut cache, wanted).await?;
 
     let mut decided: Vec<(Decision, String)> = Vec::new();
     for input in inputs {
+        let entities = &cache.map;
         if let Some(known) = &input.known {
             let ok = entities.get(known).is_some_and(matching::is_game);
             decided.push(if ok {
                 (
-                    Decision::Match(matching::resolve(known, &entities).to_string()),
+                    Decision::Match(matching::resolve(known, entities).to_string()),
                     "known".into(),
                 )
             } else {
@@ -828,7 +853,7 @@ pub async fn resolve_batch(api: &Api<'_>, inputs: &[GameInput]) -> Result<Vec<Ou
         } else {
             ("steam", steam_hits)
         };
-        let decision = matching::pick_by_ids(&list, &entities);
+        let decision = matching::pick_by_ids(&list, entities);
         if decision != Decision::None {
             decided.push((decision, by.into()));
             continue;
@@ -842,13 +867,14 @@ pub async fn resolve_batch(api: &Api<'_>, inputs: &[GameInput]) -> Result<Vec<Ou
             .into_iter()
             .map(|h| h.qid)
             .collect();
-        fetch_entities(api, &mut entities, found.clone()).await?;
+        fetch_entities(api, &mut cache, found.clone()).await?;
         let decision =
-            matching::pick_by_title(&input.title, &found, &entities, input.platform, input.year);
+            matching::pick_by_title(&input.title, &found, &cache.map, input.platform, input.year);
         decided.push((decision, "title".into()));
     }
 
     // Everything the matched items need, in shared requests.
+    let entities = &cache.map;
     let matched: Vec<&Entity> = decided
         .iter()
         .filter_map(|(d, _)| match d {
@@ -926,7 +952,9 @@ pub async fn resolve_batch(api: &Api<'_>, inputs: &[GameInput]) -> Result<Vec<Ou
         .collect())
 }
 
-/// The row to store for an outcome (`source` and `matched_by` of an earlier match carry on).
+/// The row to store for an automatic outcome. Its source is always `auto`: a user's choice is
+/// protected by [`store`] and [`put`], never by copying the stored source (`matched_by` of an
+/// earlier match carries on for a refresh of a known item).
 pub fn row_for(outcome: &Outcome, previous: Option<&CachedMatch>, now: i64) -> Result<CachedMatch> {
     let (status, qid) = match &outcome.decision {
         Decision::Match(q) => ("matched", Some(q.clone())),
@@ -944,7 +972,7 @@ pub fn row_for(outcome: &Outcome, previous: Option<&CachedMatch>, now: i64) -> R
         qid,
         status: status.into(),
         matched_by,
-        source: previous.map_or("auto".into(), |p| p.source.clone()),
+        source: "auto".into(),
         json: outcome
             .metadata
             .as_ref()
@@ -957,15 +985,22 @@ pub fn row_for(outcome: &Outcome, previous: Option<&CachedMatch>, now: i64) -> R
     })
 }
 
-/// Stores an outcome. A known item that is gone (deleted from Wikidata, or no longer a game)
-/// keeps the user's choice as it was. Returns whether a row changed.
+/// Stores an automatic outcome. The user's choice is never replaced: only a refresh of the same
+/// item updates it (and it stays the user's). When the chosen item is gone (deleted from
+/// Wikidata, or no longer a game) the choice is kept as it was and only its time is updated, so
+/// it isn't fetched again at once. Returns whether the data changed.
 pub fn store(conn: &Connection, outcome: &Outcome, now: i64) -> Result<bool> {
     let previous = cached(conn, &outcome.game_id)?;
-    if outcome.matched_by == "known"
-        && outcome.decision == Decision::None
-        && previous.as_ref().is_some_and(|p| p.source == "user")
-    {
-        return Ok(false);
+    if let Some(p) = previous.as_ref().filter(|p| p.source == "user") {
+        let same =
+            matches!(&outcome.decision, Decision::Match(q) if p.qid.as_deref() == Some(q.as_str()));
+        if !same {
+            conn.execute(
+                "UPDATE wikimedia_match SET fetchedAt=?1 WHERE gameId=?2 AND source='user'",
+                params![now, outcome.game_id],
+            )?;
+            return Ok(false);
+        }
     }
     let row = row_for(outcome, previous.as_ref(), now)?;
     let changed = put(conn, &outcome.game_id, &row)?;
@@ -1080,17 +1115,20 @@ pub fn logo_urls(conn: &Connection, game_id: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Credits for the Commons images in `values` (each the value the page loads, possibly a
-/// cached copy of `sources[i]`).
-pub fn credits_for(conn: &Connection, pairs: &[(String, String)]) -> Vec<ImageCredit> {
-    pairs
+/// Credits for Commons images: `(Commons URL, value the page loads, slot)` with slot `"hero"`,
+/// `"logo"` or `"cover"`. Images without a valid credit record are left out.
+pub fn credits_for(
+    conn: &Connection,
+    items: &[(String, String, &'static str)],
+) -> Vec<ImageCredit> {
+    items
         .iter()
-        .filter_map(|(source, display)| {
+        .filter_map(|(source, display, kind)| {
             let image = image(conn, source)?;
             Some(ImageCredit {
                 display: display.clone(),
-                low_trust: false,
-                kind: "logo",
+                low_trust: *kind == "cover" && low_trust_cover(&image),
+                kind,
                 image,
             })
         })
@@ -1100,6 +1138,10 @@ pub fn credits_for(conn: &Connection, pairs: &[(String, String)]) -> Vec<ImageCr
 // ---------------------------------------------------------------------------
 // App state and operations
 
+/// After Wikimedia limits requests, nothing is asked for this long.
+const RATE_LIMIT_PAUSE: Duration = Duration::from_secs(10 * 60);
+const IMAGE_TIMEOUT: Duration = Duration::from_secs(45);
+
 /// Run-time state (in [`AppState`]).
 #[derive(Default)]
 pub struct WikimediaState {
@@ -1108,6 +1150,10 @@ pub struct WikimediaState {
     failed: StdMutex<HashMap<String, Instant>>,
     auto_running: AtomicBool,
     auto_again: AtomicBool,
+    /// Set when Wikimedia answered 429/503/maxlag beyond our patience.
+    limited_until: StdMutex<Option<Instant>>,
+    client: OnceLock<reqwest::Client>,
+    image_client: OnceLock<reqwest::Client>,
 }
 
 impl WikimediaState {
@@ -1144,10 +1190,51 @@ impl WikimediaState {
             map.remove(id);
         }
     }
+    /// Whether requests are paused after Wikimedia limited them.
+    pub fn rate_limited(&self) -> bool {
+        self.limited_until
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .is_some_and(|until| Instant::now() < until)
+    }
+    pub fn set_rate_limited(&self) {
+        *self.limited_until.lock().unwrap_or_else(|p| p.into_inner()) =
+            Some(Instant::now() + RATE_LIMIT_PAUSE);
+    }
+    /// Notes a rate limit in `result`, passing it on.
+    fn note<T>(&self, result: Result<T, WikiError>) -> Result<T, WikiError> {
+        if matches!(result, Err(WikiError::RateLimited)) {
+            self.set_rate_limited();
+        }
+        result
+    }
+    /// The API client (one HTTP client for the app, built once).
+    pub fn api(&self) -> Result<Api<'_>, WikiError> {
+        if self.rate_limited() {
+            return Err(WikiError::RateLimited);
+        }
+        let endpoints = Endpoints::production();
+        let client = match self.client.get() {
+            Some(c) => c.clone(),
+            None => {
+                let built = http::build_client(&endpoints)?;
+                self.client.get_or_init(|| built).clone()
+            }
+        };
+        Api::with_client(endpoints, &self.limiter, client)
+    }
+    fn image_client(&self) -> Option<reqwest::Client> {
+        if let Some(c) = self.image_client.get() {
+            return Some(c.clone());
+        }
+        let built =
+            crate::covercache::http_client(crate::covercache::is_allowed, IMAGE_TIMEOUT).ok()?;
+        Some(self.image_client.get_or_init(|| built).clone())
+    }
 }
 
 fn api(state: &AppState) -> Result<Api<'_>> {
-    Api::new(Endpoints::production(), &state.wikimedia.limiter).map_err(|e| anyhow!(e))
+    state.wikimedia.api().map_err(|e| anyhow!(e))
 }
 
 fn emit(app: &AppHandle, game_id: &str, changed: bool) {
@@ -1158,58 +1245,246 @@ fn emit(app: &AppHandle, game_id: &str, changed: bool) {
     }
 }
 
-/// Downloads the outcome's logos and covers into the cover cache, and sets a cover for a game
-/// that has none (only a trusted one). Returns whether the library changed.
-async fn cache_images(state: &AppState, outcome: &Outcome) -> bool {
-    let Some(m) = &outcome.metadata else {
-        return false;
+/// Downloads Commons images into the cover cache one at a time, spaced like API requests, and
+/// stops (pausing all Wikimedia requests) when upload.wikimedia.org answers 429. Already cached
+/// files need no request. Returns the cached file per URL.
+pub async fn download_images(state: &AppState, urls: &[String]) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    let covers_dir = state.covers_dir();
+    for url in urls {
+        if !licence::valid_image_url(url) {
+            continue;
+        }
+        if let Ok(Some(file)) = crate::covercache::existing_file(&state.db.lock(), &covers_dir, url)
+        {
+            out.insert(url.clone(), file);
+            continue;
+        }
+        if state.wikimedia.rate_limited() {
+            break;
+        }
+        let Some(client) = state.wikimedia.image_client() else {
+            break;
+        };
+        // One request at a time, shared with the API requests.
+        let _turn = state.wikimedia.limiter.turn().await;
+        state.wikimedia.limiter.wait(http::SPACING).await;
+        match crate::covercache::fetch_to_file(
+            &client,
+            &covers_dir,
+            url,
+            crate::covercache::is_allowed,
+        )
+        .await
+        {
+            Ok(file) => {
+                out.insert(url.clone(), file);
+            }
+            Err(crate::covercache::FetchError::Http(429 | 503)) => {
+                log::warn!("Wikimedia is limiting image downloads; pausing.");
+                state.wikimedia.set_rate_limited();
+                break;
+            }
+            Err(e) => log::warn!("Could not cache a Wikimedia image: {e}"),
+        }
+    }
+    out
+}
+
+/// Downloads the logo a game is likely to show: its first Commons logo, only when the game has
+/// no Steam logo to show first. Other logos and covers are loaded when they are shown or chosen.
+async fn cache_logo(state: &AppState, outcome: &Outcome) {
+    let Some(first) = outcome.metadata.as_ref().and_then(|m| m.logos.first()) else {
+        return;
     };
-    let mut library_changed = false;
-    for image in m.logos.iter().chain(&m.covers) {
-        let file = crate::covercache::download_now(state, &image.src).await;
+    let steam = db::get_game(&state.db.lock(), &outcome.game_id)
+        .ok()
+        .flatten()
+        .is_some_and(|g| crate::steamgriddb::steam_app_id(&g).is_some());
+    if steam {
+        return;
+    }
+    let files = download_images(state, std::slice::from_ref(&first.src)).await;
+    if let Some(file) = files.get(&first.src) {
         let conn = state.db.lock();
-        if let Err(e) =
-            crate::covercache::adopt(&conn, &state.covers_dir(), &image.src, file.as_deref())
+        if let Err(e) = crate::covercache::adopt(&conn, &state.covers_dir(), &first.src, Some(file))
         {
             log::warn!("Could not record a Wikimedia image: {e:#}");
         }
     }
-    if let Some(cover) = m.covers.iter().find(|c| !low_trust_cover(c)) {
-        let conn = state.db.lock();
-        let missing = db::get_game(&conn, &outcome.game_id)
-            .ok()
-            .flatten()
-            .is_some_and(|g| no_cover(&g));
-        if missing {
-            let value = crate::covercache::cached_value(&conn, &state.covers_dir(), &cover.src);
-            let saved = db::save_game(
-                &conn,
-                &GamePatch {
-                    cover: Some(value.clone()),
-                    default_cover: Some(value),
-                    ..GamePatch::new(outcome.game_id.clone())
-                },
-            );
-            match saved {
-                Ok(_) => library_changed = true,
-                Err(e) => log::warn!("Could not set a Wikimedia cover: {e:#}"),
+}
+
+/// The Commons file name of a display URL (`.../commons/a/ab/Name.png` or
+/// `.../commons/thumb/a/ab/Name.svg/500px-Name.svg.png`).
+pub fn file_of_url(url: &str) -> Option<String> {
+    if !licence::valid_image_url(url) {
+        return None;
+    }
+    let parsed = url::Url::parse(url).ok()?;
+    let parts: Vec<&str> = parsed.path_segments()?.collect();
+    // ["wikipedia", "commons", ...]
+    let rest = parts.get(2..)?;
+    let name = if rest.first() == Some(&"thumb") {
+        rest.get(3)?
+    } else {
+        rest.get(2)?
+    };
+    let decoded = percent_encoding::percent_decode_str(name)
+        .decode_utf8()
+        .ok()?
+        .to_string();
+    let key = licence::file_key(&decoded);
+    (!key.is_empty()).then_some(key)
+}
+
+/// Checks Commons images again by their file names: each URL whose file Commons still offers
+/// under a free licence gets a fresh credit record (`Some(true)`); one whose file is gone or no
+/// longer free gets `Some(false)` and its credit record is removed. Network errors decide
+/// nothing (`Err`).
+pub async fn recheck(
+    api: &Api<'_>,
+    db: &db::Db,
+    urls: &[String],
+) -> Result<HashMap<String, bool>, WikiError> {
+    let files: Vec<(String, String)> = urls
+        .iter()
+        .filter_map(|u| file_of_url(u).map(|f| (u.clone(), f)))
+        .collect();
+    if files.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let found = fetch_images(api, files.iter().map(|(_, f)| f.clone()).collect()).await?;
+    let conn = db.lock();
+    let mut out = HashMap::new();
+    for (url, file) in files {
+        match found.get(&file) {
+            Some(image) => {
+                // The credit is the file's; the chosen display URL stays as it was.
+                let image = CommonsImage {
+                    src: url.clone(),
+                    ..image.clone()
+                };
+                if let Err(e) = put_images(&conn, &[&image], now_ms()) {
+                    log::warn!("Could not store a Wikimedia credit: {e:#}");
+                }
+                out.insert(url, true);
+            }
+            None => {
+                let _ = conn.execute("DELETE FROM wikimedia_images WHERE url=?", [&url]);
+                out.insert(url, false);
             }
         }
     }
-    library_changed
+    Ok(out)
 }
 
-pub fn no_cover(game: &Game) -> bool {
-    let empty = |v: &Option<String>| v.as_deref().is_none_or(|s| s.trim().is_empty());
-    empty(&game.cover) && empty(&game.default_cover)
+/// Commons images the user chose for these games (hero, logo, cover).
+fn chosen_images(conn: &Connection, game_ids: &[String]) -> Vec<(String, &'static str, String)> {
+    let mut out = Vec::new();
+    for id in game_ids {
+        let custom = db::page_custom(conn, id).unwrap_or_default();
+        for (slot, value) in [("hero", custom.hero), ("logo", custom.logo)] {
+            if let Some(v) = value.filter(|v| licence::valid_image_url(v)) {
+                out.push((id.clone(), slot, v));
+            }
+        }
+        if let Some(cover) = db::get_game(conn, id)
+            .ok()
+            .flatten()
+            .and_then(|g| g.cover)
+            .and_then(|c| crate::covercache::source_of(conn, &c).ok())
+            .filter(|c| licence::valid_image_url(c))
+        {
+            out.push((id.clone(), "cover", cover));
+        }
+    }
+    out
+}
+
+/// Re-checks the Commons images chosen for these games; one Commons no longer offers as a free
+/// file is dropped: the hero/logo goes back to the automatic art, the cover to the game's default
+/// cover. Returns the games whose library entry changed.
+async fn recheck_chosen(state: &AppState, api: &Api<'_>, game_ids: &[String]) -> Vec<String> {
+    let chosen = chosen_images(&state.db.lock(), game_ids);
+    if chosen.is_empty() {
+        return Vec::new();
+    }
+    let urls: Vec<String> = chosen.iter().map(|(_, _, u)| u.clone()).collect();
+    let verdicts = match state.wikimedia.note(recheck(api, &state.db, &urls).await) {
+        Ok(v) => v,
+        Err(e) => {
+            log::warn!("Could not re-check chosen Wikimedia images: {e}");
+            return Vec::new();
+        }
+    };
+    let mut changed = Vec::new();
+    let conn = state.db.lock();
+    for (game_id, slot, url) in chosen {
+        if verdicts.get(&url) != Some(&false) {
+            continue;
+        }
+        log::info!("Wikimedia: a chosen {slot} is no longer a free Commons file; it was removed.");
+        let result = match slot {
+            "hero" | "logo" => {
+                let slot = if slot == "hero" {
+                    crate::art::Slot::Hero
+                } else {
+                    crate::art::Slot::Logo
+                };
+                crate::art::set_image(&conn, &state.covers_dir(), &game_id, slot, None).map(|_| ())
+            }
+            _ => db::get_game(&conn, &game_id).and_then(|g| {
+                let default = g.and_then(|g| g.default_cover).unwrap_or_default();
+                db::save_game(
+                    &conn,
+                    &GamePatch {
+                        cover: Some(default),
+                        ..GamePatch::new(game_id.clone())
+                    },
+                )
+                .map(|_| ())
+            }),
+        };
+        match result {
+            Ok(()) => changed.push(game_id),
+            Err(e) => log::warn!("Could not remove a Wikimedia image: {e:#}"),
+        }
+    }
+    changed
+}
+
+/// Restores missing credit records for Commons images about to be shown (a backup restored on
+/// another PC has the URLs but not their credits). Only with the provider on and not paused.
+pub async fn restore_credits(state: &AppState, urls: &[String]) {
+    let missing: Vec<String> = {
+        let conn = state.db.lock();
+        if !enabled(&conn) {
+            return;
+        }
+        urls.iter()
+            .filter(|u| licence::valid_image_url(u) && image(&conn, u).is_none())
+            .cloned()
+            .collect()
+    };
+    if missing.is_empty() {
+        return;
+    }
+    let Ok(api) = state.wikimedia.api() else {
+        return;
+    };
+    if let Err(e) = state
+        .wikimedia
+        .note(recheck(&api, &state.db, &missing).await)
+    {
+        log::warn!("Could not look up Wikimedia credits: {e}");
+    }
 }
 
 /// Resolves and stores a batch; emits per game. Errors fail the batch.
 async fn run_batch(app: &AppHandle, inputs: &[GameInput]) -> Result<(), WikiError> {
     let state = app.state::<AppState>();
-    let api = Api::new(Endpoints::production(), &state.wikimedia.limiter)?;
-    let outcomes = resolve_batch(&api, inputs).await?;
-    let mut library = false;
+    let api = state.wikimedia.api()?;
+    let outcomes = state.wikimedia.note(resolve_batch(&api, inputs).await)?;
     for outcome in &outcomes {
         let changed = match store(&state.db.lock(), outcome, now_ms()) {
             Ok(c) => c,
@@ -1219,11 +1494,16 @@ async fn run_batch(app: &AppHandle, inputs: &[GameInput]) -> Result<(), WikiErro
             }
         };
         if changed {
-            library |= cache_images(&state, outcome).await;
+            cache_logo(&state, outcome).await;
         }
         emit(app, &outcome.game_id, changed);
     }
-    if library {
+    let ids: Vec<String> = inputs.iter().map(|i| i.game_id.clone()).collect();
+    let removed = recheck_chosen(&state, &api, &ids).await;
+    for id in &removed {
+        emit(app, id, true);
+    }
+    if !removed.is_empty() {
         let _ = app.emit("library:changed", ());
     }
     Ok(())
@@ -1233,7 +1513,7 @@ async fn run_batch(app: &AppHandle, inputs: &[GameInput]) -> Result<(), WikiErro
 /// IGDB lookup of the same game first, so its IGDB id can be used for matching.
 fn spawn_refresh(app: &AppHandle, game: Game) -> bool {
     let state = app.state::<AppState>();
-    if !state.wikimedia.begin(&game.id) {
+    if state.wikimedia.rate_limited() || !state.wikimedia.begin(&game.id) {
         return false;
     }
     let app = app.clone();
@@ -1320,11 +1600,11 @@ pub async fn search(state: &AppState, game_id: &str, text: Option<&str>) -> Resu
         .into_iter()
         .map(|h| h.qid)
         .collect();
-    let mut entities = HashMap::new();
+    let mut entities = Entities::default();
     fetch_entities(&api, &mut entities, hits.clone()).await?;
     Ok(hits
         .iter()
-        .filter_map(|q| entities.get(q))
+        .filter_map(|q| entities.map.get(q))
         .filter(|e| matching::is_game(e))
         .filter_map(candidate)
         .collect())
@@ -1338,13 +1618,17 @@ pub async fn choose(app: &AppHandle, game_id: &str, qid: &str) -> Result<WikiVie
     let state = app.state::<AppState>();
     let game =
         db::get_game(&state.db.lock(), game_id)?.ok_or_else(|| anyhow!("Game not found."))?;
+    if !enabled(&state.db.lock()) {
+        bail!("Wikipedia and Wikidata are turned off in Settings.");
+    }
     let api = api(&state)?;
     let input = GameInput {
         known: Some(qid.to_string()),
         ..input_for(&state.db.lock(), &game)
     };
-    let outcome = resolve_batch(&api, &[input])
-        .await?
+    let outcome = state
+        .wikimedia
+        .note(resolve_batch(&api, &[input]).await)?
         .pop()
         .ok_or_else(|| anyhow!("Wikidata gave no answer."))?;
     if outcome.metadata.is_none() {
@@ -1363,9 +1647,7 @@ pub async fn choose(app: &AppHandle, game_id: &str, qid: &str) -> Result<WikiVie
         put_images(&conn, &all, now_ms())?;
     }
     state.wikimedia.set_failed(game_id, false);
-    if cache_images(&state, &outcome).await {
-        let _ = app.emit("library:changed", ());
-    }
+    cache_logo(&state, &outcome).await;
     emit(app, game_id, true);
     resolved_view(&state, &game, false)
 }
@@ -1411,7 +1693,9 @@ pub fn use_logo(
 /// Uses an offered Commons cover as the game's cover (the user's explicit choice).
 pub async fn use_cover(state: &AppState, game_id: &str, src: &str) -> Result<Vec<Game>> {
     let image = offered(&state.db.lock(), game_id, src, "cover")?;
-    let file = crate::covercache::download_now(state, &image.src).await;
+    let file = download_images(state, std::slice::from_ref(&image.src))
+        .await
+        .remove(&image.src);
     let conn = state.db.lock();
     if db::get_game(&conn, game_id)?.is_none() {
         bail!("Game not found.");
@@ -1441,6 +1725,9 @@ pub fn spawn_auto(app: &AppHandle, delay: Duration) {
             tokio::time::sleep(delay).await;
         }
         let state = app.state::<AppState>();
+        if state.wikimedia.rate_limited() {
+            return;
+        }
         state.wikimedia.auto_again.store(true, Ordering::SeqCst);
         if state.wikimedia.auto_running.swap(true, Ordering::SeqCst) {
             return;
@@ -1474,7 +1761,7 @@ async fn auto_pass(app: &AppHandle) {
     let mut failures = 0;
     let mut done = 0;
     for chunk in games.chunks(BATCH) {
-        if !enabled(&state.db.lock()) {
+        if !enabled(&state.db.lock()) || state.wikimedia.rate_limited() {
             break;
         }
         let todo: Vec<&Game> = chunk

@@ -75,15 +75,21 @@ precise ones win (so a stray year-only claim never beats a full date), then the 
 - 20 s timeout (10 s connect), 8 MB response cap (also after gzip decoding; `Accept-Encoding: gzip`
   decoded with `flate2`), content type `application/json` (SPARQL also
   `application/sparql-results+json`).
-- Serial requests at least 300 ms apart (one limiter for the app), `maxlag=5` on every Action API
-  call, `Retry-After` honoured on 429/503/maxlag up to 60 s and two retries (5 s, 20 s without a
-  header); longer waits end the request as rate limited.
+- Serial requests: one request at a time for the whole app (a lock is held for the request and
+  its retries), starts at least 300 ms apart, `maxlag=5` on every Action API call, `Retry-After` honoured on 429/503/maxlag up to 60 s and two retries (5 s, 20 s without a
+  header); longer waits end the request as rate limited, and a rate limit (also a 429 or 503 from
+  upload.wikimedia.org) pauses every Wikimedia request, background or on a game page, for 10
+  minutes.
+- One HTTP client for the API and one for images are built once and kept for the app's run.
 - User-Agent `GameLobby/<version> (https://github.com/m72b/GameLobby)`; no personal data.
 - Batched: entities 5 per call (claims can be large), labels 50, Commons titles 50, Wikipedia
   extracts 20.
-- Images never go through this client: they are downloaded by the cover cache, whose allow list
-  gained `upload.wikimedia.org` restricted to `/wikipedia/commons/` raster files (size cap, magic
-  bytes, downscaling, hashed file names as before).
+- Images never go through this client: they are downloaded by the cover cache's checks, whose
+  allow list gained `upload.wikimedia.org` restricted to `/wikipedia/commons/` raster files (size
+  cap, magic bytes, downscaling, hashed file names as before), with the same descriptive
+  User-Agent. Wikimedia image downloads share the API's turn and spacing and stop on 429/503.
+  Only the logo a game is likely to show is downloaded ahead (its first Commons logo, for games
+  without a Steam logo); other logos and cover candidates load when shown or chosen.
 
 ## Cache and precedence
 
@@ -92,15 +98,29 @@ precise ones win (so a stray year-only claim never beats a full date), then the 
   shape refetches. A `user` row is replaced only by another user choice, or refreshed by a fetch of
   the same item; a chosen item that disappears keeps the choice. Not in backups (like the IGDB
   cache `game_metadata`); left empty by the database repair's cache drop; deleted with the game;
-  automatic rows are dropped when games are linked or unlinked.
+  automatic rows are dropped when games are linked or unlinked. Linking keeps the kept game's
+  Wikidata choice; a choice made for an entry that is linked into another game is dropped (the
+  link review step does not offer it, unlike the IGDB match), and the kept game is matched again.
 - `wikimedia_images(url, json, fetchedAt)`: credits survive a reset match, so a chosen Commons logo
   always keeps its credit. A chosen Commons logo is stored like a SteamGridDB one (the URL, so it
   survives backups); `validation::page_art_value` accepts exactly Commons display URLs.
 - Precedence: IGDB and the user's values first; Wikidata only fills gaps (`src/shared/about.ts`).
-  The library's title, genre and cover are never changed by a lookup, except that a game with no
-  cover and no default cover gets a Commons cover automatically when one is trusted (original at
-  least 600 px tall). Smaller covers (both found in the sample, see below) are offered only, marked
-  "Low resolution". Logos are fallbacks behind Steam's and SteamGridDB's; a chosen logo stays first.
+  The library's title, genre and cover are never changed by a lookup. Commons covers are never set
+  automatically (so SteamGridDB's "fetch missing covers" still fills games without a cover); they
+  are offered in **Customize → Cover**, small ones (under 600 px tall) marked "Low resolution".
+  Logos are fallbacks behind Steam's and SteamGridDB's; a chosen logo stays first.
+- Automatic results are always stored as `auto`. A stored user choice is replaced only by another
+  user choice; an automatic result for a different item (for example one that raced the user's
+  choice) is not stored, and a refresh of the chosen item updates it and keeps it the user's.
+- Credits: a Commons image is shown only with a valid credit record. Commons URLs restored from a
+  backup (which has no credit records) are looked up again by their file name on Commons before
+  the page shows them, and stay hidden unless the file passes the licence filter again. Choosing a
+  Commons hero or logo needs its credit record (`wikimedia_use_logo` writes it; `art_set_logo`
+  refuses a Commons URL without one); backups keep the URL syntax check only, and credits are not
+  added to backups (they are public facts, refetched by file name, and keeping backups free of
+  scraped data avoids a format change). With every refresh, the Commons images the user chose
+  (hero, logo, cover) are checked again; one that Commons no longer offers as a free file is
+  removed (hero/logo back to automatic art, cover back to the default cover) with its credit.
 - Lookups: when a game page opens (after a running IGDB lookup for that game, so its IGDB id can
   help), and in the background 20 s after start-up and after scans, in batches of 10, stopping when
   the setting is turned off, when Wikimedia rate-limits, or after three failed batches in a row.
@@ -115,8 +135,8 @@ precise ones win (so a stray year-only claim never beats a full date), then the 
 - Facts complete: 28/33.
 - Free logos: about 17/33.
 - Free vertical covers: 2/33 (Doom box art 271x410, Fallout 3 cropped cover 270x365; low-res Game
-  Pass captures with weak provenance), both offered as low-trust candidates and never set
-  automatically.
+  Pass captures with weak provenance), both offered in Customize marked "Low resolution". No cover
+  is ever set automatically.
 - English Wikipedia lead images: 26/33, all non-free; excluded by design.
 
 ## Not done / recommendations
