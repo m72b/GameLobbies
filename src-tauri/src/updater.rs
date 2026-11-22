@@ -1047,7 +1047,7 @@ mod tests {
             ]
         );
         // The release workflow publishes to the repository it runs in, the one the app reads
-        // from, and writes installer URLs under the old name for installed 0.4.0–0.9.0 copies.
+        // from, and writes installer URLs under the old name for installed 0.5.0–0.9.0 copies.
         let workflow = std::fs::read_to_string(
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../.github/workflows/release.yml"),
         )
@@ -1172,7 +1172,7 @@ mod tests {
     }
 
     /// The installer URL the release workflow writes (updater-manifest.mjs with DOWNLOAD_REPO)
-    /// must pass both the check of installed 0.4.0–0.9.0 copies, whose only prefix comes from
+    /// must pass both the check of installed 0.5.0–0.9.0 copies, whose only prefix comes from
     /// their single endpoint under the old name, and this build's.
     #[test]
     fn manifest_urls_under_the_old_name_pass_old_and_new_clients() {
@@ -1203,6 +1203,10 @@ mod tests {
         );
         assert!(!download_url_allowed(renamed, &old_prefix));
         assert!(prefixes.iter().any(|p| download_url_allowed(renamed, p)));
+        // The old name is not a prefix of other repository names.
+        let lookalike = "https://github.com/m72b/GameLobbyEvil/releases/download/v1/a.exe";
+        assert!(!download_url_allowed(lookalike, &old_prefix));
+        assert!(!prefixes.iter().any(|p| download_url_allowed(lookalike, p)));
         // Duplicates and endpoints that are not GitHub release paths add nothing.
         assert_eq!(
             download_prefixes([

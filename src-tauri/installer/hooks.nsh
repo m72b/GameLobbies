@@ -58,6 +58,16 @@ Var GlOldDesktop
       StrCpy $GlOldBinary "game-lobby.exe"
     ${EndIf}
 
+    ; The values come from the registry and end up in a quoted command line, so a quote or a
+    ; "\..\" in them could make ExecWait start something else. Skip the migration then.
+    ${StrLoc} $R5 "$GlOldDir$GlOldBinary" '"' ">"
+    ${StrLoc} $R6 "$GlOldDir\$GlOldBinary\" "\..\" ">"
+    ${If} $R5 != ""
+    ${OrIf} $R6 != ""
+      DetailPrint "Not moving ${GL_OLD_PRODUCTNAME}: its recorded folder looks wrong. It is left installed."
+      StrCpy $GlOldDir ""
+    ${EndIf}
+
     ${If} $GlOldDir != ""
       DetailPrint "Moving ${GL_OLD_PRODUCTNAME} from $GlOldDir to ${PRODUCTNAME}. Your library and settings are kept."
       ; Close the old app if it runs (asks first unless silent or passive), like the template
@@ -75,7 +85,9 @@ Var GlOldDesktop
         StrCpy $R3 0
       ${EndIf}
 
+      ; Like the template's own check: the uninstall failed if the old exe is still there.
       ${If} $R3 = 0
+      ${AndIfNot} ${FileExists} "$GlOldDir\$GlOldBinary"
         StrCpy $GlMigrated 1
         ; The uninstaller ran in place, so it could not remove itself or its folder. RMDir
         ; without /r removes the folder only if it is empty now.
@@ -104,7 +116,7 @@ Var GlOldDesktop
         ${EndIf}
       ${Else}
         ; Leave the old install as it is; this one is installed next to it.
-        DetailPrint "Could not remove ${GL_OLD_PRODUCTNAME} (exit code $R3). It is left installed; uninstall it from Windows Settings."
+        DetailPrint "Could not remove ${GL_OLD_PRODUCTNAME} (exit code $R3). It is left installed; uninstall it from Windows Settings and leave 'Delete app data' unticked to keep your library."
       ${EndIf}
     ${EndIf}
   ${EndIf}

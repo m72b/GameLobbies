@@ -38,9 +38,11 @@ Set up the `release` environment once, in **Settings → Environments**:
 
 The app was called Game Lobby and its repository `m72b/GameLobby` up to 0.9.0. The repository is now `m72b/GameLobbies`. GitHub redirects the old name (web pages, git, the API and release downloads) to the new one, as long as no repository named `GameLobby` exists on this account again.
 
-**Never create a repository named `GameLobby` on this account** (not even by renaming another one to it). It would end the redirect, and every installed copy of 0.4.0 to 0.9.0 would stop finding updates, with no way to reach them.
+**Never create a repository named `GameLobby` on this account** (not even by renaming another one to it). It would end the redirect, and every installed copy of 0.5.0 to 0.9.0 would stop finding updates, with no way to reach them.
 
-What installed copies of 0.4.0 to 0.9.0 do, and why releases stay readable for them:
+Installed 0.4.0 copies read `m72b/GameLobby-releases`, which no longer exists, so they get no updates; they move to GameLobbies only through a manual install (the installer hook below replaces them like any other old install).
+
+What installed copies of 0.5.0 to 0.9.0 do, and why releases stay readable for them:
 
 - They read `https://github.com/m72b/GameLobby/releases/latest/download/latest.json`. GitHub redirects it to the new repository, and the updater follows redirects (it already follows the one from `releases/latest/download` to GitHub's file storage).
 - They accept the installer only when the URL **written in `latest.json`** is `https://github.com/` followed by exactly `/m72b/GameLobby/releases/download/` (case-sensitive). That check runs on the URL in the manifest, not on where a redirect leads. So `latest.json` keeps writing installer URLs under the old name: `DOWNLOAD_REPO: m72b/GameLobby` in `release.yml`, used by `.github/scripts/updater-manifest.mjs`. A URL under `m72b/GameLobbies` would be refused by those copies.

@@ -10,6 +10,9 @@ Releases start at 0.9.0 on the [releases page](https://github.com/m72b/GameLobbi
 - The app is now called **GameLobbies**: window title, tray, setup, settings, About, Windows dialogs, the installer and uninstaller, shortcuts and Apps & features. The logo, colours and look are unchanged.
 - Your library, settings, covers, screenshots, signed-in accounts and keys stay where they are (`%APPDATA%\app.gamelobby.desktop`); nothing has to be set up again.
 - Updating from Game Lobby 0.9.0 or older, in the app or with the installer, replaces the old install: GameLobbies is installed to `%LOCALAPPDATA%\GameLobbies`, the old Game Lobby program, its uninstall entry and the Start menu and desktop shortcuts that started it are removed, and those shortcuts are created again under the new name. **Launch on boot** carries over (the Windows startup entry is now named GameLobbies).
+- The in-app update works from 0.5.0 and newer. Game Lobby 0.4.0 can't find updates (its update address no longer exists); install GameLobbies with the installer, and it replaces 0.4.0 the same way.
+- An old install in a folder you chose moves to `%LOCALAPPDATA%\GameLobbies` when it is updated in the app; your data is not affected.
+- Windows removes a taskbar pin of the old shortcut; pin GameLobbies again.
 - The program file is now `GameLobbies.exe` and the installer `GameLobbies_<version>_x64-setup.exe`.
 - The repository moves to [m72b/GameLobbies](https://github.com/m72b/GameLobbies); links and the update check use the new name, and the old one keeps working.
 

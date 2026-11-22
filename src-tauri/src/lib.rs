@@ -10,7 +10,7 @@ macro_rules! github_repo {
     };
 }
 
-/// The repository's name up to 0.9.0. Installed copies of 0.4.0–0.9.0 read their updates from it
+/// The repository's name up to 0.9.0. Installed copies of 0.5.0–0.9.0 read their updates from it
 /// and accept installers only under its `/releases/download/` path; GitHub redirects it to
 /// [`github_repo`] after the rename, so update manifests keep using it (docs/RELEASING.md).
 macro_rules! legacy_github_repo {

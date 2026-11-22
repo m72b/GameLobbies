@@ -6,7 +6,7 @@
 //     rewrites spaces in asset names, which would break the manifest URL), and
 //   - writes <outDir>/latest.json in Tauri's static updater format. Its installer URL uses the
 //     repository path in DOWNLOAD_REPO (default m72b/GameLobby, the name before the rename, which
-//     GitHub redirects to RELEASE_REPO): installed 0.4.0-0.9.0 copies accept installers only
+//     GitHub redirects to RELEASE_REPO): installed 0.5.0-0.9.0 copies accept installers only
 //     under /m72b/GameLobby/releases/download/ (see docs/RELEASING.md).
 //
 // Usage: node .github/scripts/updater-manifest.mjs <version> <outDir> [notesFile]

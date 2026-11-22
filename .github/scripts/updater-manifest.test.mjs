@@ -27,7 +27,7 @@ const allowed = (url, prefix) => {
     u.pathname.length > prefix.length && u.pathname.startsWith(prefix) &&
     !u.pathname.toLowerCase().includes('%2e') && !u.pathname.includes('/../')
 }
-// Installed 0.4.0-0.9.0 copies have exactly this one endpoint.
+// Installed 0.5.0-0.9.0 copies have exactly this one endpoint.
 const OLD_ENDPOINT = 'https://github.com/m72b/GameLobby/releases/latest/download/latest.json'
 
 function run(version, env = {}) {
@@ -57,7 +57,7 @@ test('the installer URL uses the old repository path, accepted by old and new co
   assert.equal(asset, 'GameLobbies_1.2.3_x64-setup.exe')
   const url = manifest.platforms['windows-x86_64'].url
   assert.equal(url, 'https://github.com/m72b/GameLobby/releases/download/v1.2.3/GameLobbies_1.2.3_x64-setup.exe')
-  assert.ok(allowed(url, prefixOf(OLD_ENDPOINT)), 'refused by installed 0.4.0-0.9.0 copies')
+  assert.ok(allowed(url, prefixOf(OLD_ENDPOINT)), 'refused by installed 0.5.0-0.9.0 copies')
   assert.ok(appConfig.plugins.updater.endpoints.some(e => allowed(url, prefixOf(e))), 'refused by this build')
   assert.equal(manifest.version, '1.2.3')
   assert.equal(manifest.notes, 'GameLobbies 1.2.3')
