@@ -1,11 +1,11 @@
-# Contributing to Game Lobby
+# Contributing to GameLobbies
 
-Thanks for helping. Game Lobby is a free, open-source (GPL-3.0-only) Windows game library and launcher. Bug reports, fixes, new store importers, emulator profiles and documentation improvements are all welcome.
+Thanks for helping. GameLobbies is a free, open-source (GPL-3.0-only) Windows game library and launcher. Bug reports, fixes, new store importers, emulator profiles and documentation improvements are all welcome.
 
 ## Ground rules
 
 - **No copyrighted game content.** Never add games, ROMs, BIOS or firmware files, disc images, proprietary emulator files, or game artwork to the repository, test fixtures, issues or pull requests. Tests create empty placeholder files instead.
-- **No secrets.** Never commit API keys, tokens, signing keys or personal data. Game Lobby users supply their own credentials at runtime (see the README); the app must never embed shared secrets.
+- **No secrets.** Never commit API keys, tokens, signing keys or personal data. GameLobbies users supply their own credentials at runtime (see the README); the app must never embed shared secrets.
 - **Report security problems privately.** See [SECURITY.md](SECURITY.md); don't open a public issue for them.
 - Contributions are accepted under the project's license, GPL-3.0-only.
 
@@ -18,7 +18,7 @@ npm install
 npm run dev      # app with hot reload
 ```
 
-`npm run dev` uses your real Game Lobby data folder. To develop against a throwaway library, set `GAME_LOBBY_DATA_DIR` to an absolute folder first (debug builds only). Close an installed copy of Game Lobby before running a dev build: both share the WebView2 profile.
+`npm run dev` uses your real GameLobbies data folder. To develop against a throwaway library, set `GAME_LOBBY_DATA_DIR` to an absolute folder first (debug builds only). Close an installed copy of GameLobbies before running a dev build: both share the WebView2 profile.
 
 ## Before you open a pull request
 
@@ -46,6 +46,6 @@ These areas protect users' files and machines. Changes to them get a closer revi
 
 ## Reporting bugs and requesting features
 
-Use the issue templates. For bugs, include your Windows version, the Game Lobby version (Settings → About and Updates), the steps to reproduce, and what you expected. Remove personal paths, account names and API keys from logs and screenshots.
+Use the issue templates. For bugs, include your Windows version, the GameLobbies version (Settings → About and Updates), the steps to reproduce, and what you expected. Remove personal paths, account names and API keys from logs and screenshots.
 
 Please don't ask for help finding or downloading games, ROMs or BIOS files; such issues will be closed.

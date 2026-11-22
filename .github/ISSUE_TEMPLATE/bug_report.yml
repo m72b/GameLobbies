@@ -1,5 +1,5 @@
 name: Bug report
-description: Something in Game Lobby doesn't work as expected.
+description: Something in GameLobbies doesn't work as expected.
 labels: [bug]
 body:
   - type: markdown
@@ -10,7 +10,7 @@ body:
   - type: input
     id: version
     attributes:
-      label: Game Lobby version
+      label: GameLobbies version
       description: Settings → About and Updates
       placeholder: "0.3.0"
     validations:

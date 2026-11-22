@@ -80,7 +80,7 @@ pub trait StoreApi { const API_HOSTS: &'static [&'static str];
 - Flow: login page → code → `oauth/token` (`grant_type=authorization_code`, `token_type=eg1`) → refresh; library `library/api/public/items` (cursor pages), playtime `library/api/public/playtime/account/{id}/all`, titles from catalog `bulk/items`.
 - Kill switch `accounts.unofficial = { enabled: false, stores: { epic: false } }`; when off, Rust refuses sign-in and sync and setup doesn't offer it.
 - Auto-disable after 3 consecutive bad/rejected responses: "Epic sign-in stopped working with this version. Your installed Epic games still work." No retry until a new version or a manual re-sign-in.
-- Warning: "Unofficial sign-in. Game Lobby signs in to Epic as if it were the Epic Games Launcher. Epic does not allow this. Epic may block it or act on your account. It can stop working at any time. Installed Epic games work without it. Continue?"
+- Warning: "Unofficial sign-in. GameLobbies signs in to Epic as if it were the Epic Games Launcher. Epic does not allow this. Epic may block it or act on your account. It can stop working at any time. Installed Epic games work without it. Continue?"
 
 ## 6. Xbox
 
@@ -112,7 +112,7 @@ The id is public: constant `XBOX_CLIENT_ID` in `accounts/xbox.rs`, overridable a
 | Mass deletion from a bad response | mass-removal guard, `complete` flag, undo |
 | Account lock from impersonation (Epic) | opt-in, native warning, kill switch, auto-disable |
 
-Embedded login pages go against RFC 8252's system-browser advice (users type passwords into Game Lobby's window); accepted by the owner, mitigated above, and stated in the user guide.
+Embedded login pages go against RFC 8252's system-browser advice (users type passwords into GameLobbies's window); accepted by the owner, mitigated above, and stated in the user guide.
 
 ## 8. Phases
 

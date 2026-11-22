@@ -8,13 +8,13 @@ Use GitHub's private vulnerability reporting: open the repository's **Security**
 
 - what the problem is and what an attacker could do with it;
 - the steps or a proof of concept to reproduce it;
-- the Game Lobby version and Windows version you tested on.
+- the GameLobbies version and Windows version you tested on.
 
 Please don't include real API keys, tokens or personal data in a report. You'll get an acknowledgement as soon as the maintainer can, and credit in the release notes if you'd like it. Please give the maintainer a reasonable amount of time to release a fix before disclosing the issue publicly.
 
 ## Supported versions
 
-Only the latest release receives security fixes. Game Lobby can update itself from **Settings → About and Updates**.
+Only the latest release receives security fixes. GameLobbies can update itself from **Settings → About and Updates**.
 
 ## What's in scope
 

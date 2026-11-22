@@ -81,7 +81,7 @@ precise ones win (so a stray year-only claim never beats a full date), then the 
   upload.wikimedia.org) pauses every Wikimedia request, background or on a game page, for 10
   minutes.
 - One HTTP client for the API and one for images are built once and kept for the app's run.
-- User-Agent `GameLobby/<version> (https://github.com/m72b/GameLobby)`; no personal data.
+- User-Agent `GameLobbies/<version> (https://github.com/m72b/GameLobbies)`; no personal data.
 - Batched: entities 5 per call (claims can be large), labels 50, Commons titles 50, Wikipedia
   extracts 20.
 - Images never go through this client: they are downloaded by the cover cache's checks, whose

@@ -10,13 +10,13 @@ while testing a debug build).
 1. Start a release build (`npm run build` output, or `cargo tauri build` and run the unpacked
    exe). The main window opens.
 2. Minimize the window, then start the same exe again.
-   - The second process exits within a moment (Task Manager shows one `game-lobby.exe`).
+   - The second process exits within a moment (Task Manager shows one `GameLobbies.exe`).
    - The first window is restored, shown and focused.
 3. Close the main window if the app keeps running in the background, start the exe again: a
    main window must open.
 4. Open `<data folder>\logs\game-lobby.log`: the second start leaves one line, "A second copy
-   of Game Lobby was started; showing the running one.", and no second "starting" block.
-5. Start two copies at the same moment (for example `start game-lobby.exe` twice in one
+   of GameLobbies was started; showing the running one.", and no second "starting" block.
+5. Start two copies at the same moment (for example `start GameLobbies.exe` twice in one
    command): exactly one stays running.
 
 Behaviour to know:

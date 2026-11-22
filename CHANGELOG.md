@@ -1,7 +1,15 @@
 # Changelog
 
-All notable changes to Game Lobby are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
+All notable changes to GameLobbies (called Game Lobby up to 0.9.0) are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Renamed to GameLobbies
+- The app is now called **GameLobbies**: window title, tray, setup, settings, About, Windows dialogs, the installer and uninstaller, shortcuts and Apps & features. The logo, colours and look are unchanged.
+- Your library, settings, covers, screenshots, signed-in accounts and keys stay where they are (`%APPDATA%\app.gamelobby.desktop`); nothing has to be set up again.
+- Updating from Game Lobby 0.9.0 or older, in the app or with the installer, replaces the old install: GameLobbies is installed to `%LOCALAPPDATA%\GameLobbies`, the old Game Lobby program, its uninstall entry and the Start menu and desktop shortcuts that started it are removed, and those shortcuts are created again under the new name. **Launch on boot** carries over (the Windows startup entry is now named GameLobbies).
+- The program file is now `GameLobbies.exe` and the installer `GameLobbies_<version>_x64-setup.exe`.
+- The repository moves to [m72b/GameLobbies](https://github.com/m72b/GameLobbies); links and the update check use the new name, and the old one keeps working.
 ## [0.9.0] — 2026-11-22
 
 ### Game details without a key: Wikidata, Wikipedia and Wikimedia Commons
