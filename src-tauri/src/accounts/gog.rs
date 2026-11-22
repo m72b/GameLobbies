@@ -2,7 +2,7 @@
 //!
 //! Sign-in happens in the user's own browser on `auth.gog.com` (any method GOG offers: e-mail,
 //! Google, Discord, ...). GOG then shows `https://embed.gog.com/on_login_success?origin=client&code=…`;
-//! the user pastes that address (or the code) into Game Lobby, which checks it strictly
+//! the user pastes that address (or the code) into GameLobbies, which checks it strictly
 //! ([`parse_pasted`]) and exchanges it once at `auth.gog.com/token` for an access and a refresh
 //! token (sealed with DPAPI). The renderer never sees a token; the code is never logged.
 //!
@@ -93,7 +93,7 @@ pub fn auth_url() -> Url {
     url
 }
 
-/// Whether `url` is exactly [`auth_url`] (the only GOG page Game Lobby opens in the browser).
+/// Whether `url` is exactly [`auth_url`] (the only GOG page GameLobbies opens in the browser).
 pub fn is_auth_url(url: &Url) -> bool {
     *url == auth_url()
 }

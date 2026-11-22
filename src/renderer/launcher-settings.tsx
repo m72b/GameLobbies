@@ -25,7 +25,7 @@ interface Draft extends LauncherInput {
 const blankDraft = (): Draft => ({ name: '', iconKind: 'builtin', iconValue: 'gamepad-2', color: LAUNCHER_SWATCHES[0], argsTemplate: TARGET_PLACEHOLDER, targetKinds: ['file'], workingDir: 'executable', noProgram: false, startMode: 'openFirst', executablePath: '', workingDirPath: '' })
 const draftOf = (launcher: CustomLauncher): Draft => ({ id: launcher.id, name: launcher.name, iconKind: launcher.iconKind, iconValue: launcher.iconValue, color: launcher.color, argsTemplate: launcher.argsTemplate, targetKinds: launcherKinds(launcher), workingDir: launcher.workingDir ? 'folder' : 'executable', noProgram: isLabelOnly(launcher), startMode: isLabelOnly(launcher) ? undefined : startModeOf(launcher), executablePath: launcher.executable, workingDirPath: launcher.workingDir ?? '' })
 const startModes: Array<{ mode: LauncherStartMode; label: string; hint: string }> = [
-  { mode: 'openFirst', label: 'Open it first, then start games directly (for launchers you sign in to)', hint: 'Play opens the launcher on its own, with no arguments, if it isn’t running, and waits until you continue (once it’s open and you’re signed in). Then Game Lobby starts the game from its own file: its .exe or shortcut, or a ROM with its emulator.' },
+  { mode: 'openFirst', label: 'Open it first, then start games directly (for launchers you sign in to)', hint: 'Play opens the launcher on its own, with no arguments, if it isn’t running, and waits until you continue (once it’s open and you’re signed in). Then GameLobbies starts the game from its own file: its .exe or shortcut, or a ROM with its emulator.' },
   { mode: 'through', label: 'Start games through it (it takes the game as an argument)', hint: 'Play runs the launcher once, with the arguments below. Use this only if the launcher’s own documentation says it can start a game from its command line.' }
 ]
 
@@ -77,7 +77,7 @@ function LauncherEditor({ initial, gameCount, onSaved, onCancel }: { initial: Dr
         <button type="button" className="secondary-button" onClick={() => void chooseIcon()}><ImagePlus size={14} /> Use an image…</button>
         {draft.iconKind === 'image' && <span className="launcher-icon-current"><LauncherIcon launcher={{ ...draft, name: draft.name }} size={22} /> Your image</span>}
       </span>
-      <small className="chip-hint">PNG, JPEG, WebP or GIF up to 5 MB. It is copied into Game Lobby’s data folder.</small>
+      <small className="chip-hint">PNG, JPEG, WebP or GIF up to 5 MB. It is copied into GameLobbies’s data folder.</small>
     </div>
 
     <div className="field-label">Colour
@@ -168,7 +168,7 @@ function GamesFolders({ launcher, roots, scan, onRoots, onError }: { launcher: C
   }
   if (!canScanFolders(launcher)) return <small className="chip-hint">Games folders need a launcher whose games use files or folders, or one without a program.</small>
   return <div className="launcher-folders">
-    <div className="card-heading"><div><b>Games folders</b><small className="chip-hint">Game Lobby looks through each folder and its subfolders for PC games (one folder per game, or shortcuts), emulators and ROMs, and adds them {isLabelOnly(launcher) ? 'to run directly, labelled “' + launcher.name + '”' : opensFirst(launcher) ? 'to start directly once ' + launcher.name + ' is open' : 'to run through ' + launcher.name}. Nothing found is run while scanning. Games already in your library get another route instead of a copy.</small></div>
+    <div className="card-heading"><div><b>Games folders</b><small className="chip-hint">GameLobbies looks through each folder and its subfolders for PC games (one folder per game, or shortcuts), emulators and ROMs, and adds them {isLabelOnly(launcher) ? 'to run directly, labelled “' + launcher.name + '”' : opensFirst(launcher) ? 'to start directly once ' + launcher.name + ' is open' : 'to run through ' + launcher.name}. Nothing found is run while scanning. Games already in your library get another route instead of a copy.</small></div>
       <button type="button" className="secondary-button" disabled={scanning} onClick={() => void add()}><FolderPlus size={14} /> Add folder…</button></div>
     {folders.length === 0 && <div className="empty-inline">No games folders yet.</div>}
     {folders.map(root => {

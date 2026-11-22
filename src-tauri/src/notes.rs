@@ -648,7 +648,7 @@ async fn fetch_steam(app_id: &str) -> Result<Option<&'static str>> {
         .connect_timeout(Duration::from_secs(10))
         .redirect(reqwest::redirect::Policy::none())
         .https_only(true)
-        .user_agent(concat!("GameLobby/", env!("CARGO_PKG_VERSION")))
+        .user_agent(concat!("GameLobbies/", env!("CARGO_PKG_VERSION")))
         .build()
         .map_err(|e| anyhow!("Could not start the Steam client: {}", e.without_url()))?;
     let mut response = client

@@ -2,7 +2,7 @@
 //! decides whether a session works, and syncing (on scans, on "Sync now", after sign-in).
 //!
 //! GOG signs in in the browser and uses OAuth tokens (GOG Galaxy's public client, see
-//! [`super::gog`]); Battle.net signs in in Game Lobby's window and uses the store's cookies.
+//! [`super::gog`]); Battle.net signs in in GameLobbies's window and uses the store's cookies.
 //! A sync loads the sealed session (refreshing GOG's token when it is about to expire), fetches
 //! with [`StoreHttp`] (host allowlist, redirect policy, caps, pacing), applies the result
 //! ([`super::apply::apply_account`]) and seals the session again (cookies or tokens may have

@@ -85,7 +85,7 @@ impl Session {
     }
 
     /// The jar (filtered again to the store's domains) and the user agent (a token session has
-    /// an empty jar and Game Lobby's own user agent).
+    /// an empty jar and GameLobbies's own user agent).
     pub fn jar(&self, allowed: &'static [&'static str]) -> (CookieJar, String) {
         match self {
             Self::Cookies {
@@ -108,7 +108,7 @@ impl Session {
     }
 }
 
-/// Printable ASCII, at most [`MAX_USER_AGENT`] characters; otherwise Game Lobby's own.
+/// Printable ASCII, at most [`MAX_USER_AGENT`] characters; otherwise GameLobbies's own.
 pub fn clean_user_agent(raw: &str) -> String {
     let ok = !raw.trim().is_empty()
         && raw.len() <= MAX_USER_AGENT
@@ -116,7 +116,7 @@ pub fn clean_user_agent(raw: &str) -> String {
     if ok {
         raw.trim().to_string()
     } else {
-        concat!("GameLobby/", env!("CARGO_PKG_VERSION")).to_string()
+        concat!("GameLobbies/", env!("CARGO_PKG_VERSION")).to_string()
     }
 }
 
@@ -243,7 +243,7 @@ mod tests {
             "Mozilla/5.0 (Windows NT 10.0)"
         );
         for bad in ["", "x\ny", &"a".repeat(600), "naïve"] {
-            assert!(clean_user_agent(bad).starts_with("GameLobby/"), "{bad:?}");
+            assert!(clean_user_agent(bad).starts_with("GameLobbies/"), "{bad:?}");
         }
     }
 }

@@ -1,11 +1,11 @@
 //! A diagnostic for the store sign-in window: console errors (uncaught script errors show up
-//! there too), failed or refused requests and HTTP errors are written to Game Lobby's log, so a
+//! there too), failed or refused requests and HTTP errors are written to GameLobbies's log, so a
 //! sign-in page that doesn't work (Battle.net's form didn't render in the owner's test) shows
 //! why. The events come from the WebView2 DevTools protocol: `Log.entryAdded`,
 //! `Network.responseReceived` and `Network.loadingFailed`. The pages themselves are logged by
 //! the navigation guard.
 //!
-//! Form data never reaches Game Lobby: `Network.requestWillBeSent` (the only network event that
+//! Form data never reaches GameLobbies: `Network.requestWillBeSent` (the only network event that
 //! carries a request, with its `postData`, which holds what the user typed, passwords included)
 //! is not subscribed, and `Network.enable` is called with `maxPostDataSize: 0` and no buffers,
 //! so request and response bodies are not kept either. `responseReceived` carries the response

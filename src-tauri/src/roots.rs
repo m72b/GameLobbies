@@ -15,7 +15,7 @@
 //!
 //! Protected folders ([`RootGuard`]):
 //! - refused when equal to, inside or containing the root: the Windows folder, Roaming
-//!   AppData (`%APPDATA%`) and Game Lobby's own data folder;
+//!   AppData (`%APPDATA%`) and GameLobbies's own data folder;
 //! - refused when equal to or containing the root (folders inside them are fine): Program
 //!   Files (both), ProgramData, the user profile, Public, and Local AppData
 //!   (`%LOCALAPPDATA%`, where per-user installs such as `Programs\...` live);
@@ -652,7 +652,7 @@ mod tests {
         // Games roots aren't affected by the emulator-only rule.
         assert!(prepare("games", &inside.to_string_lossy(), &g).is_ok());
         // The real environment lists Temp: the test folder itself is refused for emulators.
-        let real = RootGuard::from_environment(Path::new(r"C:\NoSuchGameLobbyData"));
+        let real = RootGuard::from_environment(Path::new(r"C:\NoSuchGameLobbiesData"));
         assert!(prepare("emulators", &fine.to_string_lossy(), &real).is_err());
     }
 
@@ -676,7 +676,7 @@ mod tests {
         }
         assert!(prepare_launcher_folder(&fine.to_string_lossy(), &g).is_ok());
         // The real environment lists Temp: the test folder itself is refused.
-        let real = RootGuard::from_environment(Path::new(r"C:\NoSuchGameLobbyData"));
+        let real = RootGuard::from_environment(Path::new(r"C:\NoSuchGameLobbiesData"));
         assert!(prepare_launcher_folder(&fine.to_string_lossy(), &real).is_err());
     }
 

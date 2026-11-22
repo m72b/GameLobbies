@@ -294,7 +294,7 @@ pub fn check_template(template: &str, executable: &str) -> Result<()> {
     )
 }
 
-/// [`check_template`]'s rules for any program Game Lobby starts with an argument template
+/// [`check_template`]'s rules for any program GameLobbies starts with an argument template
 /// (emulators, custom launchers): `placeholders` are the template's own placeholders (a piece
 /// starting with one is about the launched file; one glued to an option is refused), `noun`
 /// names the program in messages and `example` is a path inside its folder.
@@ -362,7 +362,7 @@ fn check_template_piece(
     // `/x{romdir}`, `@{rom}`) hands the game file to that option, or makes the emulator read
     // it as a list of more arguments.
     //
-    // Residual risk, by design: the placeholders always name the game file, and Game Lobby
+    // Residual risk, by design: the placeholders always name the game file, and GameLobbies
     // can't know what each emulator does with each option. A template that passes the game
     // file to an option that loads code (`-L {rom}` as separate arguments, or a code-loading
     // `--key={rom}`) would run that file as code. Such templates must be written by hand in
@@ -509,7 +509,7 @@ pub enum LocalLaunch {
 
 /// Checks a custom launcher route's target right before launching (and when one is added by
 /// hand): a `.lnk` or `.url` file is passed to the launcher, which may well open it, so it must
-/// be one Game Lobby would start itself. That is a plain `.exe` shortcut without arguments, a
+/// be one GameLobbies would start itself. That is a plain `.exe` shortcut without arguments, a
 /// `.url` with a valid store link, or a `.lnk` whose target and arguments are exactly what the
 /// user confirmed. Anything else (arguments nobody confirmed, a shortcut changed since, scripts,
 /// documents) is refused. Other targets pass (the launcher's own kind checks apply). Reads
@@ -621,7 +621,7 @@ async fn launch_local_exe(path: &Path, args: &[String]) -> Result<()> {
     }
 }
 
-/// Hands a process Game Lobby started for `game_id` to the tracker (the session lasts while
+/// Hands a process GameLobbies started for `game_id` to the tracker (the session lasts while
 /// that process runs), or only marks the game played when it can't be tracked.
 fn track_started_process(state: &AppState, game_id: &str, pid: u32, exe: &Path) -> Result<()> {
     let settings = db::get_settings(&state.db.lock())?;
@@ -676,7 +676,7 @@ async fn launcher_program_running(program: &Path) -> bool {
     }
 }
 
-/// The route an "open first" launcher route starts the game with: exactly the route Game Lobby
+/// The route an "open first" launcher route starts the game with: exactly the route GameLobbies
 /// would give the target without any launcher, so every check of that route applies (it never
 /// gets less checking for coming through a launcher). Reads the disk and shortcuts (COM): call it
 /// off the async runtime threads.
@@ -686,7 +686,7 @@ async fn launcher_program_running(program: &Path) -> bool {
 /// - else what adding the file as a game would make (`local::game_for_file`): an `.exe`, a plain
 ///   or confirmed `.lnk`, a `.url` store link, or a ROM with the system its folders or extension
 ///   name. A file inside a folder-format game (a PS3 `USRDIR\EBOOT.BIN`) gets that system.
-/// - Identifiers and folders are refused: Game Lobby doesn't start those by itself.
+/// - Identifiers and folders are refused: GameLobbies doesn't start those by itself.
 ///
 /// The launcher route's own launch options go with it (they are the game's `.exe` options, see
 /// `links::launcher_host`), only when the direct route still starts that same file. Its install
@@ -702,7 +702,7 @@ pub fn direct_route(
     }
     let path = Path::new(target);
     if path.is_dir() {
-        bail!("This game's target is a folder ({target}), and Game Lobby only starts a game directly from a file: its .exe, a shortcut or a ROM. Link the game to its .exe or ROM file instead, or set its launcher to start games through it.");
+        bail!("This game's target is a folder ({target}), and GameLobbies only starts a game directly from a file: its .exe, a shortcut or a ROM. Link the game to its .exe or ROM file instead, or set its launcher to start games through it.");
     }
     let key = crate::tracker::normalize_path(target);
     let own = game.routes.iter().find(|r| {
@@ -736,7 +736,7 @@ pub fn direct_route(
     // store shapes the renderer may create too (no extra options for the store client).
     if let Ok(uri) = validate_launch_uri(&direct.launch_target) {
         if !crate::validation::renderer_link_ok(&uri) {
-            bail!("This internet shortcut opens a link Game Lobby doesn't start directly: only a store's plain game link (like steam://rungameid/400) is allowed. Add the game from its store instead.");
+            bail!("This internet shortcut opens a link GameLobbies doesn't start directly: only a store's plain game link (like steam://rungameid/400) is allowed. Add the game from its store instead.");
         }
     }
     if non_empty(&route.launch_args).is_some() {
@@ -960,7 +960,7 @@ pub async fn launch_game(
     }
     let target = route.launch_target.as_str();
     if is_owned_only(target) {
-        bail!("{} can't be started from Game Lobby: it is owned on {} but has no launcher link. Install and start it from the store's own app or website.", game.title, route.store);
+        bail!("{} can't be started from GameLobbies: it is owned on {} but has no launcher link. Install and start it from the store's own app or website.", game.title, route.store);
     }
     match store_launch(target)? {
         StoreLaunch::Link(uri) => shell_open(uri).await?,
@@ -976,7 +976,7 @@ pub async fn launch_game(
                     // Epic routes with arguments came from the removed Legendary import.
                     // They are never run; the cleanup in `db::migrate` turns them into
                     // launcher links on every start.
-                    bail!("This Epic Games entry still uses Legendary, which is no longer supported. Restart Game Lobby to switch it to the Epic Games Launcher.");
+                    bail!("This Epic Games entry still uses Legendary, which is no longer supported. Restart GameLobbies to switch it to the Epic Games Launcher.");
                 }
                 spawn_detached(&path, &parse_launch_arguments(Some(args)))?;
             }
@@ -1579,7 +1579,7 @@ pub(crate) mod tests {
         assert_eq!(direct.emulator_id.as_deref(), Some("pcsx2"));
         assert_eq!(direct.source_id, local::ROM_SOURCE);
 
-        // Folders and identifiers aren't started by Game Lobby itself.
+        // Folders and identifiers aren't started by GameLobbies itself.
         let folder = dir.dir(r"PC Game\00357");
         let route = launcher_route(&folder);
         let e = direct_route(&game_with(vec![route.clone()]), &route, &none).unwrap_err();
@@ -1590,7 +1590,7 @@ pub(crate) mod tests {
         };
         let e = direct_route(&game_with(vec![id.clone()]), &id, &none).unwrap_err();
         assert!(e.to_string().contains("not a file"), "{e}");
-        // Files Game Lobby wouldn't start as a game aren't started through a launcher either.
+        // Files GameLobbies wouldn't start as a game aren't started through a launcher either.
         for bad in [dir.file(r"PC Game\run.bat"), dir.file(r"PC Game\notes.txt")] {
             let route = launcher_route(&bad);
             assert!(

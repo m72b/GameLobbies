@@ -480,8 +480,10 @@ mod tests {
     fn reads_the_registry_and_treats_missing_keys_as_empty() {
         let entries = query_registry(r"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion").unwrap();
         assert!(entries[0].values.contains_key("productname"));
-        assert!(query_registry(r"HKCU\SOFTWARE\GameLobbyDefinitelyMissing")
-            .unwrap()
-            .is_empty());
+        assert!(
+            query_registry(r"HKCU\SOFTWARE\GameLobbiesDefinitelyMissing")
+                .unwrap()
+                .is_empty()
+        );
     }
 }

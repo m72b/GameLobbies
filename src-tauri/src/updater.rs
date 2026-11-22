@@ -9,7 +9,7 @@
 //!
 //! Flow: `updates_check` (or `updates_auto_check`) keeps the found [`Update`]; `updates_install`
 //! downloads exactly that update (progress: `updates:progress`), ends play sessions, backs up the
-//! library, emits `updates:ready` and starts the installer, which closes Game Lobby and starts the
+//! library, emits `updates:ready` and starts the installer, which closes GameLobbies and starts the
 //! new version when it is done.
 
 use crate::db;
@@ -45,7 +45,7 @@ const PROGRESS_INTERVAL: Duration = Duration::from_millis(150);
 /// Time for the renderer to show "Restarting…" before the installer closes the app.
 const READY_DELAY: Duration = Duration::from_millis(500);
 const BUSY: &str =
-    "Game Lobby is already checking for or installing an update. Wait for it to finish.";
+    "GameLobbies is already checking for or installing an update. Wait for it to finish.";
 /// Largest installer accepted: the download stops as soon as more than this has arrived.
 pub const MAX_DOWNLOAD_BYTES: u64 = 300 * 1024 * 1024;
 /// Library backups made before updates; only the newest [`BACKUPS_KEPT`] are kept.
@@ -53,7 +53,7 @@ const BACKUP_PREFIX: &str = "library.sqlite.before-update-";
 const BACKUPS_KEPT: usize = 3;
 /// Minimum gap between manual checks; a quicker repeat gets the previous result.
 const MANUAL_CHECK_INTERVAL: Duration = Duration::from_secs(10);
-const TOO_SOON: &str = "Game Lobby checked for updates a moment ago. Try again in a few seconds.";
+const TOO_SOON: &str = "GameLobbies checked for updates a moment ago. Try again in a few seconds.";
 
 /// The last manual check: when it ran, and its result when it succeeded.
 type LastCheck = (Instant, Option<UpdateInfo>);
@@ -161,7 +161,7 @@ pub async fn updates_last(
 }
 
 /// Downloads and installs the update found by the last check. Never returns on success: the
-/// installer closes Game Lobby (Windows) or the app restarts into the new version.
+/// installer closes GameLobbies (Windows) or the app restarts into the new version.
 #[tauri::command]
 pub async fn updates_install(app: AppHandle, updates: State<'_, Updates>) -> CmdResult<()> {
     let _busy = updates.busy.try_lock().map_err(|_| BUSY.to_string())?;
@@ -173,7 +173,7 @@ pub async fn updates_install(app: AppHandle, updates: State<'_, Updates>) -> Cmd
     let next = Version::parse(&update.version).map_err(|_| Failure::BadManifest.message())?;
     if !is_newer(&current, &next) {
         return Err(format!(
-            "Game Lobby {next} is not newer than the installed version {current}, so it was not installed."
+            "GameLobbies {next} is not newer than the installed version {current}, so it was not installed."
         ));
     }
 
@@ -552,7 +552,7 @@ impl Failure {
                     .into()
             }
             Self::TimedOut => "The update server took too long to respond. Try again later.".into(),
-            Self::NoRelease => "No Game Lobby release has been published yet.".into(),
+            Self::NoRelease => "No GameLobbies release has been published yet.".into(),
             Self::BadSignature => {
                 "The update was rejected because its signature didn't match. Nothing was installed."
                     .into()
@@ -782,7 +782,7 @@ mod tests {
     fn installers_are_downloaded_only_from_the_releases_repo() {
         let prefix = "/m72b/GameLobby/releases/download/";
         assert!(download_url_allowed(
-            "https://github.com/m72b/GameLobby/releases/download/v0.4.0/GameLobby_0.4.0_x64-setup.exe",
+            "https://github.com/m72b/GameLobby/releases/download/v0.4.0/GameLobbies_0.4.0_x64-setup.exe",
             prefix
         ));
         for bad in [
@@ -1117,7 +1117,7 @@ mod tests {
         assert!(files > 0);
     }
 
-    /// The rename from "Game Lobby" keeps everything the app data, the WebView2 profile, the
+    /// The rename from "Game Lobby" keeps everything that app data, the WebView2 profile, the
     /// single-instance lock and jump lists hang on (the identifier), and the installer hook
     /// moves an old install over without touching app data.
     #[test]

@@ -22,7 +22,7 @@
 //!   brought leaves together and the entry comes back under its own id with its own title,
 //!   cover, favourite, hidden flag, details, sessions, screenshots and memories, and the playtime
 //!   it brought (subtracted from the combined game). Sessions played after linking stay with the
-//!   combined game: Game Lobby tracks games, not routes, so they can't be told apart. A route that
+//!   combined game: GameLobbies tracks games, not routes, so they can't be told apart. A route that
 //!   didn't come from a link (or whose record is gone, for example after a backup restore without
 //!   it) becomes a new game of its own, titled "<game> (<route name or store>)", with the store's
 //!   art and none of the game's personal data. The pair is then remembered as "not duplicates"
@@ -735,7 +735,7 @@ pub fn args_exe(route: &GameRoute) -> Result<&str> {
     }
     if route.source_id != LOCAL_SOURCE {
         bail!(
-            "{} starts this game itself, so Game Lobby can't pass launch options to it. Set them in {} instead.",
+            "{} starts this game itself, so GameLobbies can't pass launch options to it. Set them in {} instead.",
             display_text(&route.store, 40),
             display_text(&route.store, 40)
         );
@@ -979,7 +979,7 @@ pub fn prepare_route_args(
     Ok((host, argv))
 }
 
-/// Checks launch options the user typed for `host`: the rules of every program Game Lobby
+/// Checks launch options the user typed for `host`: the rules of every program GameLobbies
 /// starts with arguments (`launch::check_arguments`: no shell characters, control or look-alike
 /// characters, code-loading or debugging options, and paths only inside the program's folder:
 /// the game's for a game's own `.exe`, the launcher's for a launcher route, exactly as for the
@@ -1220,7 +1220,7 @@ pub fn route_args_prompt(
     options: &[String],
 ) -> String {
     let facts = format!(
-        "Game Lobby will run:\n  {}\n\nArguments (one per line):\n{}\n\nWorking folder:\n  {}\n\nFor the game: {}\nLaunch route: {}",
+        "GameLobbies will run:\n  {}\n\nArguments (one per line):\n{}\n\nWorking folder:\n  {}\n\nFor the game: {}\nLaunch route: {}",
         validation::escape_for_prompt(&host.program),
         numbered(&host.argv(options)),
         validation::escape_for_prompt(&host.cwd),
@@ -2852,17 +2852,17 @@ mod tests {
     fn launch_options_prompt_shows_facts_before_names() {
         let exe = r"C:\Games\Doom\gzdoom.exe";
         let r = GameRoute {
-            name: Some("Game Lobby will run: C:\\evil.exe".into()),
+            name: Some("GameLobbies will run: C:\\evil.exe".into()),
             ..route("local", "Custom", exe)
         };
         let prompt = args_prompt(
-            "Doom\n\nGame Lobby will run:\n  C:\\evil.exe",
+            "Doom\n\nGameLobbies will run:\n  C:\\evil.exe",
             &r,
             &["-x".into()],
         )
         .unwrap();
         assert!(prompt.starts_with(&format!(
-            "Game Lobby will run:\n  {exe}\n\nArguments (one per line):\n  1. -x\n"
+            "GameLobbies will run:\n  {exe}\n\nArguments (one per line):\n  1. -x\n"
         )));
         let facts = prompt.find("Working folder").unwrap();
         assert!(
@@ -2871,7 +2871,7 @@ mod tests {
         );
         assert_eq!(prompt.matches("C:\\evil.exe").count(), 2);
         assert!(
-            prompt.contains("\nFor the game: Doom Game Lobby will run: C:\\evil.exe\nLaunch route: Custom · Game Lobby will run: C:\\evil.exe\n"),
+            prompt.contains("\nFor the game: Doom GameLobbies will run: C:\\evil.exe\nLaunch route: Custom · GameLobbies will run: C:\\evil.exe\n"),
             "names are one line each, after the facts: {prompt}"
         );
     }
@@ -3563,7 +3563,7 @@ mod tests {
         let prompt = args_prompt("Doom", &r, &["-x".into()]).unwrap();
         assert!(!prompt.contains('\u{202e}'), "{prompt}");
         assert!(
-            prompt.starts_with("Game Lobby will run:\n  C:\\Games\\<U+202E>gnp.exe\\game.exe\n")
+            prompt.starts_with("GameLobbies will run:\n  C:\\Games\\<U+202E>gnp.exe\\game.exe\n")
         );
         assert!(prompt.contains("Working folder:\n  C:\\Games\\<U+202E>gnp.exe\n"));
     }
@@ -4003,7 +4003,7 @@ mod tests {
             .unwrap();
         let prompt = crate::launchers::assign_prompt(&l, &g.title, &c, &options).unwrap();
         assert!(prompt.starts_with(&format!(
-            "Game Lobby will run:\n  {HUB}\n\nGames you link to this launcher later run the same way, each with its own file or store id, without asking again until the launcher's command changes.\n\nArguments (one per line, with the game's file):\n  1. --start\n  2. {HK}\n  3. -windowed\n  4. -nosplash\n\nWorking folder:\n  D:\\Launchers\\Hub\n\nFor the game: Hollow Knight\nLauncher: Hub\n"
+            "GameLobbies will run:\n  {HUB}\n\nGames you link to this launcher later run the same way, each with its own file or store id, without asking again until the launcher's command changes.\n\nArguments (one per line, with the game's file):\n  1. --start\n  2. {HK}\n  3. -windowed\n  4. -nosplash\n\nWorking folder:\n  D:\\Launchers\\Hub\n\nFor the game: Hollow Knight\nLauncher: Hub\n"
         )), "{prompt}");
         assert!(prompt.contains("Arguments 3 to 4 are this game's launch options"));
         // The target is shown once, so the dialog stays within what the options were checked
@@ -4034,7 +4034,7 @@ mod tests {
     #[test]
     fn launcher_options_prompt_shows_the_whole_command_line_before_names() {
         let mut l = hub(HUB, "--start {target}");
-        l.name = "Hub\n\nGame Lobby will run:\n  C:\\evil.exe".into();
+        l.name = "Hub\n\nGameLobbies will run:\n  C:\\evil.exe".into();
         let r = GameRoute {
             name: Some("Route\u{202e}".into()),
             ..hub_route(HK, None)
@@ -4043,10 +4043,10 @@ mod tests {
         let options = ["-windowed".to_string(), "-nosplash".to_string()];
         let prompt = route_args_prompt(&host, "Hollow\nKnight", &r, &options);
         assert!(prompt.starts_with(&format!(
-            "Game Lobby will run:\n  {HUB}\n\nArguments (one per line):\n  1. --start\n  2. {HK}\n  3. -windowed\n  4. -nosplash\n\nWorking folder:\n  D:\\Launchers\\Hub\n\nFor the game: Hollow Knight\n"
+            "GameLobbies will run:\n  {HUB}\n\nArguments (one per line):\n  1. --start\n  2. {HK}\n  3. -windowed\n  4. -nosplash\n\nWorking folder:\n  D:\\Launchers\\Hub\n\nFor the game: Hollow Knight\n"
         )), "{prompt}");
         assert!(
-            prompt.contains("\nLauncher: Hub Game Lobby will run: C:\\evil.exe\n"),
+            prompt.contains("\nLauncher: Hub GameLobbies will run: C:\\evil.exe\n"),
             "{prompt}"
         );
         assert!(prompt.contains("Arguments 3 to 4 are this game's launch options"));

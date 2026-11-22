@@ -149,7 +149,7 @@ const PAGE_CUSTOM_KEYS: &[&str] = &["gameId", "hero", "logo", "logoPosition", "l
 /// Image types accepted for custom heroes and logos (`lobby-cover://` files).
 pub const PAGE_IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "webp", "avif", "gif"];
 pub const LOBBY_COVER_PREFIX: &str = "lobby-cover://";
-/// Bare covers-folder file names as Game Lobby creates them: ASCII letters, digits, `_.-`,
+/// Bare covers-folder file names as GameLobbies creates them: ASCII letters, digits, `_.-`,
 /// not starting with a dot, ending in an image extension.
 static COVER_NAME: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)^[A-Za-z0-9_-][A-Za-z0-9_.-]{0,199}\.(png|jpe?g|webp|avif|gif)$").unwrap()

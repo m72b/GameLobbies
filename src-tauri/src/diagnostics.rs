@@ -160,7 +160,7 @@ pub fn render(
         out.push_str(&text);
         out.push('\n');
     };
-    line("Game Lobby diagnostics".into());
+    line("GameLobbies diagnostics".into());
     line(String::new());
     line(format!("App version: {}", env.app_version));
     line(format!("Windows: {}", env.windows));
@@ -247,7 +247,7 @@ pub async fn diagnostics_open_logs(state: State<'_, AppState>) -> CmdResult<()> 
 
 pub fn log_startup(app: &tauri::App, data_dir: &Path) {
     log::info!(
-        "Game Lobby {} starting (Windows: {}, {}, WebView2: {})",
+        "GameLobbies {} starting (Windows: {}, {}, WebView2: {})",
         app.package_info().version,
         windows_version().unwrap_or_else(|| std::env::consts::OS.into()),
         std::env::consts::ARCH,

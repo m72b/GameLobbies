@@ -533,7 +533,7 @@ impl Client {
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(15))
             .redirect(reqwest::redirect::Policy::none())
-            .user_agent(concat!("GameLobby/", env!("CARGO_PKG_VERSION")))
+            .user_agent(concat!("GameLobbies/", env!("CARGO_PKG_VERSION")))
             .build()
             .map_err(|e| {
                 anyhow!(

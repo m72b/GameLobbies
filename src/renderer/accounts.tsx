@@ -54,9 +54,9 @@ export function useAccounts(say: (text: string) => void, onChanged: () => void) 
 export type Accounts = ReturnType<typeof useAccounts>
 
 /** The note sign-in places show: where each sign-in happens and where the password goes. */
-const STEAM_NOTE = "Steam sign-in happens in your own web browser, on steamcommunity.com. Your password and Steam Guard approval go only to Steam; Game Lobby only receives your SteamID64 back, after Steam confirms it. You can close the browser tab afterwards."
-const GOG_NOTE = "GOG sign-in happens in your own web browser, on gog.com, with any way GOG offers (e-mail, Google, Discord and others). When GOG shows that you are signed in, copy the address from the browser's address bar (it starts with https://embed.gog.com/on_login_success) and paste it into Game Lobby. Unofficial: Game Lobby signs in with GOG Galaxy's public app id, as other open-source launchers do, and GOG could stop that at any time. Game Lobby keeps GOG's sign-in tokens encrypted by Windows; your password goes only to GOG."
-const WINDOW_NOTE = "Battle.net signs in in Game Lobby's own private window showing Battle.net's real sign-in page. Your password goes only to Battle.net; Game Lobby keeps only its session, encrypted by Windows. The account is read the way Battle.net's own website reads it, not through an official interface, so it can stop working; installed games are found either way."
+const STEAM_NOTE = "Steam sign-in happens in your own web browser, on steamcommunity.com. Your password and Steam Guard approval go only to Steam; GameLobbies only receives your SteamID64 back, after Steam confirms it. You can close the browser tab afterwards."
+const GOG_NOTE = "GOG sign-in happens in your own web browser, on gog.com, with any way GOG offers (e-mail, Google, Discord and others). When GOG shows that you are signed in, copy the address from the browser's address bar (it starts with https://embed.gog.com/on_login_success) and paste it into GameLobbies. Unofficial: GameLobbies signs in with GOG Galaxy's public app id, as other open-source launchers do, and GOG could stop that at any time. GameLobbies keeps GOG's sign-in tokens encrypted by Windows; your password goes only to GOG."
+const WINDOW_NOTE = "Battle.net signs in in GameLobbies's own private window showing Battle.net's real sign-in page. Your password goes only to Battle.net; GameLobbies keeps only its session, encrypted by Windows. The account is read the way Battle.net's own website reads it, not through an official interface, so it can stop working; installed games are found either way."
 
 export function SignInNote({ store }: { store?: AccountStore }) {
   const text = store === 'steam' ? STEAM_NOTE : store === 'gog' ? GOG_NOTE : store ? WINDOW_NOTE : [STEAM_NOTE, GOG_NOTE, WINDOW_NOTE].join(' ')
@@ -108,7 +108,7 @@ function AccountRow({ status, accounts }: { status: AccountStatus; accounts: Acc
       {status.available && <>
         {(!status.signedIn || status.last?.needsSignIn) && <StoreSignIn accounts={accounts} status={status} />}
         {status.signedIn && <div className="account-actions">
-          <label className="account-mode">Use<select value={status.mode} disabled={busy || status.signingIn} aria-label={'How Game Lobby uses ' + status.name} onChange={event => { const mode = event.target.value as AccountMode; if (mode === 'installed') setConfirming('installed'); else { setConfirming(null); void accounts.setMode(status.store, mode) } }}>
+          <label className="account-mode">Use<select value={status.mode} disabled={busy || status.signingIn} aria-label={'How GameLobbies uses ' + status.name} onChange={event => { const mode = event.target.value as AccountMode; if (mode === 'installed') setConfirming('installed'); else { setConfirming(null); void accounts.setMode(status.store, mode) } }}>
             <option value="account">Account: owned games and playtime</option>
             <option value="installed">Installed files only</option>
           </select></label>
@@ -130,7 +130,7 @@ function AccountRow({ status, accounts }: { status: AccountStatus; accounts: Acc
 export function AccountsSection({ accounts, onRunSetup }: { accounts: Accounts; onRunSetup(): void }) {
   return <>
     <div className="settings-card">
-      <div className="card-heading"><div><h3>Store accounts</h3><p>Optional. Without an account Game Lobby lists the games installed on this PC. Signed in, it also lists the games you own but haven't installed: Steam (with a free Web API key, and Steam's playtime), GOG (unofficial, with GOG's playtime) and Battle.net. Signing out removes the not-installed games it added; games you played, rated or customized stay.</p></div></div>
+      <div className="card-heading"><div><h3>Store accounts</h3><p>Optional. Without an account GameLobbies lists the games installed on this PC. Signed in, it also lists the games you own but haven't installed: Steam (with a free Web API key, and Steam's playtime), GOG (unofficial, with GOG's playtime) and Battle.net. Signing out removes the not-installed games it added; games you played, rated or customized stay.</p></div></div>
       {accounts.statuses.map(status => <AccountRow key={status.store} status={status} accounts={accounts} />)}
       <SignInNote />
     </div>

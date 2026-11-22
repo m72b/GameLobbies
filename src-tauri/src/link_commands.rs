@@ -200,7 +200,7 @@ pub async fn library_route_rename(
 }
 
 /// Sets the launch options of one route from the text the user typed (empty removes them).
-/// Routes whose `.exe` Game Lobby starts directly and routes of a custom launcher with a program
+/// Routes whose `.exe` GameLobbies starts directly and routes of a custom launcher with a program
 /// take options (`links::args_host`); the text gets the checks of every program started with
 /// arguments, the exact program, whole argv and working folder are shown in a native dialog,
 /// and the options are saved (and their confirmation recorded) only when the user confirms and

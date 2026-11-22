@@ -38,10 +38,10 @@ export const addedLabel = (seconds: number, source: PlaytimeSource = 'steam'): s
 
 export function addedTooltip(entry: Pick<StoreAddition, 'storeSeconds' | 'trackedSeconds'> & { source?: PlaytimeSource }): string {
   const name = sourceName(entry.source)
-  return name + ' reports ' + formatHours(entry.storeSeconds) + '. Game Lobby recorded ' + formatHours(entry.trackedSeconds) + '. The difference is added so playtime matches ' + name + '.'
+  return name + ' reports ' + formatHours(entry.storeSeconds) + '. GameLobbies recorded ' + formatHours(entry.trackedSeconds) + '. The difference is added so playtime matches ' + name + '.'
 }
 
-/** The entry for a game page's own stats; null when Steam has nothing Game Lobby did not track. */
+/** The entry for a game page's own stats; null when Steam has nothing GameLobbies did not track. */
 export function additionOf(game: Pick<Game, 'id' | 'title'>, store: StoreTime | undefined): StoreAddition | null {
   if (!store || store.addedSeconds <= 0) return null
   return { gameId: game.id, gameTitle: game.title, source: store.source, seconds: store.addedSeconds, storeSeconds: store.seconds, trackedSeconds: store.trackedSeconds, syncedAt: store.syncedAt }

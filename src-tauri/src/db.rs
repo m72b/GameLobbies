@@ -188,10 +188,10 @@ fn migrate(db: &Connection, file: Option<&Path>) -> Result<()> {
     crate::storage::prepare(db)?;
     let version: i64 = db.query_row("PRAGMA user_version", [], |row| row.get(0))?;
     if version > SCHEMA_VERSION {
-        // Written by a newer Game Lobby: open it as usual, but don't run cleanups that may
+        // Written by a newer GameLobbies: open it as usual, but don't run cleanups that may
         // not suit its format.
         log::warn!(
-            "The library was last used by a newer Game Lobby (schema {version}, this version knows {SCHEMA_VERSION}); skipping upgrade steps."
+            "The library was last used by a newer GameLobbies (schema {version}, this version knows {SCHEMA_VERSION}); skipping upgrade steps."
         );
         return Ok(());
     }
@@ -1182,7 +1182,7 @@ pub fn put_cached_art(db: &Connection, game_id: &str, art: &CachedArt) -> Result
 // IGDB metadata cache
 
 /// One `game_metadata` row. `igdb_id`/`json` are `None` for a cached "no match" result.
-/// `source` is `"auto"` (matched by Game Lobby) or `"user"` (chosen by the user; never
+/// `source` is `"auto"` (matched by GameLobbies) or `"user"` (chosen by the user; never
 /// replaced by an automatic match).
 #[derive(Clone, Debug, PartialEq)]
 pub struct CachedMetadata {
@@ -2380,7 +2380,7 @@ mod tests {
     fn newer_schemas_open_without_upgrade_steps_and_downgrades_heal() {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn, None).unwrap();
-        // A newer Game Lobby wrote version 2: opens fine, nothing is cleaned or rewritten.
+        // A newer GameLobbies wrote version 2: opens fine, nothing is cleaned or rewritten.
         conn.pragma_update(None, "user_version", SCHEMA_VERSION + 1)
             .unwrap();
         write_secret(&conn, "steam-api-key-dpapi", b"sealed").unwrap();

@@ -18,7 +18,7 @@ test('formatHours: hours with one decimal, minutes below an hour', () => {
 
 test('the label and tooltip read as specified', () => {
   assert.equal(addedLabel(125 * H), 'Added from Steam · 125 h')
-  assert.equal(addedTooltip({ storeSeconds: 165 * H, trackedSeconds: 40 * H }), 'Steam reports 165 h. Game Lobby recorded 40 h. The difference is added so playtime matches Steam.')
+  assert.equal(addedTooltip({ storeSeconds: 165 * H, trackedSeconds: 40 * H }), 'Steam reports 165 h. GameLobbies recorded 40 h. The difference is added so playtime matches Steam.')
 })
 
 test('effective playtime is the larger figure and never below tracked', () => {
@@ -59,6 +59,6 @@ test('mergeActivity: Steam entries sit by their sync date, sessions keep their o
 
 test('GOG figures name GOG', () => {
   assert.equal(addedLabel(2 * 3600, 'gog'), 'Added from GOG · 2 h')
-  assert.equal(addedTooltip({ storeSeconds: 7200, trackedSeconds: 3600, source: 'gog' }), 'GOG reports 2 h. Game Lobby recorded 1 h. The difference is added so playtime matches GOG.')
+  assert.equal(addedTooltip({ storeSeconds: 7200, trackedSeconds: 3600, source: 'gog' }), 'GOG reports 2 h. GameLobbies recorded 1 h. The difference is added so playtime matches GOG.')
   assert.equal(additionOf({ id: 'gog:1', title: 'W' }, { source: 'gog', seconds: 7200, trackedSeconds: 3600, effectiveSeconds: 7200, addedSeconds: 3600, syncedAt: 1 }).source, 'gog')
 })

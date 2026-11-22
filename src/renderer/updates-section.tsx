@@ -106,15 +106,15 @@ export function UpdatesSection({ autoCheck, onAutoCheckChange }: { autoCheck: bo
   const date = info?.date ? new Date(info.date).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' }) : ''
   return <>
     <div className="settings-card">
-      <div className="about-mark"><Gamepad2 /></div><h2>Game Lobby</h2>
+      <div className="about-mark"><Gamepad2 /></div><h2>GameLobbies</h2>
       <p>Version {info?.currentVersion ?? packageInfo.version} · Local-first library manager</p>
       <p>Built with Tauri, Rust, React, TypeScript and SQLite.</p>
-      <p>Free and open source under the GNU GPL v3.0. Game Lobby includes no games, ROMs, BIOS files or game artwork; it shows the games you already have.</p>
-      <p>Cover art is provided by the SteamGridDB community and Steam, and stays on this PC. Game Lobby is not affiliated with or endorsed by Valve, Epic Games, GOG, Microsoft, Ubisoft, Electronic Arts, Blizzard, Amazon, itch.io, SteamGridDB or any emulator project. All names, logos and artwork belong to their owners.</p>
+      <p>Free and open source under the GNU GPL v3.0. GameLobbies includes no games, ROMs, BIOS files or game artwork; it shows the games you already have.</p>
+      <p>Cover art is provided by the SteamGridDB community and Steam, and stays on this PC. GameLobbies is not affiliated with or endorsed by Valve, Epic Games, GOG, Microsoft, Ubisoft, Electronic Arts, Blizzard, Amazon, itch.io, SteamGridDB or any emulator project. All names, logos and artwork belong to their owners.</p>
     </div>
     <div className="settings-card">
       <div className="card-heading">
-        <div><h3>Updates</h3><p>New versions come from the Game Lobby releases page on GitHub. An update is installed only after its signature is verified, and only when you choose to.</p></div>
+        <div><h3>Updates</h3><p>New versions come from the GameLobbies releases page on GitHub. An update is installed only after its signature is verified, and only when you choose to.</p></div>
         <button type="button" className="secondary-button" disabled={busy} onClick={() => void check()}>
           {phase === 'checking' ? <><RefreshCw size={14} className="spin" /> Checking…</> : <><RefreshCw size={14} /> Check for updates</>}
         </button>
@@ -122,16 +122,16 @@ export function UpdatesSection({ autoCheck, onAutoCheckChange }: { autoCheck: bo
       {error && <div className="form-error" role="alert">{error}</div>}
       {info && !info.available && phase !== 'checking' && <div className="update-status" role="status"><CheckCircle2 size={15} /> You're up to date.</div>}
       {info?.available && <div className="update-available">
-        <div className="update-title"><b>Game Lobby {info.version} is available</b>{date && <span>Released {date}</span>}</div>
+        <div className="update-title"><b>GameLobbies {info.version} is available</b>{date && <span>Released {date}</span>}</div>
         {info.notes && <div className="update-notes" tabIndex={0} aria-label="Release notes">{info.notes}</div>}
         {phase === 'installing' && <DownloadProgress progress={progress} />}
         {phase === 'restarting' && <div className="update-status" role="status"><RefreshCw size={15} className="spin" /> Restarting…</div>}
         {phase !== 'installing' && phase !== 'restarting' && <div className="settings-actions">
           <button type="button" className="primary-button" disabled={busy} onClick={() => void install()}><CloudDownload size={14} /> Download and install</button>
         </div>}
-        <small className="update-hint">Game Lobby closes while the update installs and starts again afterwards. Running play sessions are saved and your library is backed up first.</small>
+        <small className="update-hint">GameLobbies closes while the update installs and starts again afterwards. Running play sessions are saved and your library is backed up first.</small>
       </div>}
-      <div className="toggle-row"><div><b>Automatically check for updates</b><small>Check once a day, shortly after Game Lobby starts. Updates are never installed without your click.</small></div><input type="checkbox" checked={autoCheck} onChange={event => onAutoCheckChange(event.target.checked)} /></div>
+      <div className="toggle-row"><div><b>Automatically check for updates</b><small>Check once a day, shortly after GameLobbies starts. Updates are never installed without your click.</small></div><input type="checkbox" checked={autoCheck} onChange={event => onAutoCheckChange(event.target.checked)} /></div>
     </div>
     <SupportCard />
   </>

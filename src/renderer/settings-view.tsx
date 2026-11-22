@@ -13,7 +13,7 @@ import { ApiKeysSection, KeyStatusLine, type ApiKeys } from './api-keys'
 import { AccountsSection, type Accounts } from './accounts'
 
 const sections = [
-  ['Libraries', 'Stores and launchers Game Lobby detects on this PC, and how often it scans.', Library],
+  ['Libraries', 'Stores and launchers GameLobbies detects on this PC, and how often it scans.', Library],
   ['Accounts', 'Store sign-in for games you own but have not installed, and the first-time setup.', CircleUserRound],
   ['Library folders', 'Choose game and emulator folders and scan them.', FolderSearch],
   ['Emulators', 'Manage emulator profiles and the systems they run.', Gamepad2],
@@ -192,7 +192,7 @@ export function SettingsView({ settings, onSettings, say, keys, accounts, onRunS
         {section === 'Libraries' && <>
           <div className="settings-card">
             <h3>Detected stores and launchers</h3>
-            <p className="muted-text">Game Lobby finds installed games on its own by reading each launcher's local files on this PC. No accounts or keys are needed for installed games. Turn a store off to stop scanning it; games already in the library stay until you remove them.</p>
+            <p className="muted-text">GameLobbies finds installed games on its own by reading each launcher's local files on this PC. No accounts or keys are needed for installed games. Turn a store off to stop scanning it; games already in the library stay until you remove them.</p>
             {stores.map(store => <Fragment key={store.id}>
               <div className="toggle-row store-row">
                 <span className="store-badge small"><StoreIcon store={store.name} /></span>
@@ -203,7 +203,7 @@ export function SettingsView({ settings, onSettings, say, keys, accounts, onRunS
             </Fragment>)}
             <div className="settings-actions"><button className="primary-button" onClick={() => void scanLibraries()}><Library size={15} /> Scan libraries</button></div>
           </div>
-          <div className="settings-card"><div className="toggle-row"><div><b>Show only installed games</b><small>Hide games that are not installed</small></div><input type="checkbox" checked={settings.showOnlyInstalled} onChange={event => void save({ showOnlyInstalled: event.target.checked })} /></div><div className="toggle-row"><div><b>Minimize when a game starts</b><small>Game Lobby moves to the taskbar after you press Play</small></div><input type="checkbox" checked={settings.minimizeOnLaunch} onChange={event => void save({ minimizeOnLaunch: event.target.checked })} /></div></div>
+          <div className="settings-card"><div className="toggle-row"><div><b>Show only installed games</b><small>Hide games that are not installed</small></div><input type="checkbox" checked={settings.showOnlyInstalled} onChange={event => void save({ showOnlyInstalled: event.target.checked })} /></div><div className="toggle-row"><div><b>Minimize when a game starts</b><small>GameLobbies moves to the taskbar after you press Play</small></div><input type="checkbox" checked={settings.minimizeOnLaunch} onChange={event => void save({ minimizeOnLaunch: event.target.checked })} /></div></div>
           <label className="setting-row">Scan interval<select value={settings.scanIntervalHours} onChange={event => void save({ scanIntervalHours: +event.target.value })}><option value={0}>Manual only</option><option value={6}>Every 6 hours</option><option value={12}>Every 12 hours</option><option value={24}>Daily</option></select></label>
         </>}
 
@@ -221,7 +221,7 @@ export function SettingsView({ settings, onSettings, say, keys, accounts, onRunS
             <div className="toggle-row"><div><b>Store badges</b><small>Show a store mark on each poster</small></div><input type="checkbox" checked={settings.showBadges} onChange={event => void save({ showBadges: event.target.checked })} /></div>
             <div className="toggle-row"><div><b>Animations</b><small>Enable poster hover motion</small></div><input type="checkbox" checked={settings.animations} onChange={event => void save({ animations: event.target.checked })} /></div>
             <label className="setting-row"><span><b>Reduce motion</b><small className="setting-help">Full always animates. Follow Windows uses its animation setting. Reduced keeps only short fades. Off turns all animation off.</small></span><select value={settings.motion} aria-label="Reduce motion" onChange={event => void save({ motion: event.target.value as MotionPreference })}><option value="full">Full (always animate)</option><option value="system">Follow Windows</option><option value="reduced">Reduced</option><option value="off">Off (no animation)</option></select></label>
-            {settings.motion === 'system' && osReduced && <p className="setting-note" role="note">Windows animation effects are off, so Game Lobby reduces motion. Choose Full to always animate.</p>}
+            {settings.motion === 'system' && osReduced && <p className="setting-note" role="note">Windows animation effects are off, so GameLobbies reduces motion. Choose Full to always animate.</p>}
             <div className="feature-row"><span>Grid density</span><span className="coming-soon">COMING SOON</span></div>
           </div>
           <div className="settings-card" id="settings-cover-art">
@@ -252,16 +252,16 @@ export function SettingsView({ settings, onSettings, say, keys, accounts, onRunS
         </>}
 
         {section === 'Startup and Behavior' && <div className="settings-card">
-          <div className="toggle-row"><div><b>Launch on boot</b><small>Start Game Lobby when you sign in to Windows. It starts minimized, in the tray if a tray option is on.</small></div><input type="checkbox" aria-label="Launch on boot" checked={settings.launchOnBoot} onChange={event => void save({ launchOnBoot: event.target.checked })} /></div>
-          <div className="toggle-row"><div><b>Minimize to tray</b><small>Minimizing hides Game Lobby to the tray icon instead of the taskbar</small></div><input type="checkbox" aria-label="Minimize to tray" checked={settings.minimizeToTray} onChange={event => void save({ minimizeToTray: event.target.checked })} /></div>
-          <div className="toggle-row"><div><b>Close to tray</b><small>The close button hides Game Lobby and keeps it running, so playtime tracking continues. Quit from the tray menu.</small></div><input type="checkbox" aria-label="Close to tray" checked={settings.closeToTray} onChange={event => void save({ closeToTray: event.target.checked })} /></div>
+          <div className="toggle-row"><div><b>Launch on boot</b><small>Start GameLobbies when you sign in to Windows. It starts minimized, in the tray if a tray option is on.</small></div><input type="checkbox" aria-label="Launch on boot" checked={settings.launchOnBoot} onChange={event => void save({ launchOnBoot: event.target.checked })} /></div>
+          <div className="toggle-row"><div><b>Minimize to tray</b><small>Minimizing hides GameLobbies to the tray icon instead of the taskbar</small></div><input type="checkbox" aria-label="Minimize to tray" checked={settings.minimizeToTray} onChange={event => void save({ minimizeToTray: event.target.checked })} /></div>
+          <div className="toggle-row"><div><b>Close to tray</b><small>The close button hides GameLobbies and keeps it running, so playtime tracking continues. Quit from the tray menu.</small></div><input type="checkbox" aria-label="Close to tray" checked={settings.closeToTray} onChange={event => void save({ closeToTray: event.target.checked })} /></div>
         </div>}
 
         {section === 'Playtime and Stats' && <>
           <div className="settings-card">
             <h3>Playtime</h3>
             <div className="toggle-row"><div><b>Track playtime</b><small>Store session time in the local library</small></div><input type="checkbox" checked={settings.tracking} onChange={event => void save({ tracking: event.target.checked })} /></div>
-            <div className="toggle-row"><div><b>Detect games launched outside Game Lobby</b><small>Tracks games started from Steam, Epic or shortcuts while Game Lobby is open</small></div><input type="checkbox" checked={settings.detectExternalLaunches} disabled={!settings.tracking} onChange={event => void save({ detectExternalLaunches: event.target.checked })} /></div>
+            <div className="toggle-row"><div><b>Detect games launched outside GameLobbies</b><small>Tracks games started from Steam, Epic or shortcuts while GameLobbies is open</small></div><input type="checkbox" checked={settings.detectExternalLaunches} disabled={!settings.tracking} onChange={event => void save({ detectExternalLaunches: event.target.checked })} /></div>
             <button className="secondary-button" onClick={() => void resetPlaytime()}>Reset playtime stats</button>
           </div>
           <div className="settings-card" id="settings-metadata">
@@ -302,7 +302,7 @@ export function SettingsView({ settings, onSettings, say, keys, accounts, onRunS
         </div>}
 
         {section === 'Backup and Sync' && <div className="settings-card">
-          <h3>Local backup</h3><p>Export titles, routes, settings and emulator profiles to JSON. Image files are not included: covers and your screenshots stay in Game Lobby's local data folder, and screenshots must be added again on another PC.</p>
+          <h3>Local backup</h3><p>Export titles, routes, settings and emulator profiles to JSON. Image files are not included: covers and your screenshots stay in GameLobbies's local data folder, and screenshots must be added again on another PC.</p>
           <div className="settings-actions"><button className="primary-button" onClick={() => void exportBackup()}>Export library</button><button className="secondary-button" onClick={() => void importBackup()}>Import backup</button></div>
           <div className="feature-row"><span>Automatic backup</span><span className="coming-soon">COMING SOON</span></div>
         </div>}

@@ -44,9 +44,9 @@ test('storeHint: none, one store, several', () => {
 
 test('playtimeBreakdown: tracked only, or tracked against the store with the larger counted', () => {
   const fmt = s => s + 's'
-  assert.equal(playtimeBreakdown({ seconds: 60, trackedSeconds: 60 }, fmt), 'Game Lobby tracked: 60s')
+  assert.equal(playtimeBreakdown({ seconds: 60, trackedSeconds: 60 }, fmt), 'GameLobbies tracked: 60s')
   assert.equal(
     playtimeBreakdown({ seconds: 900, trackedSeconds: 60, storeSeconds: 900, storeSource: 'Steam' }, fmt),
-    'Game Lobby tracked: 60s\nSteam reports: 900s\nCounted: 900s (the larger of the two, never added)'
+    'GameLobbies tracked: 60s\nSteam reports: 900s\nCounted: 900s (the larger of the two, never added)'
   )
 })

@@ -369,7 +369,7 @@ export default function App() {
     const offTracking = window.lobby.tracking.onChanged(setRunning)
     const offSettings = window.lobby.settings.onChanged(setSettings)
     const offOpen = window.lobby.settings.onOpen(id => openSettingsRef.current(id))
-    const offTrayHint = window.lobby.app.onTrayHint(() => notice('Game Lobby is still running in the tray. Use the tray icon to open or quit it.'))
+    const offTrayHint = window.lobby.app.onTrayHint(() => notice('GameLobbies is still running in the tray. Use the tray icon to open or quit it.'))
     const offSgdb = window.lobby.steamGridDb.onFetched(summary => { if (summary.updated > 0) notice('SteamGridDB added ' + summary.updated + ' cover' + (summary.updated === 1 ? '' : 's')) })
     const resize = () => setGridWidth(scrollRef.current?.clientWidth || window.innerWidth - 90)
     const observer = new ResizeObserver(resize)
@@ -617,7 +617,7 @@ export default function App() {
 
   return <KeysUiContext.Provider value={{ keys, openSheet, openTab: () => openSettings('api-keys') }}><div className="app-shell">
     <header className="titlebar">
-      <div className="brand"><GlMark size={12} className="gl-mark" />Game Lobby</div>{nowPlaying && !(pageOpen && openId === nowPlaying.game.id) && <NowPlaying game={nowPlaying.game} entry={nowPlaying.item} onOpen={() => openGame(nowPlaying.game)} />}<div className="drag-space" data-tauri-drag-region />
+      <div className="brand"><GlMark size={12} className="gl-mark" />GameLobbies</div>{nowPlaying && !(pageOpen && openId === nowPlaying.game.id) && <NowPlaying game={nowPlaying.game} entry={nowPlaying.item} onOpen={() => openGame(nowPlaying.game)} />}<div className="drag-space" data-tauri-drag-region />
       <button className="title-action" onClick={() => window.lobby.window.minimize()} aria-label="Minimize">—</button>
       <button className="title-action" onClick={() => window.lobby.window.toggleMaximize()} aria-label="Maximize">□</button>
       <button className="title-action close" onClick={() => window.lobby.window.close()} aria-label="Close">×</button>
@@ -784,7 +784,7 @@ export default function App() {
     {toast && <div className="toast">{toast}</div>}
     {updateNotice && <div className="update-notice" role="status">
       <CloudDownload size={16} />
-      <span>Game Lobby {updateNotice.version} is available</span>
+      <span>GameLobbies {updateNotice.version} is available</span>
       <button type="button" className="primary-button" onClick={() => { setUpdateNotice(null); openSettings('updates') }}>View update</button>
       <button type="button" className="update-notice-close" title="Dismiss" aria-label="Dismiss update notice" onClick={() => setUpdateNotice(null)}><X size={14} /></button>
     </div>}

@@ -5,7 +5,7 @@
 //! the library game whose install folder contains it ([`Targets::attribute`]; the most
 //! specific folder wins when install folders nest). With `detectExternalLaunches` on, any
 //! installed game is detected however it was started; with it off, only games launched from
-//! Game Lobby ([`Tracker::watch`]) are tracked, and the process list isn't read at all while
+//! GameLobbies ([`Tracker::watch`]) are tracked, and the process list isn't read at all while
 //! nothing is launching or running.
 //!
 //! False positives are avoided by:
@@ -14,7 +14,7 @@
 //!   parents), or a store client's own folder are never used.
 //! - [`is_helper_executable`]: crash handlers, uninstallers, installers, redistributables and
 //!   anti-cheat setup programs never count as the game running.
-//! - Game Lobby's own executable is ignored.
+//! - GameLobbies's own executable is ignored.
 //! - A matched process only counts while it owns a play window
 //!   (`platform::is_play_window`: visible, not DWM-cloaked, not a tool window, an owner-less
 //!   or app window with a real size; minimized counts). Windows are enumerated once per poll,
@@ -29,7 +29,7 @@
 //!   crash loses at most one interval. `endedAt` stays empty while it runs.
 //! - When the process has been gone for [`EXIT_GRACE_MS`] the session is closed at the last
 //!   time it was seen. A gap longer than that (e.g. the PC slept) also splits the session.
-//! - A Game Lobby launch waits in the `launching` state for up to [`START_TIMEOUT_MS`].
+//! - A GameLobbies launch waits in the `launching` state for up to [`START_TIMEOUT_MS`].
 //!
 //! Locking: the session state (`Tracker::sessions`) may be held while taking the database
 //! lock, never the other way round. The install-folder snapshot (`Tracker::targets`) is a leaf
@@ -202,7 +202,7 @@ pub struct PathGuard {
     /// Trees no game is installed in (the Windows folder).
     pub forbidden: Vec<String>,
     pub launchers: Vec<Launcher>,
-    /// Game Lobby's own executable.
+    /// GameLobbies's own executable.
     pub self_exe: Option<String>,
 }
 
@@ -472,7 +472,7 @@ impl Targets {
 #[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Source {
-    /// Started from Game Lobby.
+    /// Started from GameLobbies.
     Launch,
     /// Found running (started from a store client, a shortcut, ...).
     Detected,
@@ -510,7 +510,7 @@ pub struct RunningGame {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Effect {
-    /// A Game Lobby launch was first seen running: set `lastPlayed`.
+    /// A GameLobbies launch was first seen running: set `lastPlayed`.
     MarkPlayed { game_id: String, at: i64 },
     /// Store the session so far (inserting it when `session_id` is `None`) and add `credit`
     /// seconds to the game's playtime.
@@ -616,7 +616,7 @@ impl Sessions {
         self.entries.contains_key(game_id)
     }
 
-    /// A Game Lobby launch: wait for the game's process. No-op if it is already tracked.
+    /// A GameLobbies launch: wait for the game's process. No-op if it is already tracked.
     pub fn launch(&mut self, game_id: &str, now: i64) {
         if !self.entries.contains_key(game_id) {
             self.entries.insert(
@@ -880,7 +880,7 @@ pub fn apply(conn: &Connection, sessions: &mut Sessions, effects: Vec<Effect>) {
 // ---------------------------------------------------------------------------
 // The monitor
 
-/// A process Game Lobby started for a game (emulator launches).
+/// A process GameLobbies started for a game (emulator launches).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WatchedProcess {
     pub pid: u32,
@@ -907,7 +907,7 @@ pub fn watched_running(
 #[derive(Default)]
 pub struct Tracker {
     sessions: Mutex<Sessions>,
-    /// Emulator processes started by Game Lobby, by game id (a leaf lock).
+    /// Emulator processes started by GameLobbies, by game id (a leaf lock).
     watched: Mutex<HashMap<String, WatchedProcess>>,
     targets: Mutex<Arc<Targets>>,
     /// False when the library changed since `targets` was built.
@@ -977,7 +977,7 @@ impl Tracker {
             .clone()
     }
 
-    /// A game was launched from Game Lobby. Returns false when it can't be tracked (tracking
+    /// A game was launched from GameLobbies. Returns false when it can't be tracked (tracking
     /// off, the game excluded, or no usable install folder); the caller then just marks it
     /// played.
     pub fn watch(&self, db: &Db, game_id: &str, settings: &Settings) -> bool {
@@ -1000,7 +1000,7 @@ impl Tracker {
         self.watched.lock().unwrap_or_else(|p| p.into_inner())
     }
 
-    /// An emulator Game Lobby started for `game_id` (process `pid`, executable `exe`).
+    /// An emulator GameLobbies started for `game_id` (process `pid`, executable `exe`).
     /// Returns false when it can't be tracked (tracking off, the game excluded); the caller
     /// then just marks it played. The session ends when that process exits.
     pub fn watch_process(&self, game_id: &str, pid: u32, exe: &str, settings: &Settings) -> bool {
@@ -1167,7 +1167,7 @@ mod tests {
                 ),
                 launcher(r"C:\Program Files (x86)\Battle.net", &[]),
             ],
-            self_exe: Some(n(r"C:\Users\me\AppData\Local\Game Lobby\game-lobby.exe")),
+            self_exe: Some(n(r"C:\Users\me\AppData\Local\GameLobbies\GameLobbies.exe")),
         }
     }
 
@@ -1309,7 +1309,7 @@ mod tests {
                     &[r"C:\Program Files (x86)\Steam\steamapps\common"],
                 ),
                 game("root", &[r"D:\"]),
-                game("lobby", &[r"C:\Users\me\AppData\Local\Game Lobby"]),
+                game("lobby", &[r"C:\Users\me\AppData\Local\GameLobbies"]),
                 uninstalled,
             ],
             &g,
@@ -1323,7 +1323,7 @@ mod tests {
             r"D:\Games\Collection\launcher.exe",
             r"C:\Program Files (x86)\Steam\steamapps\common\Other\other.exe",
             r"D:\Games\CollectionX\nope.exe",
-            r"C:\Users\me\AppData\Local\Game Lobby\game-lobby.exe",
+            r"C:\Users\me\AppData\Local\GameLobbies\GameLobbies.exe",
             r"D:\random.exe",
         ]);
         let found = targets.attribute(&processes, &g, &all_pids(&processes));
@@ -1336,7 +1336,7 @@ mod tests {
         assert!(targets
             .attribute(&helpers, &g, &all_pids(&helpers))
             .is_empty());
-        // Game Lobby's own process never counts, even inside a game's install folder.
+        // GameLobbies's own process never counts, even inside a game's install folder.
         assert!(targets.has_game("lobby") && !found.contains_key("lobby"));
     }
 
@@ -1739,7 +1739,7 @@ mod tests {
         assert!(targets
             .attribute(&processes, &g, &all_pids(&processes))
             .is_empty());
-        // Only the process Game Lobby started (pid and exe both match) counts.
+        // Only the process GameLobbies started (pid and exe both match) counts.
         let watched: HashMap<String, WatchedProcess> = [(
             "rom".to_string(),
             WatchedProcess {

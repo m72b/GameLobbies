@@ -596,7 +596,7 @@ pub fn format_summary(summary: &Summary, format: Format) -> String {
     fields.push((
         "Started",
         if summary.source == "launch" {
-            "Launched from Game Lobby".into()
+            "Launched from GameLobbies".into()
         } else {
             "Detected running".into()
         },
@@ -604,7 +604,7 @@ pub fn format_summary(summary: &Summary, format: Format) -> String {
     if summary.interrupted {
         fields.push((
             "Note on timing",
-            "Game Lobby closed unexpectedly; the end is when the game was last seen running."
+            "GameLobbies closed unexpectedly; the end is when the game was last seen running."
                 .into(),
         ));
     }
@@ -1355,7 +1355,7 @@ mod tests {
         };
         assert_eq!(
             format_summary(&summary, Format::Text),
-            "Hollow Knight — play session\nDate: Sat 14 Nov 2026\nTime: 13:00 – 15:07 (UTC+01:00)\nDuration: 2h 7m\nPlatform: Steam\nStarted: Launched from Game Lobby\n\nNote:\nBeat *Hornet*\nfinally\n"
+            "Hollow Knight — play session\nDate: Sat 14 Nov 2026\nTime: 13:00 – 15:07 (UTC+01:00)\nDuration: 2h 7m\nPlatform: Steam\nStarted: Launched from GameLobbies\n\nNote:\nBeat *Hornet*\nfinally\n"
         );
         let md = format_summary(&summary, Format::Markdown);
         assert!(md.starts_with("# Hollow Knight — play session\n\n- **Date:** Sat 14 Nov 2026\n"));

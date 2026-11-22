@@ -125,7 +125,7 @@ export function LaunchOptionsDialog({ title, routeLabel, ...editor }: Parameters
 
 /**
  * The game page's tools for one route: its name (display only), its launch options (checked and
- * confirmed in a Windows dialog by Game Lobby; for games started from their own .exe and for
+ * confirmed in a Windows dialog by GameLobbies; for games started from their own .exe and for
  * custom launchers with a program) and unlinking it into a game of its own (with a preview first).
  */
 export function RouteToolPanel({ tool, route, launchers, canUnlink, onRename, onArgs, onArgsPending, onArgsCheck, onUnlinkPreview, onUnlink, onClose }: {

@@ -56,7 +56,7 @@
 //!     (`launch::direct_route`): every check of that route applies, its launch options are the
 //!     game's own `.exe` options, and the template is never used. Identifier targets can't start
 //!     directly, so an `openFirst` launcher can't use them ([`validate`]); a folder target is
-//!     refused at Play with a message (a folder isn't something Game Lobby starts by itself).
+//!     refused at Play with a message (a folder isn't something GameLobbies starts by itself).
 //!
 //!   Changing the mode changes what runs, so it is confirmed like a program change
 //!   ([`needs_confirmation`]).
@@ -809,7 +809,7 @@ pub fn confirmation_prompt(l: &CustomLauncher) -> Result<String> {
 Program:
   {}
 
-Game Lobby opens this program on its own (no arguments) when you play one of its games and it isn't running, waits until you continue, then starts the game directly from its own file: an .exe or shortcut like a game in your library folders, a ROM with its emulator. Nothing is passed to this program, and the game gets the same checks as when it is started without a launcher.
+GameLobbies opens this program on its own (no arguments) when you play one of its games and it isn't running, waits until you continue, then starts the game directly from its own file: an .exe or shortcut like a game in your library folders, a ROM with its emulator. Nothing is passed to this program, and the game gets the same checks as when it is started without a launcher.
 
 Any game in your library can then be linked to this launcher without asking again (except another launcher's games, which always ask); it starts the same way, from that game's own file.
 
@@ -838,7 +838,7 @@ If you give the launcher games folders, they are also searched for emulators, wh
     // Right after the program, so a long argument list can't push it out of the dialog.
     let kinds = kinds_text(&l.kinds()?);
     Ok(format!(
-        "Save this launcher?\n\nProgram:\n  {}\n\nAny game in your library can then be linked to this launcher without asking again; it runs this command with that game's own {kinds}.\n\nArguments (one per line; {TARGET} is {what}):\n{}\n\nWorking folder:\n  {}\n\nName: {}\n\nGame Lobby runs exactly this whenever you play one of this launcher's games. If you give the launcher games folders, they are also searched for emulators, which are added to your emulator list with their standard settings. Save it only if you set it up yourself.",
+        "Save this launcher?\n\nProgram:\n  {}\n\nAny game in your library can then be linked to this launcher without asking again; it runs this command with that game's own {kinds}.\n\nArguments (one per line; {TARGET} is {what}):\n{}\n\nWorking folder:\n  {}\n\nName: {}\n\nGameLobbies runs exactly this whenever you play one of this launcher's games. If you give the launcher games folders, they are also searched for emulators, which are added to your emulator list with their standard settings. Save it only if you set it up yourself.",
         crate::validation::escape_for_prompt(&l.executable),
         crate::links::numbered(&argv),
         crate::validation::escape_for_prompt(&folder),
@@ -1285,7 +1285,7 @@ pub fn assign_prompt_with(
     // is kept short enough for the dialog (`links::MAX_CONFIRM_CHARS`), and a second copy of a
     // long target would push the options off it.
     Ok(format!(
-        "Game Lobby will run:\n  {}\n\nGames you link to this launcher later run the same way, each with its own {kinds}, without asking again until the launcher's command changes.\n\nArguments (one per line, with the game's {what}):\n{}\n\nWorking folder:\n  {}\n\nFor the game: {title}\nLauncher: {name}\n\nPlay will use {name} from now on.{note} The game's current way to start stays under Play from, and you can remove {name} from the game page at any time.",
+        "GameLobbies will run:\n  {}\n\nGames you link to this launcher later run the same way, each with its own {kinds}, without asking again until the launcher's command changes.\n\nArguments (one per line, with the game's {what}):\n{}\n\nWorking folder:\n  {}\n\nFor the game: {title}\nLauncher: {name}\n\nPlay will use {name} from now on.{note} The game's current way to start stays under Play from, and you can remove {name} from the game page at any time.",
         crate::validation::escape_for_prompt(&l.executable),
         crate::links::numbered(&argv),
         crate::validation::escape_for_prompt(&folder),
@@ -1328,7 +1328,7 @@ fn open_first_assign_prompt(
         "Games you link to this launcher later start the same way, each from its own file, without asking again until the launcher's settings change."
     };
     format!(
-        "When you play this game, Game Lobby opens:\n  {}\non its own (no arguments) if it isn't running, and waits until you continue. Then it starts the game {how}:\n  {}{options}\n\nWorking folder (for the launcher):\n  {}\n\n{later}\n\nFor the game: {title}\nLauncher: {name}\n\nPlay will use {name} from now on. The game's current way to start stays under Play from, and you can remove {name} from the game page at any time.",
+        "When you play this game, GameLobbies opens:\n  {}\non its own (no arguments) if it isn't running, and waits until you continue. Then it starts the game {how}:\n  {}{options}\n\nWorking folder (for the launcher):\n  {}\n\n{later}\n\nFor the game: {title}\nLauncher: {name}\n\nPlay will use {name} from now on. The game's current way to start stays under Play from, and you can remove {name} from the game page at any time.",
         crate::validation::escape_for_prompt(&l.executable),
         crate::validation::escape_for_prompt(&c.target),
         crate::validation::escape_for_prompt(&working_folder(l)),
@@ -1621,7 +1621,7 @@ fn table_columns(conn: &Connection, table: &str) -> Result<std::collections::Has
 // Confirmed launch commands
 //
 // When the user confirms a launcher in its native save dialog (`launchers_save`), or confirms
-// linking a game to it ([`assign_prompt`]), Game Lobby remembers exactly what was shown: the
+// linking a game to it ([`assign_prompt`]), GameLobbies remembers exactly what was shown: the
 // program, the argument template, the working folder and the target kinds (table
 // `launcher_confirmed`, one row per launcher). Linking another game of the library to that
 // launcher then needs no dialog, because it runs nothing new: the same command, with the game's
@@ -3143,10 +3143,10 @@ mod tests {
         assert!(prompt.contains(&format!("  2. {}", game_exe.to_string_lossy())));
 
         // A title can't fake the dialog: the facts come first, and the title is one clean line.
-        let spoof = "Fine\n\nGame Lobby will run:\n  safe.exe\u{202e}\t\u{7}";
+        let spoof = "Fine\n\nGameLobbies will run:\n  safe.exe\u{202e}\t\u{7}";
         let prompt = assign_prompt(&l, spoof, &candidates[0], &[]).unwrap();
         let first: Vec<&str> = prompt.lines().take(7).collect();
-        assert_eq!(first[0], "Game Lobby will run:");
+        assert_eq!(first[0], "GameLobbies will run:");
         assert_eq!(first[1], format!("  {}", exe.to_string_lossy()));
         assert!(
             first[3].starts_with("Games you link to this launcher later"),

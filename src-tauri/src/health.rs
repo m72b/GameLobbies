@@ -324,7 +324,7 @@ pub fn check_replacement(original: &Subject, picked: &Path) -> Result<()> {
     Ok(())
 }
 
-/// The route as it is after its file moved to `new`. `fresh` is the route Game Lobby builds for
+/// The route as it is after its file moved to `new`. `fresh` is the route GameLobbies builds for
 /// the new file when it is a shortcut (`local::game_for_file`).
 fn relocated(
     old: &GameRoute,

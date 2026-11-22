@@ -33,7 +33,7 @@ function UncertainRomItem({ item, apply, busy }: ItemProps<'uncertain-rom'>) {
   const [emulator, setEmulator] = useState(item.details.emulators.length === 1 ? item.details.emulators[0].id : '')
   const systems = item.details.systems.map(system => system.name).join(', ')
   return <>
-    <p className="muted-text">This file’s type ({systems}) is used by several systems, so Game Lobby can’t tell which emulator plays it. Choose one; you can change it later on the game’s page.</p>
+    <p className="muted-text">This file’s type ({systems}) is used by several systems, so GameLobbies can’t tell which emulator plays it. Choose one; you can change it later on the game’s page.</p>
     <div className="root-path" title={item.details.path}>{item.details.path}</div>
     {item.details.emulators.length === 0
       ? <p className="muted-text">None of your emulators runs {systems}. Add one (Settings → Emulators), then rescan.</p>

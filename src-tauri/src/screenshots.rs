@@ -552,7 +552,7 @@ pub fn protocol<R: Runtime>(
     ctx: UriSchemeContext<'_, R>,
     request: Request<Vec<u8>>,
 ) -> Response<Cow<'static, [u8]>> {
-    // Only Game Lobby's own window reads screenshots; a sign-in window's remote page gets 403.
+    // Only GameLobbies's own window reads screenshots; a sign-in window's remote page gets 403.
     if !crate::windows::is_main_label(ctx.webview_label()) {
         return crate::windows::forbidden_response();
     }
@@ -698,7 +698,7 @@ pub async fn screenshots_import_steam(
     Ok(result)
 }
 
-/// Removes Game Lobby's copy of a screenshot (the original file is never touched).
+/// Removes GameLobbies's copy of a screenshot (the original file is never touched).
 #[tauri::command]
 pub async fn screenshots_remove(
     app: AppHandle,

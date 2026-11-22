@@ -198,7 +198,7 @@ pub async fn emulators_list(state: State<'_, AppState>) -> CmdResult<Vec<Emulato
 
 /// Creates or updates a profile. Fields left out keep their stored value (`systems`,
 /// `enabled`); `source`, `detectedAs`, `available` and `needsConfiguration` are managed by
-/// Game Lobby and ignored here. The executable must be the stored one or one just chosen
+/// GameLobbies and ignored here. The executable must be the stored one or one just chosen
 /// with `emulators_browse_executable`, and new or changed arguments must pass
 /// `launch::check_template` (see `emulators::accept_renderer_profile`).
 #[tauri::command]

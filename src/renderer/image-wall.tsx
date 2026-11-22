@@ -153,7 +153,7 @@ export function ImageWall({ game, igdb, shots, onShots }: { game: Game; igdb: Ig
       <button type="button" className="wall-empty" onClick={() => void add(false)} disabled={busy}>
         <ImagePlus size={22} />
         <b>Add your screenshots</b>
-        <small>PNG, JPEG, WebP, GIF or BMP. Copies are kept in Game Lobby; your files stay where they are.</small>
+        <small>PNG, JPEG, WebP, GIF or BMP. Copies are kept in GameLobbies; your files stay where they are.</small>
       </button>
       {steam && <button type="button" className="link-button wall-steam-link" onClick={() => void add(true)} disabled={busy}>Import from Steam</button>}
       {note && <div className="wall-note" role="status">{note}</div>}
@@ -188,7 +188,7 @@ export function ImageWall({ game, igdb, shots, onShots }: { game: Game; igdb: Ig
     </>}
     {confirm && <div className="modal-scrim"><div className="modal" role="alertdialog" aria-label="Remove screenshot">
       <div className="modal-head"><h2>Remove screenshot</h2><button type="button" aria-label="Close" onClick={() => setConfirm(null)}><X size={17} /></button></div>
-      <p className="muted-text">This removes Game Lobby's copy of the screenshot. The original file on your PC is not changed.</p>
+      <p className="muted-text">This removes GameLobbies's copy of the screenshot. The original file on your PC is not changed.</p>
       <div className="modal-actions"><button className="secondary-button" onClick={() => setConfirm(null)}>Cancel</button><button className="primary-button" onClick={() => void remove(confirm)}>Remove</button></div>
     </div></div>}
     {open !== null && lightboxImages.length > 0 && <Lightbox images={lightboxImages} index={Math.min(open, lightboxImages.length - 1)} onIndex={setOpen} onClose={closeLightbox} />}

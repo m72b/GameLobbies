@@ -133,7 +133,7 @@ export function ApiKeysSection({ keys }: { keys: ApiKeys }) {
   const [confirming, setConfirming] = useState<KeyId | null>(null)
   return <>
     <div className="settings-card">
-      <div className="card-heading"><div><h3>Optional keys</h3><p>Game Lobby works without any of these. Each one unlocks extra information or art from a free service. Keys are encrypted by Windows, are never shown again after saving, and never leave this PC except to the service they belong to.</p></div><button className="primary-button" onClick={() => openSheet()}><KeyRound size={15} /> Add keys</button></div>
+      <div className="card-heading"><div><h3>Optional keys</h3><p>GameLobbies works without any of these. Each one unlocks extra information or art from a free service. Keys are encrypted by Windows, are never shown again after saving, and never leave this PC except to the service they belong to.</p></div><button className="primary-button" onClick={() => openSheet()}><KeyRound size={15} /> Add keys</button></div>
       {keyOrder.map(id => {
         const { state, label } = keys.summary[id]
         const saved = state !== 'unset'

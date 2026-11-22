@@ -1238,7 +1238,7 @@ pub(crate) mod tests {
             static COUNTER: AtomicUsize = AtomicUsize::new(0);
             // The long form, as real roots are stored (CI runners have an 8.3 TEMP).
             let dir = crate::platform::long_path(&std::env::temp_dir()).join(format!(
-                "gamelobby-test-{name}-{}-{}",
+                "gamelobbies-test-{name}-{}-{}",
                 std::process::id(),
                 COUNTER.fetch_add(1, Ordering::SeqCst)
             ));

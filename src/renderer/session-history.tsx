@@ -75,10 +75,10 @@ export function SessionHistory({ gameId, title, running, onClose }: { gameId?: s
       </div>
       <details className="sh-about">
         <summary>About play history</summary>
-        <p>Sessions are recorded while Game Lobby is running: a game launched from Game Lobby, or (with detection on) one whose process is seen with a game window. Sessions that start and end while Game Lobby is closed aren't recorded. Games without a visible window or whose process isn't recognized can't be detected.</p>
-        <p>If Game Lobby closes unexpectedly (a crash or the PC shutting down), the session is ended at the last time the game was seen running and marked <b>Interrupted</b>. Corrected sessions are marked <b>Edited</b>; editing or deleting a session changes the game's playtime by the same amount.</p>
-        <p>An <b>Added from Steam</b> (or <b>Added from GOG</b>) entry is not a session: it is the part of the store's playtime for the game that Game Lobby did not track (the store's total minus what Game Lobby recorded), dated at the last sync. It can't be edited, deleted or shared, and it isn't counted as a session.</p>
-        <p>History, notes and screenshot links are stored only on this PC, in the library database in Game Lobby's app data folder, and are included in library backups (Export library). Nothing is sent anywhere unless you copy, save or open a link.</p>
+        <p>Sessions are recorded while GameLobbies is running: a game launched from GameLobbies, or (with detection on) one whose process is seen with a game window. Sessions that start and end while GameLobbies is closed aren't recorded. Games without a visible window or whose process isn't recognized can't be detected.</p>
+        <p>If GameLobbies closes unexpectedly (a crash or the PC shutting down), the session is ended at the last time the game was seen running and marked <b>Interrupted</b>. Corrected sessions are marked <b>Edited</b>; editing or deleting a session changes the game's playtime by the same amount.</p>
+        <p>An <b>Added from Steam</b> (or <b>Added from GOG</b>) entry is not a session: it is the part of the store's playtime for the game that GameLobbies did not track (the store's total minus what GameLobbies recorded), dated at the last sync. It can't be edited, deleted or shared, and it isn't counted as a session.</p>
+        <p>History, notes and screenshot links are stored only on this PC, in the library database in GameLobbies's app data folder, and are included in library backups (Export library). Nothing is sent anywhere unless you copy, save or open a link.</p>
       </details>
       {error && <div className="form-error" role="alert">{error}</div>}
       <div className="sh-list">
@@ -106,7 +106,7 @@ export function SessionHistory({ gameId, title, running, onClose }: { gameId?: s
               <div className="sh-tags">
                 <span className="gp-tag">{sourceLabel(session.source)}</span>
                 {live && <span className="gp-tag sh-running">{isRunning ? 'Running' : 'In progress'}</span>}
-                {session.interrupted && <span className="gp-tag sh-warn" title="Game Lobby closed unexpectedly; the end is the last time the game was seen running.">Interrupted</span>}
+                {session.interrupted && <span className="gp-tag sh-warn" title="GameLobbies closed unexpectedly; the end is the last time the game was seen running.">Interrupted</span>}
                 {session.edited && <span className="gp-tag" title="Start or end corrected by hand">Edited</span>}
               </div>
               <span className="gp-dur">{isRunning ? <><span className="gp-live-dot" /> {formatClock(elapsedSeconds(session.startedAt, now))}</> : formatSession(session.seconds)}</span>

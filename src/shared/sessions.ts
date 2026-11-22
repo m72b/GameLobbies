@@ -7,13 +7,13 @@ import type { PlaySource } from './types'
 export interface SessionShot { id: string; src: string }
 /**
  * One play session in the history view. Times are ms epoch; `endedAt` is absent while the
- * session is in progress. `edited`: start or end corrected by hand. `interrupted`: Game Lobby
+ * session is in progress. `edited`: start or end corrected by hand. `interrupted`: GameLobbies
  * closed unexpectedly (crash, shutdown); the end is the last time the game was seen running.
  */
 export interface SessionEntry { id: number; gameId: string; gameTitle: string; startedAt: number; endedAt?: number; seconds: number; source: PlaySource; edited: boolean; interrupted: boolean; note?: string; screenshots: SessionShot[] }
 export interface SessionCursor { startedAt: number; id: number }
 /**
- * The read-only "Added from Steam" entry: the hours Steam has that Game Lobby did not track
+ * The read-only "Added from Steam" entry: the hours Steam has that GameLobbies did not track
  * (`seconds`, always above zero), dated at the last sync. Not a session: it has no id, cannot be
  * edited, deleted, shared or exported, and is not counted in any session total.
  */
@@ -87,4 +87,4 @@ export function formatRange(startedAt: number, endedAt: number | undefined, cloc
 }
 
 /** How a session started, for labels. */
-export const sourceLabel = (source: PlaySource) => source === 'launch' ? 'Launched from Game Lobby' : 'Detected'
+export const sourceLabel = (source: PlaySource) => source === 'launch' ? 'Launched from GameLobbies' : 'Detected'

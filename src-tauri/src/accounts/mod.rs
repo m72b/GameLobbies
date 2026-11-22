@@ -100,7 +100,7 @@ impl AccountStore {
     }
 }
 
-/// How Game Lobby uses a store: its account (owned games, store playtime) or only the games
+/// How GameLobbies uses a store: its account (owned games, store playtime) or only the games
 /// installed on this PC.
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
 #[serde(rename_all = "lowercase")]

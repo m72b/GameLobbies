@@ -170,9 +170,9 @@ export function GamePage({ game, index, settings, launchers, running, libraryVer
   const totalSeconds = stats?.totalSeconds ?? game.playtimeSeconds ?? game.playtimeMinutes * 60
   const lastPlayed = stats?.lastPlayed ?? game.lastPlayed
   const installFolder = game.routes.find(item => item.installPath)?.installPath
-  const sourceLabel = (source: string) => source === 'launch' ? 'Launched from Game Lobby' : 'Detected'
+  const sourceLabel = (source: string) => source === 'launch' ? 'Launched from GameLobbies' : 'Detected'
   const hasLiveRow = sessions.some(item => !item.endedAt)
-  // Steam's hours that Game Lobby did not track: one read-only entry, never a session.
+  // Steam's hours that GameLobbies did not track: one read-only entry, never a session.
   const steamEntry = additionOf(game, stats?.store)
   const activityRows = mergeActivity(sessions, steamEntry ? [steamEntry] : [])
   const menuItems: Array<[string, () => void]> = [
@@ -251,7 +251,7 @@ export function GamePage({ game, index, settings, launchers, running, libraryVer
         <div className="gp-stat"><span>Last two weeks</span><b>{formatTotal(stats?.lastTwoWeeksSeconds ?? 0)}</b></div>
       </div>
       <div className={'gp-track' + (!settings.tracking ? ' off' : running ? ' on' : '')}
-        title={running ? (running.exe ? 'Tracking ' + running.exe + ' · ' : '') + (running.source === 'detected' ? 'detected running' : 'launched from Game Lobby') : undefined}>
+        title={running ? (running.exe ? 'Tracking ' + running.exe + ' · ' : '') + (running.source === 'detected' ? 'detected running' : 'launched from GameLobbies') : undefined}>
         {settings.tracking && running && <span className="gp-live-dot" />}
         {!settings.tracking ? 'Tracking off' : running ? 'Tracking' : 'Not running'}
       </div>

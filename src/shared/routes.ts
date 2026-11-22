@@ -75,7 +75,7 @@ export function argsSupport(route: Pick<GameRoute, 'sourceId' | 'store' | 'launc
     return { ok: true }
   }
   if (route.sourceId === 'rom' || route.emulatorId) return { ok: false, reason: 'ROMs start with their emulator’s arguments. Change them under Settings → Emulators.' }
-  if (route.sourceId !== 'local') return { ok: false, reason: `${route.store} starts this game itself, so Game Lobby can’t pass launch options to it. Set them in ${route.store} instead.` }
+  if (route.sourceId !== 'local') return { ok: false, reason: `${route.store} starts this game itself, so GameLobbies can’t pass launch options to it. Set them in ${route.store} instead.` }
   const target = route.launchTarget.trim()
   if (!/^[a-z]:[\\/]/i.test(target) || !/\.exe$/i.test(target)) return { ok: false, reason: 'Only a game started from its own .exe can have launch options here (not a shortcut, folder or link).' }
   return { ok: true }

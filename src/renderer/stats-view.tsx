@@ -48,7 +48,7 @@ function TopTable({ data, onOpen }: { data: StatsSummary; onOpen: (gameId: strin
       <button onClick={() => sortBy(next)} title={'Sort by ' + label.toLowerCase()}>{label}{active && (direction === 'asc' ? <ArrowUp size={12} /> : <ArrowDown size={12} />)}</button>
     </div>
   }
-  if (!data.top.length) return <Empty title="No play time yet" text="Games you play from Game Lobby, and Steam or GOG playtime once an account is set up under Settings, show up here." />
+  if (!data.top.length) return <Empty title="No play time yet" text="Games you play from GameLobbies, and Steam or GOG playtime once an account is set up under Settings, show up here." />
   const biggest = Math.max(...rows.map(row => row.percent), 0)
   return <div className="top-table" role="table" aria-label="Top play time">
     <div className="top-row top-header" role="row">
@@ -131,7 +131,7 @@ export function StatsView({ onClose, onOpenGame, say }: { onClose(): void; onOpe
         <Tile label="Average play time" value={playtime.playedGames ? formatTotal(playtime.averageSeconds) : '–'} note={'per game with play time (' + playtime.playedGames.toLocaleString() + ')'} title="Total play time divided by the games you have played for at least a moment. Unplayed games are not averaged in." />
         <Tile label="Total install size" value={installSize.known ? formatBytes(installSize.bytes) : '–'} note={installSize.unknown ? plural(installSize.unknown, 'installed game') + ' with unknown size' + (installSize.known ? ', not counted' : '') : installSize.partial ? 'some sizes are lower bounds' : undefined} title="Sum of the known sizes of installed games. Rescan sizes in Storage to measure more." />
       </div>
-      {hint && playtime.storeSeconds > 0 && <p className="stats-foot">Play time {hint}: {formatTotal(playtime.storeSeconds)} of the total is hours Steam or GOG report beyond what Game Lobby tracked. Per game, the larger of the two counts, so time is never counted twice.</p>}
+      {hint && playtime.storeSeconds > 0 && <p className="stats-foot">Play time {hint}: {formatTotal(playtime.storeSeconds)} of the total is hours Steam or GOG report beyond what GameLobbies tracked. Per game, the larger of the two counts, so time is never counted twice.</p>}
     </>
     if (tab === 'Completion') {
       const total = completion.played + completion.notPlayed

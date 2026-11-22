@@ -817,7 +817,7 @@ pub struct RepairNotice {
 
 impl RepairNotice {
     pub fn message(&self) -> String {
-        let mut text = String::from("Game Lobby found damage in its library database.\n\n");
+        let mut text = String::from("GameLobbies found damage in its library database.\n\n");
         if self.replaced {
             text.push_str(
                 "It was repaired automatically and the repaired library is now in use.\n",

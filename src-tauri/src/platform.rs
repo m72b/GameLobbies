@@ -852,7 +852,7 @@ mod tests {
     #[test]
     fn version_resources_are_read_safely() {
         // A file without a version resource, a missing file and a real Windows program.
-        let dir = std::env::temp_dir().join(format!("gamelobby-test-ver-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("gamelobbies-test-ver-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let fake = dir.join("Cairn.exe");
         std::fs::write(&fake, b"MZ not really").unwrap();

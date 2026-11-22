@@ -92,7 +92,7 @@ pub struct OwnedList {
     pub apps: Vec<OwnedApp>,
     /// Steam's `playtime_forever` per app id, in seconds (it reports minutes). Only apps with
     /// time above zero, named or not. Kept in its own table ([`crate::stats`]), never merged
-    /// into the playtime Game Lobby tracks.
+    /// into the playtime GameLobbies tracks.
     pub playtime: HashMap<String, i64>,
     /// Steam's `rtime_last_played` per app id, in ms (it reports seconds). Only believable
     /// values (after 2000); kept with the playtime and never merged into tracked data.
@@ -215,7 +215,7 @@ pub async fn fetch_owned(
         .connect_timeout(CONNECT_TIMEOUT)
         .redirect(reqwest::redirect::Policy::none())
         .https_only(endpoint.https_only)
-        .user_agent(concat!("GameLobby/", env!("CARGO_PKG_VERSION")))
+        .user_agent(concat!("GameLobbies/", env!("CARGO_PKG_VERSION")))
         .build()
         .map_err(|_| FetchError::Network("the HTTP client could not start."))?;
     let response = http

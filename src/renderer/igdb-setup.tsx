@@ -79,7 +79,7 @@ export function IgdbSetup(p: IgdbSetupProps) {
       <li>
         <b>Register your application.</b> On the Applications tab choose "Register Your Application" and fill in:
         <dl className="igdb-values">
-          <dt>Name</dt><dd>Any name no one else uses, for example "Game Lobby" and your name.</dd>
+          <dt>Name</dt><dd>Any name no one else uses, for example "GameLobbies" and your name.</dd>
           <dt>OAuth Redirect URLs</dt><dd><code>{REDIRECT_URL}</code><CopyButton value={REDIRECT_URL} label="redirect URL" /> then choose Add.</dd>
           <dt>Category</dt><dd><code>{CATEGORY}</code><CopyButton value={CATEGORY} label="category name" /></dd>
           <dt>Client Type</dt><dd>Confidential (if Twitch asks for one).</dd>

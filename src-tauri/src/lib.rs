@@ -87,7 +87,7 @@ fn cover_protocol<R: Runtime>(
     ctx: UriSchemeContext<'_, R>,
     request: Request<Vec<u8>>,
 ) -> Response<Cow<'static, [u8]>> {
-    // Only Game Lobby's own window reads local files; a sign-in window's remote page gets 403.
+    // Only GameLobbies's own window reads local files; a sign-in window's remote page gets 403.
     if !windows::is_main_label(ctx.webview_label()) {
         return windows::forbidden_response();
     }
@@ -155,12 +155,12 @@ fn with_single_instance(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<t
         return builder;
     }
     builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
-        // A start by Windows' Run entry while Game Lobby already runs (e.g. started by hand just
+        // A start by Windows' Run entry while GameLobbies already runs (e.g. started by hand just
         // before sign-in finished) must not pop the window up.
         if autostart::started_by_autostart(&args) {
             return;
         }
-        log::info!("A second copy of Game Lobby was started; showing the running one.");
+        log::info!("A second copy of GameLobbies was started; showing the running one.");
         if let Err(e) = windows::focus_main(app) {
             log::warn!("Could not show the main window: {e}");
         }
@@ -210,7 +210,7 @@ pub fn run() {
             } else {
                 match db::migrate_from_electron(&data_dir) {
                     Ok(true) => {
-                        log::info!("Copied the library from the Electron build of Game Lobby.")
+                        log::info!("Copied the library from the Electron build of GameLobbies.")
                     }
                     Ok(false) => {}
                     Err(e) => log::error!("Could not copy the Electron library: {e:#}"),
@@ -443,7 +443,7 @@ pub fn run() {
             accounts::setup::setup_save,
         ]))
         .run(tauri::generate_context!())
-        .expect("error while running Game Lobby");
+        .expect("error while running GameLobbies");
 }
 
 #[cfg(test)]

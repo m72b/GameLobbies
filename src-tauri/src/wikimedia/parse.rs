@@ -59,7 +59,7 @@ impl Release {
     }
 }
 
-/// One Wikidata item with the claims Game Lobby uses.
+/// One Wikidata item with the claims GameLobbies uses.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Entity {
     pub qid: String,

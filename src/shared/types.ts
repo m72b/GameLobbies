@@ -17,12 +17,12 @@ export type Store = 'Steam' | 'Epic Games' | 'GOG' | 'EA app' | 'Battle.net' | '
  *   falls back to automatic. Change it with `library.setEmulator`.
  * - `system`: a `CatalogSystem.id` (`'ps2'`, `'switch'`, `'pc'`, ...).
  */
-export interface GameRoute { sourceId: string; store: Store; appId?: string; launchTarget: string; launchArgs?: string; installPath?: string; owned?: boolean; installed?: boolean; installStates?: Record<string, boolean>; playtimeMinutes?: number; lastPlayed?: number; emulatorId?: string; system?: string; /** A label only: the custom launcher whose games folder this local or ROM route was found in ("Play from" shows its name). Set by Game Lobby; saves must send it back unchanged. */ launcherId?: string; /** Added from the game page (`launchers.assign`): a `launcher:<id>` route made from another of the game's routes, or (on any other route) its `launcherId` label. `launchers.unassign` removes exactly that. Set by Game Lobby; saves must send it back unchanged. */ assigned?: boolean; /** The route's own name (library.renameRoute), shown after the store or launcher ("Xbox · Java Edition"). Display only: it never changes what runs. At most 60 characters. */ name?: string }
+export interface GameRoute { sourceId: string; store: Store; appId?: string; launchTarget: string; launchArgs?: string; installPath?: string; owned?: boolean; installed?: boolean; installStates?: Record<string, boolean>; playtimeMinutes?: number; lastPlayed?: number; emulatorId?: string; system?: string; /** A label only: the custom launcher whose games folder this local or ROM route was found in ("Play from" shows its name). Set by GameLobbies; saves must send it back unchanged. */ launcherId?: string; /** Added from the game page (`launchers.assign`): a `launcher:<id>` route made from another of the game's routes, or (on any other route) its `launcherId` label. `launchers.unassign` removes exactly that. Set by GameLobbies; saves must send it back unchanged. */ assigned?: boolean; /** The route's own name (library.renameRoute), shown after the store or launcher ("Xbox · Java Edition"). Display only: it never changes what runs. At most 60 characters. */ name?: string }
 export interface Game { id: string; title: string; cover?: string; defaultCover?: string; store: Store; genre?: string; playtimeMinutes: number; playtimeSeconds?: number; lastPlayed?: number; hidden: boolean; favorite: boolean; routes: GameRoute[] }
 /** `library.scan()` result. `local` is the library folder part, present when any folder was scanned (store scans and folder scans run side by side). */
 export interface LibraryStats { total: number; imported?: number; errors?: string[]; scannedAt?: number; local?: LocalScanSummary }
 /**
- * A store or launcher Game Lobby scans automatically (`library.stores()`). `id` is what
+ * A store or launcher GameLobbies scans automatically (`library.stores()`). `id` is what
  * `Settings.disabledStores` holds; `found` is the number of installed games the last scan found
  * (absent before the first scan); `error` is set when the last scan could not read it.
  */
@@ -42,13 +42,13 @@ export interface Settings { scanIntervalHours: number; posterWidth: number; show
   /** Include humor-flagged grids in SteamGridDB results. Default false. */
   steamGridDbHumor: boolean
   /**
-   * With `tracking` on, also detect installed games started outside Game Lobby (Steam, Epic,
-   * desktop shortcuts) and track their sessions. false = only games launched from Game Lobby
+   * With `tracking` on, also detect installed games started outside GameLobbies (Steam, Epic,
+   * desktop shortcuts) and track their sessions. false = only games launched from GameLobbies
    * are tracked. Default true.
    */
   detectExternalLaunches: boolean
   /**
-   * Game ids that are never detected or tracked; launching one from Game Lobby only updates
+   * Game ids that are never detected or tracked; launching one from GameLobbies only updates
    * `lastPlayed`. Distinct ids, each at most 512 characters, at most 5000. Default [].
    * Prefer `tracking.setExcluded(gameId, excluded)` to change a single game.
    */
@@ -56,11 +56,11 @@ export interface Settings { scanIntervalHours: number; posterWidth: number; show
   /** Check for a new release about 10 s after startup, at most once a day. Never installs without a click. Default true. */
   autoCheckUpdates: boolean
   minimizeOnLaunch: boolean
-  /** Start Game Lobby when Windows starts (a per-user Run entry; it starts minimized). Default false. */
+  /** Start GameLobbies when Windows starts (a per-user Run entry; it starts minimized). Default false. */
   launchOnBoot: boolean
   /** Minimizing the window hides it to the notification area (tray icon) instead of the taskbar. Default false. */
   minimizeToTray: boolean
-  /** The window close button hides the window to the tray; Game Lobby keeps running. Quit from the tray menu. Default false. */
+  /** The window close button hides the window to the tray; GameLobbies keeps running. Quit from the tray menu. Default false. */
   closeToTray: boolean
   /** Motion in the interface: always animate, follow Windows, short fades only, or no animation at all. Default "system". */
   motion: MotionPreference
@@ -225,7 +225,7 @@ export interface AddedLocalGame { gameId: string; games: Game[] }
  *   existing absolute local folder like `D:\Roms` (no network,
  *   `\\?\` or relative paths, no `.`/`..`, at most 1024 characters; not on a mapped network
  *   drive; not itself a link/junction; links in parent folders are resolved and the real location
- *   is checked and stored). Refused: the Windows folder, Roaming AppData and Game Lobby's data
+ *   is checked and stored). Refused: the Windows folder, Roaming AppData and GameLobbies's data
  *   folder (and anything in or above them); Program Files, ProgramData, the user profile, Public
  *   and Local AppData themselves (or a folder containing them; folders inside them are fine); for
  *   `emulators` roots also Downloads, Desktop and Temp (and anything in or above them). Overlap:
@@ -352,7 +352,7 @@ export interface EmulatorsAPI { list(): Promise<EmulatorProfile[]>; save(profile
  */
 /**
  * Library health (items arrive through `review.list` as `missing-file`, `health-duplicate` and `duplicate-route`).
- * Nothing here takes a path: a repair uses a location Game Lobby found itself (`useFound(id, index)` of
+ * Nothing here takes a path: a repair uses a location GameLobbies found itself (`useFound(id, index)` of
  * `details.candidates`) or one the user picks in a native dialog (`locate`, same file type only). No file is
  * ever deleted. Every call returns the open review items.
  * - check(): looks for missing and moved files and for duplicates (also done quickly after each scan).
@@ -409,11 +409,11 @@ export interface SteamGridDbKeyTest { ok: boolean; message: string }
  */
 export interface SteamGridDbCoverPage { covers: SteamGridDbCover[]; page: number; hasMore: boolean }
 export interface SteamGridDbAPI { status(): Promise<{ keySet: boolean }>; saveKey(key: string): Promise<{ keySet: boolean }>; testKey(): Promise<SteamGridDbKeyTest>; search(gameId: string, page?: number): Promise<SteamGridDbCoverPage>; searchHeroes(gameId: string, page?: number): Promise<SteamGridDbCoverPage>; searchLogos(gameId: string, page?: number): Promise<SteamGridDbCoverPage>; apply(gameId: string, url: string): Promise<Game[]>; fetchMissing(): Promise<SteamGridDbFetchSummary>; onFetched(callback: (summary: SteamGridDbFetchSummary) => void): () => void }
-/** How a play session started: from Game Lobby (`launch`) or found running (`detected`). */
+/** How a play session started: from GameLobbies (`launch`) or found running (`detected`). */
 export type PlaySource = 'launch' | 'detected'
 /**
- * A game Game Lobby is tracking right now.
- * - `state`: `launching` = launched from Game Lobby, waiting (up to 10 min) for its process;
+ * A game GameLobbies is tracking right now.
+ * - `state`: `launching` = launched from GameLobbies, waiting (up to 10 min) for its process;
  *   `running` = its process is running (stays `running` for ~30 s after the process exits).
  * - `startedAt`: ms epoch; the launch request time while launching, the session start while running.
  * - `sessionSeconds`: length of the current session when this was sent (0 while launching).
@@ -443,7 +443,7 @@ export interface PlayStats { totalSeconds: number; lastTwoWeeksSeconds: number; 
 /**
  * A game's playtime once a store's figure (Steam's `playtime_forever`) is counted. Computed by
  * the backend; never written to the game's tracked playtime or sessions.
- * - `seconds`: the store's figure. `trackedSeconds`: what Game Lobby recorded.
+ * - `seconds`: the store's figure. `trackedSeconds`: what GameLobbies recorded.
  * - `effectiveSeconds`: the larger of the two (never added). `addedSeconds`: `max(0, seconds - trackedSeconds)`.
  * - `lastPlayed`: the store's last-played time (ms); `effectiveLastPlayed`: the newer of that and the tracked one.
  * - `syncedAt`: ms of the last sync of the store's figures.
@@ -535,7 +535,7 @@ export type SettingsSection = 'updates' | 'cover-art' | 'metadata' | 'api-keys' 
  *   is off or the last check was under 24 h ago; never rejects. Main window only.
  * - last(): the update found by the last check in this run, or null (no request).
  * - install(): downloads the update found by the last check, verifies its signature, ends play
- *   sessions, backs up the library and starts the installer; Game Lobby then closes and restarts.
+ *   sessions, backs up the library and starts the installer; GameLobbies then closes and restarts.
  *   Rejects (nothing installed) when the signature does not match or the download fails.
  * - onReady: the installer is about to start (show "Restarting…").
  */
@@ -681,7 +681,7 @@ export interface IgdbAPI {
  *   is stored as PNG) and copies the chosen files. The same picture is stored once per game.
  * - importSteam(gameId): copies the game's screenshots from the local Steam client (needs a
  *   Steam route; read only; newest 200). Rejects when none are found.
- * - remove(id): deletes Game Lobby's copy only. setAsHero(id): uses a copy as the page hero.
+ * - remove(id): deletes GameLobbies's copy only. setAsHero(id): uses a copy as the page hero.
  * - onChanged fires `{ gameId }` after adds and removals.
  */
 /** `missing`: the stored file is gone (the row is kept); adding the same picture again restores it. */
@@ -753,7 +753,7 @@ export interface LobbyAPI {
   screenshots: ScreenshotsAPI
   notes: NotesAPI
   updates: UpdatesAPI
-  app: { quit(): Promise<void>; /** Fires the first time Game Lobby is brought back from the tray (one-time hint). */ onTrayHint(callback: () => void): () => void }
+  app: { quit(): Promise<void>; /** Fires the first time GameLobbies is brought back from the tray (one-time hint). */ onTrayHint(callback: () => void): () => void }
   /** Support tools. `report` is a redacted plain-text diagnostics report (no keys or tokens, user folder replaced); `openLogs` opens the fixed logs folder (the renderer passes no path). */
   diagnostics: { report(): Promise<string>; openLogs(): Promise<void> }
   /** Cached install sizes. `rescan` measures in the background (progress events) and rejects if one is running. `uninstall` only hands off to the game's launcher (never deletes files): the backend builds the link from the stored route. */

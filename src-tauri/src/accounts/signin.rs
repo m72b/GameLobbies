@@ -5,11 +5,11 @@
 //! **Steam signs in in the user's default web browser** (RFC 8252 style): Rust builds the
 //! OpenID start URL and opens exactly that https URL with the system browser; Steam returns the
 //! browser to a listener on `127.0.0.1:<random port>` ([`steam_openid::serve_return`]), which
-//! checks the answer, shows a fixed page, stops listening and brings Game Lobby forward. The
+//! checks the answer, shows a fixed page, stops listening and brings GameLobbies forward. The
 //! embedded window below was dropped for Steam: Steam Guard's phone approval never completed
 //! in it.
 //!
-//! **The sign-in window** (kept for later stores): Game Lobby's own window showing the store's
+//! **The sign-in window** (kept for later stores): GameLobbies's own window showing the store's
 //! real sign-in page, so the password goes only to the store. It is locked down before the page
 //! loads:
 //!
@@ -90,7 +90,7 @@ enum Method {
     Browser,
     /// In the user's default web browser; the user pastes the address GOG ends on (GOG).
     Paste,
-    /// In Game Lobby's locked-down sign-in window (Battle.net).
+    /// In GameLobbies's locked-down sign-in window (Battle.net).
     Window,
 }
 
@@ -335,7 +335,7 @@ pub async fn submit_code(app: &AppHandle, store: AccountStore, input: &str) -> R
                 Ok(f.id)
             }
             Some(f) if f.store == store => {
-                Err("Game Lobby is already checking a sign-in.".to_string())
+                Err("GameLobbies is already checking a sign-in.".to_string())
             }
             _ => Err(format!("Start the {} sign-in first.", store.name())),
         }
@@ -472,7 +472,7 @@ async fn start_browser(app: &AppHandle, store: AccountStore) -> Result<(), Strin
 }
 
 /// The browser came back to the listener: takes the answer once, checks it with Steam, ends
-/// the flight and brings Game Lobby forward. What the listener shows depends on the result.
+/// the flight and brings GameLobbies forward. What the listener shows depends on the result.
 async fn browser_return(app: &AppHandle, id: u64, url: Url) -> ReturnReply {
     let state = app.state::<AppState>();
     let taken = take_return(&mut lock(&state.accounts.flight), id, &url);
@@ -503,7 +503,7 @@ async fn browser_return(app: &AppHandle, id: u64, url: Url) -> ReturnReply {
         },
     };
     if let Err(e) = crate::windows::focus_main(app) {
-        log::warn!("Could not bring Game Lobby forward: {e}");
+        log::warn!("Could not bring GameLobbies forward: {e}");
     }
     reply
 }
@@ -633,7 +633,7 @@ async fn watch_window(app: &AppHandle, store: AccountStore, id: u64) {
                     });
                 }
                 if let Err(e) = crate::windows::focus_main(app) {
-                    log::warn!("Could not bring Game Lobby forward: {e}");
+                    log::warn!("Could not bring GameLobbies forward: {e}");
                 }
                 return;
             }
@@ -917,7 +917,7 @@ async fn open_window(
         .min_inner_size(400.0, 520.0)
         .center()
         .parent(&main)
-        .map_err(|_| SignInError::Window("it could not be attached to Game Lobby."))?
+        .map_err(|_| SignInError::Window("it could not be attached to GameLobbies."))?
         .incognito(true)
         .devtools(false)
         .disable_drag_drop_handler()
@@ -1321,7 +1321,7 @@ fn harden_webview2(
             .cast::<ICoreWebView2Settings3>()
             .and_then(|s| s.SetAreBrowserAcceleratorKeysEnabled(false))
             .map_err(|_| OLD_RUNTIME)?;
-        // No "save password?" or autofill prompts in Game Lobby's window.
+        // No "save password?" or autofill prompts in GameLobbies's window.
         if let Ok(settings) = settings.cast::<ICoreWebView2Settings4>() {
             let _ = settings.SetIsPasswordAutosaveEnabled(false);
             let _ = settings.SetIsGeneralAutofillEnabled(false);

@@ -43,7 +43,7 @@ export function SteamOwnedSetup({ status, busy, error, onSave, onRemove }: {
   const save = async () => { if (await onSave(cleanPaste(key), cleanPaste(steamId))) { setKey(''); setSteamId('') } }
   const remove = async () => { setConfirming(false); await onRemove() }
   return <div className="steam-owned">
-    <p className="muted-text">With a free Steam Web API key and your SteamID64, Game Lobby asks Steam for the games you own and adds the ones that aren't installed, so they show under All. Without a key only installed games are listed. The key and SteamID are encrypted by Windows and are not shown again.</p>
+    <p className="muted-text">With a free Steam Web API key and your SteamID64, GameLobbies asks Steam for the games you own and adds the ones that aren't installed, so they show under All. Without a key only installed games are listed. The key and SteamID are encrypted by Windows and are not shown again.</p>
     <ol className="igdb-steps">
       <li>Get a key at <a className="external-link" href={API_KEY_URL}>steamcommunity.com/dev/apikey</a>. Any domain name works, for example “localhost”.</li>
       <li>Find your SteamID64: on your <a className="external-link" href={ACCOUNT_URL}>Steam account page</a> it is shown as “Steam ID” under your account name. It is 17 digits and starts with 7656119.</li>

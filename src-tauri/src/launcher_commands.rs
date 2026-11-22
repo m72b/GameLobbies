@@ -1187,7 +1187,7 @@ mod tests {
             None,
             String::new(),
             |prompt| {
-                assert!(prompt.starts_with("Game Lobby will run:"), "{prompt}");
+                assert!(prompt.starts_with("GameLobbies will run:"), "{prompt}");
                 shown.set(shown.get() + 1);
                 async move { answer }
             },
@@ -1734,7 +1734,7 @@ mod tests {
         let shown = Cell::new(0);
         let ask = |prompt: String| {
             assert!(
-                prompt.starts_with("When you play this game, Game Lobby opens:"),
+                prompt.starts_with("When you play this game, GameLobbies opens:"),
                 "{prompt}"
             );
             assert!(prompt.contains("on its own (no arguments)"), "{prompt}");

@@ -63,7 +63,7 @@ export function SetupView({ info, accounts, keys, say, onDone }: { info: SetupIn
 
   return <div className="settings-view setup-view">
     <header className="settings-head">
-      <div className="brand"><GlMark size={12} className="gl-mark" />Set up Game Lobby</div>
+      <div className="brand"><GlMark size={12} className="gl-mark" />Set up GameLobbies</div>
       <ol className="setup-progress" aria-label="Setup steps">{steps.map((item, i) => <li key={item} className={i < index ? 'done' : i === index ? 'current' : ''} aria-current={i === index ? 'step' : undefined}><span>{stepTitles[item]}</span></li>)}</ol>
       <button type="button" className="link-button setup-skip" disabled={saving} onClick={() => void skipAll()}>Skip setup</button>
     </header>
@@ -73,7 +73,7 @@ export function SetupView({ info, accounts, keys, say, onDone }: { info: SetupIn
         <h1 tabIndex={-1}>{stepTitles[step]}</h1>
 
         {step === 'welcome' && <>
-          <p className="settings-description">Game Lobby puts the games from all your stores and folders in one library. It finds installed games on its own by reading each launcher's files on this PC; no account is needed for that.</p>
+          <p className="settings-description">GameLobbies puts the games from all your stores and folders in one library. It finds installed games on its own by reading each launcher's files on this PC; no account is needed for that.</p>
           <p className="muted-text">The next steps let you choose your stores, sign in to Steam, GOG or Battle.net to also list the games you own but haven't installed, add game folders, and add optional keys for cover art and game details. Every step can be skipped, and everything can be changed later in Settings.</p>
         </>}
 
@@ -113,10 +113,10 @@ export function SetupView({ info, accounts, keys, say, onDone }: { info: SetupIn
               {status.signedIn && !status.signingIn
                 ? <p className="setup-ok" role="status"><Check size={14} /> Signed in to {store.name}.</p>
                 : <p className="muted-text">{steamStore
-                  ? 'Your web browser opens steamcommunity.com. Sign in there (approve with Steam Guard as usual); when Steam confirms, the tab says so and Game Lobby comes back to the front.'
+                  ? 'Your web browser opens steamcommunity.com. Sign in there (approve with Steam Guard as usual); when Steam confirms, the tab says so and GameLobbies comes back to the front.'
                   : store.id === 'gog'
                     ? "Your web browser opens GOG's sign-in. Sign in any way GOG offers; then copy the address GOG ends on and paste it below."
-                    : 'A Game Lobby window opens with ' + store.name + "'s sign-in page. Sign in there; when the store's account page appears, the window closes by itself. If it never finishes, close it and choose Installed files only."}</p>}
+                    : 'A GameLobbies window opens with ' + store.name + "'s sign-in page. Sign in there; when the store's account page appears, the window closes by itself. If it never finishes, close it and choose Installed files only."}</p>}
               {status.notice && !status.notice.ok && <p className="key-row-problem" role="status">✗ {status.notice.message}</p>}
               <StoreSignIn accounts={accounts} status={status} />
               <SignInNote store={status.store} />
@@ -129,17 +129,17 @@ export function SetupView({ info, accounts, keys, say, onDone }: { info: SetupIn
         </>}
 
         {step === 'folders' && <>
-          <p className="settings-description">Add folders with PC games, ROMs or emulators, and Game Lobby scans them. Optional: skip this if your games all come from stores.</p>
+          <p className="settings-description">Add folders with PC games, ROMs or emulators, and GameLobbies scans them. Optional: skip this if your games all come from stores.</p>
           <LibraryFoldersSection scan={localScan} onOpenReview={() => say('Review what the scan found later in Settings → Review.')} say={say} />
         </>}
 
         {step === 'keys' && <>
-          <p className="settings-description">Optional free keys for cover art and game details. Game Lobby works without them.</p>
+          <p className="settings-description">Optional free keys for cover art and game details. GameLobbies works without them.</p>
           <ApiKeysSection keys={keys} />
         </>}
 
         {step === 'done' && <>
-          <p className="settings-description"><Sparkles size={15} className="setup-sparkle" /> Game Lobby now scans your stores and folders{accounts.statuses.some(s => s.signedIn && s.mode === 'account') ? ' and asks your signed-in stores for the games you own' : ''}.</p>
+          <p className="settings-description"><Sparkles size={15} className="setup-sparkle" /> GameLobbies now scans your stores and folders{accounts.statuses.some(s => s.signedIn && s.mode === 'account') ? ' and asks your signed-in stores for the games you own' : ''}.</p>
           <p className="muted-text">Change any of this later: stores and accounts in Settings → Accounts and Libraries, folders in Library folders, keys in API keys. Settings → Accounts also has Run setup again.</p>
         </>}
       </main>

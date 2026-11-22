@@ -8,7 +8,7 @@ use url::Url;
 
 pub const MAIN: &str = "main";
 
-/// Whether a webview may use the app's commands and local protocols: only Game Lobby's own
+/// Whether a webview may use the app's commands and local protocols: only GameLobbies's own
 /// window. Sign-in windows (`signin-<store>`) show remote store pages and get neither.
 pub fn is_main_label(label: &str) -> bool {
     label == MAIN
@@ -26,7 +26,7 @@ pub fn require_main<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) -> Resu
 }
 
 /// The error for a command called from another webview.
-pub const NOT_MAIN: &str = "This window may not use Game Lobby's commands.";
+pub const NOT_MAIN: &str = "This window may not use GameLobbies's commands.";
 
 /// The `403` a local protocol (`lobby-cover`, `lobby-shot`) returns to any webview but `main`.
 pub fn forbidden_response() -> tauri::http::Response<std::borrow::Cow<'static, [u8]>> {
@@ -114,7 +114,7 @@ pub const SETTINGS_SECTIONS: [&str; 5] =
 pub fn create(app: &AppHandle, mode: StartMode) -> tauri::Result<()> {
     let window = WebviewWindowBuilder::new(app, MAIN, WebviewUrl::App("index.html".into()))
         .visible(mode != StartMode::Hidden)
-        .title("Game Lobby")
+        .title("GameLobbies")
         .inner_size(1440.0, 900.0)
         .min_inner_size(800.0, 600.0)
         .decorations(false)
@@ -148,7 +148,7 @@ pub fn open_settings_at(app: &AppHandle, section: Option<&str>) -> tauri::Result
 }
 
 /// Brings the main window to the front: shown, unminimized and focused. Used when a second
-/// copy of Game Lobby is started. Creates the window if it has been closed.
+/// copy of GameLobbies is started. Creates the window if it has been closed.
 pub fn focus_main(app: &AppHandle) -> tauri::Result<()> {
     match app.get_webview_window(MAIN) {
         Some(window) => {
@@ -178,7 +178,7 @@ mod tests {
         assert!(!page("https://example.com/index.html"));
     }
 
-    /// Object.prototype is frozen in Game Lobby's own window by its first script (before any app
+    /// Object.prototype is frozen in GameLobbies's own window by its first script (before any app
     /// code), not by Tauri's app-wide `freezePrototype`, which would also freeze it inside the
     /// store sign-in pages.
     #[test]

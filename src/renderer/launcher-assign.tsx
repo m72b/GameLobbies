@@ -185,7 +185,7 @@ export function LauncherWaitDialog({ wait, onClose, onStarted }: { wait: Waiting
   return <div className="modal-scrim" onMouseDown={event => { if (event.target === event.currentTarget && !busy) cancel() }}>
     <div className="modal launcher-wait" role="dialog" aria-modal="true" aria-labelledby="launcher-wait-title">
       <div className="modal-head"><h2 id="launcher-wait-title">Waiting for {wait.launcherName}</h2></div>
-      <p>Continue when it’s open and you’re signed in. Game Lobby then starts <b>{wait.game.title}</b> directly from its own file; {wait.launcherName} stays open.</p>
+      <p>Continue when it’s open and you’re signed in. GameLobbies then starts <b>{wait.game.title}</b> directly from its own file; {wait.launcherName} stays open.</p>
       <div className={'launcher-wait-status' + (running ? ' ready' : '')} aria-live="polite">
         <span className="gp-live-dot" />{expired ? 'This launch expired. Press Play again.' : running ? wait.launcherName + ' is running.' : 'Starting ' + wait.launcherName + '…'}
       </div>

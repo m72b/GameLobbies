@@ -1,16 +1,16 @@
 //! Library statistics for the Statistics view, and the table that keeps playtime a store
-//! reports (Steam's `playtime_forever`) apart from the playtime Game Lobby tracks itself.
+//! reports (Steam's `playtime_forever`) apart from the playtime GameLobbies tracks itself.
 //!
 //! `stats_summary` is read-only and takes one boolean (include hidden games). Everything is
 //! computed here, in one pass over the library; the renderer only formats the result.
 //!
 //! Definitions:
 //! - Per game, time played is `max(tracked, store-reported)`. A game's tracked time (sessions
-//!   Game Lobby recorded) and Steam's own figure usually count the same hours, so the two are
+//!   GameLobbies recorded) and Steam's own figure usually count the same hours, so the two are
 //!   never added. Store figures live in `store_playtime` and are never merged into the tracked
 //!   playtime; they are refetched on every Steam owned-games import and are not part of backups.
 //! - Last played: the newer of the tracked time and the store's own last-played time.
-//! - The part of the store's figure Game Lobby did not track, `max(0, store - tracked)`, is shown
+//! - The part of the store's figure GameLobbies did not track, `max(0, store - tracked)`, is shown
 //!   as one read-only "Added from Steam" entry in a game's activity (never a session, never
 //!   written to the tracked tables). A game with several Steam routes uses the largest figure.
 //! - Played: that time is above zero, or the game has a last-played time or a recorded session.
@@ -317,7 +317,7 @@ pub struct StoreTime {
     pub tracked_seconds: i64,
     /// What counts: `max(tracked, store)`.
     pub effective_seconds: i64,
-    /// `max(0, store - tracked)`: the hours the store has that Game Lobby did not track.
+    /// `max(0, store - tracked)`: the hours the store has that GameLobbies did not track.
     pub added_seconds: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_played: Option<i64>,
@@ -409,7 +409,7 @@ pub struct StoreAddition {
     pub game_id: String,
     pub game_title: String,
     pub source: String,
-    /// The hours the store has that Game Lobby did not track; always above zero.
+    /// The hours the store has that GameLobbies did not track; always above zero.
     pub seconds: i64,
     pub store_seconds: i64,
     pub tracked_seconds: i64,
@@ -936,7 +936,7 @@ mod tests {
                 not_played: 0
             }
         );
-        // Only the part of the total that exceeds what Game Lobby tracked is from the store.
+        // Only the part of the total that exceeds what GameLobbies tracked is from the store.
         assert_eq!(s.playtime.store_seconds, (36_000 - 600) + 1800);
         assert_eq!(s.store_sources, ["Steam"]);
         // Tracked playtime itself is untouched.
@@ -1126,7 +1126,7 @@ mod tests {
 
     #[test]
     fn effective_playtime_is_the_larger_figure_and_the_added_part_never_negative() {
-        // Steam has 165 h, Game Lobby tracked 40 h: 165 h count, 125 h are "added".
+        // Steam has 165 h, GameLobbies tracked 40 h: 165 h count, 125 h are "added".
         let t = combine(40 * H, None, &row(165 * H, None, 9));
         assert_eq!(
             (

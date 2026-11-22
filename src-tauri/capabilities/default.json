@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Game Lobby's own window (label main) may call the app's commands and listen for its events. Each app command has its own allow-<command> permission (generated from command_list.rs) and only this capability grants them, to main only; sign-in windows and remote pages get none. No plugin APIs (file system, shell, dialogs) are exposed to the web pages; Rust opens dialogs itself.",
+  "description": "GameLobbies's own window (label main) may call the app's commands and listen for its events. Each app command has its own allow-<command> permission (generated from command_list.rs) and only this capability grants them, to main only; sign-in windows and remote pages get none. No plugin APIs (file system, shell, dialogs) are exposed to the web pages; Rust opens dialogs itself.",
   "windows": [
     "main"
   ],

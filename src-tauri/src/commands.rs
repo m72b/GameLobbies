@@ -566,7 +566,7 @@ pub async fn backup_export(
         .dialog()
         .file()
         .set_parent(&window)
-        .set_file_name("game-lobby-backup.json")
+        .set_file_name("gamelobbies-backup.json")
         .add_filter("JSON", &["json"])
         .save_file(move |path| {
             let _ = tx.send(path);

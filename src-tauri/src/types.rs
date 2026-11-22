@@ -254,21 +254,21 @@ pub struct Settings {
     pub steam_grid_db_nsfw: bool,
     #[serde(default)]
     pub steam_grid_db_humor: bool,
-    /// With `tracking` on, also detect and track installed games started outside Game Lobby
-    /// (Steam, Epic, desktop shortcuts). Off = only games launched from Game Lobby are tracked.
+    /// With `tracking` on, also detect and track installed games started outside GameLobbies
+    /// (Steam, Epic, desktop shortcuts). Off = only games launched from GameLobbies are tracked.
     #[serde(default = "default_true")]
     pub detect_external_launches: bool,
     /// Games that are never detected or tracked (launching them only sets `lastPlayed`).
     /// Limits are enforced by `validation::settings_patch`.
     #[serde(default)]
     pub tracking_excluded_game_ids: Vec<String>,
-    /// Check for a new Game Lobby release shortly after startup, at most once a day. Updates are
+    /// Check for a new GameLobbies release shortly after startup, at most once a day. Updates are
     /// never installed without the user's click. Stored settings without it default to on.
     #[serde(default = "default_true")]
     pub auto_check_updates: bool,
     #[serde(default)]
     pub disabled_stores: Vec<String>,
-    /// Minimize Game Lobby when a game is started from it. Stored settings without it default to on.
+    /// Minimize GameLobbies when a game is started from it. Stored settings without it default to on.
     #[serde(default = "default_true")]
     pub minimize_on_launch: bool,
     #[serde(default)]

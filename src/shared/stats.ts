@@ -35,11 +35,11 @@ export function storeHint(sources: readonly string[]): string {
 }
 
 /**
- * The per-game breakdown shown as a tooltip: what Game Lobby tracked, what the store reports and
+ * The per-game breakdown shown as a tooltip: what GameLobbies tracked, what the store reports and
  * which one counts (the larger; they are never added). `format` turns seconds into text.
  */
 export function playtimeBreakdown(row: Pick<StatsTopGame, 'seconds' | 'trackedSeconds' | 'storeSeconds' | 'storeSource'>, format: (seconds: number) => string): string {
-  const parts = ['Game Lobby tracked: ' + format(row.trackedSeconds)]
+  const parts = ['GameLobbies tracked: ' + format(row.trackedSeconds)]
   if (row.storeSeconds !== undefined) {
     parts.push((row.storeSource ?? 'Store') + ' reports: ' + format(row.storeSeconds))
     parts.push('Counted: ' + format(row.seconds) + ' (the larger of the two, never added)')

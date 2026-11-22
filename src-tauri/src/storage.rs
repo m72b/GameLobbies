@@ -389,7 +389,7 @@ pub fn handoff_prompt(title: &str, h: &Handoff) -> String {
         ),
         _ => format!("Open {} so you can uninstall {title}?", h.launcher),
     };
-    format!("{what} Game Lobby does not delete anything itself.")
+    format!("{what} GameLobbies does not delete anything itself.")
 }
 
 /// Opens the launcher's uninstall screen after a native confirmation naming the game and the

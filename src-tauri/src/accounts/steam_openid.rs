@@ -1,5 +1,5 @@
 //! Sign in through Steam (OpenID 2.0) to learn the account's SteamID64, without a password ever
-//! reaching Game Lobby: the user signs in on steamcommunity.com in their own web browser, and
+//! reaching GameLobbies: the user signs in on steamcommunity.com in their own web browser, and
 //! Steam sends the browser to our `return_to` address on `127.0.0.1:<random port>` with a signed
 //! assertion. A listener on that one port and path ([`serve_return`]) takes it; the assertion
 //! is checked here and confirmed with Steam (`check_authentication`) before the SteamID64 is
@@ -356,7 +356,7 @@ pub async fn check_authentication(
         .connect_timeout(CONNECT_TIMEOUT)
         .redirect(reqwest::redirect::Policy::none())
         .https_only(endpoint.https_only)
-        .user_agent(concat!("GameLobby/", env!("CARGO_PKG_VERSION")))
+        .user_agent(concat!("GameLobbies/", env!("CARGO_PKG_VERSION")))
         .build()
         .map_err(|_| SignInError::Fetch(FetchError::Network("the HTTP client could not start.")))?;
     let response = http
@@ -440,13 +440,13 @@ pub enum ReturnReply {
 }
 
 /// The pages the listener sends. Fixed text: nothing from the request is ever echoed.
-pub const PAGE_OK: &str = "<!doctype html><html lang=en><meta charset=utf-8><title>Game Lobby</title><p>Signed in to Steam. You can close this tab and return to Game Lobby.</p></html>";
-pub const PAGE_FAILED: &str = "<!doctype html><html lang=en><meta charset=utf-8><title>Game Lobby</title><p>Steam sign-in did not complete. Return to Game Lobby for details and try again.</p></html>";
-pub const PAGE_UNSAVED: &str = "<!doctype html><html lang=en><meta charset=utf-8><title>Game Lobby</title><p>Return to Game Lobby. This sign-in was not saved there.</p></html>";
-pub const PAGE_IGNORED: &str = "<!doctype html><html lang=en><meta charset=utf-8><title>Game Lobby</title><p>This link is not for the sign-in Game Lobby is waiting for.</p></html>";
-pub const PAGE_BAD_REQUEST: &str = "<!doctype html><html lang=en><meta charset=utf-8><title>Game Lobby</title><p>Bad request.</p></html>";
-pub const PAGE_TOO_LARGE: &str = "<!doctype html><html lang=en><meta charset=utf-8><title>Game Lobby</title><p>The request was too large. Return to Game Lobby and try again.</p></html>";
-pub const PAGE_NOT_FOUND: &str = "<!doctype html><html lang=en><meta charset=utf-8><title>Game Lobby</title><p>Not found.</p></html>";
+pub const PAGE_OK: &str = "<!doctype html><html lang=en><meta charset=utf-8><title>GameLobbies</title><p>Signed in to Steam. You can close this tab and return to GameLobbies.</p></html>";
+pub const PAGE_FAILED: &str = "<!doctype html><html lang=en><meta charset=utf-8><title>GameLobbies</title><p>Steam sign-in did not complete. Return to GameLobbies for details and try again.</p></html>";
+pub const PAGE_UNSAVED: &str = "<!doctype html><html lang=en><meta charset=utf-8><title>GameLobbies</title><p>Return to GameLobbies. This sign-in was not saved there.</p></html>";
+pub const PAGE_IGNORED: &str = "<!doctype html><html lang=en><meta charset=utf-8><title>GameLobbies</title><p>This link is not for the sign-in GameLobbies is waiting for.</p></html>";
+pub const PAGE_BAD_REQUEST: &str = "<!doctype html><html lang=en><meta charset=utf-8><title>GameLobbies</title><p>Bad request.</p></html>";
+pub const PAGE_TOO_LARGE: &str = "<!doctype html><html lang=en><meta charset=utf-8><title>GameLobbies</title><p>The request was too large. Return to GameLobbies and try again.</p></html>";
+pub const PAGE_NOT_FOUND: &str = "<!doctype html><html lang=en><meta charset=utf-8><title>GameLobbies</title><p>Not found.</p></html>";
 
 /// One complete HTTP response with a fixed page: no caching, no scripts, styles, frames or
 /// requests of any kind (`default-src 'none'`), no referrer.

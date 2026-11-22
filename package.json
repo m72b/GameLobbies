@@ -4,9 +4,9 @@
   "license": "GPL-3.0-only",
   "private": true,
   "description": "A unified local game library and launcher",
-  "homepage": "https://github.com/m72b/GameLobby",
-  "repository": { "type": "git", "url": "https://github.com/m72b/GameLobby.git" },
-  "bugs": { "url": "https://github.com/m72b/GameLobby/issues" },
+  "homepage": "https://github.com/m72b/GameLobbies",
+  "repository": { "type": "git", "url": "https://github.com/m72b/GameLobbies.git" },
+  "bugs": { "url": "https://github.com/m72b/GameLobbies/issues" },
   "scripts": {
     "dev": "tauri dev",
     "dev:web": "vite",

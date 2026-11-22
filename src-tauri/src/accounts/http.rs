@@ -31,11 +31,11 @@ impl FetchError {
             Self::Rejected => format!("{service} did not accept the saved credentials."),
             Self::Private => format!("{service} did not share the list of games."),
             Self::RateLimited => {
-                format!("{service} is limiting requests. Game Lobby tries again later.")
+                format!("{service} is limiting requests. GameLobbies tries again later.")
             }
             Self::Network(what) => format!("Could not reach {service}: {what}"),
             Self::Status(code) => {
-                format!("{service} returned an error (HTTP {code}). Game Lobby tries again later.")
+                format!("{service} returned an error (HTTP {code}). GameLobbies tries again later.")
             }
             Self::Invalid(what) => format!("{service} returned an unreadable response: {what}"),
         }
@@ -521,11 +521,11 @@ pub(crate) mod tests {
     fn messages_are_fixed_text_naming_the_service() {
         assert_eq!(
             FetchError::RateLimited.message_for("Steam"),
-            "Steam is limiting requests. Game Lobby tries again later."
+            "Steam is limiting requests. GameLobbies tries again later."
         );
         assert_eq!(
             FetchError::Status(502).message_for("GOG"),
-            "GOG returned an error (HTTP 502). Game Lobby tries again later."
+            "GOG returned an error (HTTP 502). GameLobbies tries again later."
         );
         assert_eq!(
             FetchError::Network("x").message_for("Steam"),

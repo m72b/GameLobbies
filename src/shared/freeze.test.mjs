@@ -1,4 +1,4 @@
-// Run with `npm run test:web`. Game Lobby's own page freezes Object.prototype from its first
+// Run with `npm run test:web`. GameLobbies's own page freezes Object.prototype from its first
 // script (Tauri's app-wide freezePrototype is off so store sign-in pages aren't affected).
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
