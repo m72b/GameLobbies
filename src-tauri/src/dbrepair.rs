@@ -107,7 +107,8 @@ pub fn open_source(path: &Path, ignore_wal: bool) -> Result<Connection> {
 pub struct RepairOptions {
     /// Read the main file alone and ignore its `-wal` (see [`open_source`]).
     pub ignore_wal: bool,
-    /// Leave `cover_cache` and `game_metadata` empty; they are refilled from the network.
+    /// Leave `cover_cache`, `game_metadata` and `wikimedia_match` empty; they are refilled from
+    /// the network.
     pub drop_caches: bool,
     /// The screenshots folder: `game_screenshots` rows are rebuilt for files no row refers to.
     pub screenshots_dir: Option<PathBuf>,
@@ -191,7 +192,7 @@ impl RepairReport {
     }
 }
 
-const CACHE_TABLES: &[&str] = &["cover_cache", "game_metadata"];
+const CACHE_TABLES: &[&str] = &["cover_cache", "game_metadata", "wikimedia_match"];
 
 #[derive(Debug, Clone)]
 struct Column {

@@ -1,0 +1,62 @@
+{
+ "batchcomplete": true,
+ "query": {
+  "normalized": [
+   {
+    "fromencoded": false,
+    "from": "Half-life 2",
+    "to": "Half-life 2"
+   }
+  ],
+  "redirects": [
+   {
+    "from": "Half-life 2",
+    "to": "Half-Life 2"
+   },
+   {
+    "from": "HL2",
+    "to": "Half-Life 2"
+   }
+  ],
+  "pages": [
+   {
+    "pageid": 1,
+    "ns": 0,
+    "title": "Doom (1993 video game)",
+    "extract": "Doom is a 1993 first-person shooter game developed and published by id Software for MS-DOS. Players assume the role of a space marine who fights demonic forces.\nDoom was one of the most widely played games of its era."
+   },
+   {
+    "pageid": 2,
+    "ns": 0,
+    "title": "Half-Life 2",
+    "extract": "Half-Life 2 is a 2004 first-person shooter game developed and published by Valve Corporation. It is the sequel to Half-Life (1998).\nSecond paragraph."
+   },
+   {
+    "pageid": 3,
+    "ns": 0,
+    "title": "Doom",
+    "extract": "Doom may refer to: many things that are long enough to pass.",
+    "pageprops": {
+     "disambiguation": ""
+    }
+   },
+   {
+    "ns": 0,
+    "title": "No such game",
+    "missing": true
+   },
+   {
+    "pageid": 4,
+    "ns": 0,
+    "title": "Papers, Please",
+    "extract": "Papers, Please is a 2013 puzzle video game created by Lucas Pope, a developer."
+   },
+   {
+    "pageid": 5,
+    "ns": 0,
+    "title": "Fallout 3",
+    "extract": "Fallout 3 is a 2008 action role-playing game developed by Bethesda Game Studios."
+   }
+  ]
+ }
+}

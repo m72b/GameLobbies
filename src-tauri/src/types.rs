@@ -290,6 +290,10 @@ pub struct Settings {
     /// fades only) or "off" (no animation). Stored settings without it follow Windows.
     #[serde(default = "default_motion")]
     pub motion: String,
+    /// The built-in Wikidata / Wikipedia / Wikimedia Commons provider (no key needed). Stored
+    /// settings without it default to on.
+    #[serde(default = "default_true")]
+    pub wikimedia_enabled: bool,
 }
 
 /// Values `Settings.motion` may have.
@@ -333,6 +337,7 @@ impl Default for Settings {
             minimize_to_tray: false,
             close_to_tray: false,
             motion: default_motion(),
+            wikimedia_enabled: true,
         }
     }
 }
@@ -539,6 +544,10 @@ pub struct GameArt {
     pub hero: Vec<String>,
     pub logo: Vec<String>,
     pub custom: GamePageCustom,
+    /// Licence and credit of every Wikimedia Commons image in `hero`/`logo`, by the value
+    /// listed there (`display`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub credits: Vec<crate::wikimedia::ImageCredit>,
 }
 
 /// Where the logo sits on the game page hero.

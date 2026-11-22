@@ -7,7 +7,8 @@ import { artPreview } from '../shared/preview'
 import { logoPositions, logoScaleRange } from '../shared/types'
 import { FadeImg } from './loading-image'
 import { useKeysUi } from './api-keys'
-import type { GamePageCustom, LogoPosition, SteamGridDbCover } from '../shared/types'
+import type { GamePageCustom, LogoPosition, SteamGridDbCover, WikiImage, WikiView } from '../shared/types'
+import { ImageCredit } from './wiki-details'
 
 export interface LogoLayout { position: LogoPosition; scale: number }
 
@@ -68,7 +69,24 @@ function ArtTile({ item, label, animated, disabled, onApply }: { item: SteamGrid
   </button>
 }
 
-function ArtSection({ kind, gameId, title, currentSrc, hasCustom, settingsKey, animated }: { kind: 'hero' | 'logo'; gameId: string; title: string; currentSrc?: string; hasCustom: boolean; settingsKey: string; animated: boolean }) {
+/** Free Wikimedia Commons images for the game, each with its credit; choosing one replaces the current one. */
+function WikiTiles({ images, kind, busy, onUse }: { images: WikiImage[]; kind: 'logo' | 'cover'; busy: boolean; onUse(image: WikiImage): void }) {
+  if (images.length === 0) return null
+  return <div className="cz-wiki">
+    <div className="cz-label">Free {kind}s from Wikimedia Commons</div>
+    <div className={'cz-grid ' + (kind === 'logo' ? 'logo' : 'cover') + (busy ? ' busy' : '')}>
+      {images.map(image => <div key={image.src} className="cz-wiki-item">
+        <button type="button" className="cz-tile" disabled={busy} onClick={() => onUse(image)} aria-label={'Use ' + image.file}>
+          <FadeImg src={coverUrl(image.display)} loading="lazy" alt="" />
+        </button>
+        <ImageCredit image={image} />
+        {image.lowTrust && <small className="cz-wiki-note">Low resolution ({image.originalWidth}×{image.originalHeight})</small>}
+      </div>)}
+    </div>
+  </div>
+}
+
+function ArtSection({ kind, gameId, title, currentSrc, hasCustom, settingsKey, animated, wikiLogos = [] }: { kind: 'hero' | 'logo'; gameId: string; title: string; currentSrc?: string; hasCustom: boolean; settingsKey: string; animated: boolean; wikiLogos?: WikiImage[] }) {
   const pages = useSgdbPages(kind, gameId, settingsKey)
   const { openSheet } = useKeysUi()
   const { state, covers: items, reset: resetPages } = pages
@@ -109,6 +127,7 @@ function ArtSection({ kind, gameId, title, currentSrc, hasCustom, settingsKey, a
       <button type="button" className="secondary-button" onClick={() => void reset()} disabled={busy || !hasCustom} title={hasCustom ? undefined : 'Already using the automatic ' + noun}><RotateCcw size={13} /> Reset to default</button>
     </div>
     <div className="cz-status" role="status" aria-live="polite">{error ? <span className="cz-error">{error}</span> : notice}</div>
+    {kind === 'logo' && <WikiTiles images={wikiLogos} kind="logo" busy={busy} onUse={image => void act(() => window.lobby.wikimedia.useLogo(gameId, image.src), 'Applied')} />}
     {state === 'loading' && <div className="cz-empty">Searching SteamGridDB…</div>}
     {state === 'nokey' && <div className="cz-empty">Add a free SteamGridDB API key to browse {noun}s. Choosing a file and resetting still work.<button type="button" className="secondary-button" onClick={() => openSheet('steamgriddb')}>Add API key</button></div>}
     {state === 'error' && <div className="cz-empty">{error || 'Could not search SteamGridDB'}<button type="button" className="secondary-button" onClick={() => void openPicker()}>Try again</button></div>}
@@ -120,10 +139,29 @@ function ArtSection({ kind, gameId, title, currentSrc, hasCustom, settingsKey, a
   </div>
 }
 
-type Tab = 'hero' | 'logo' | 'layout'
+type Tab = 'hero' | 'logo' | 'cover' | 'layout'
 
-export function CustomizePanel({ game, custom, heroSrc, logoSrc, layout, onLayout, onClose, sgdbSettingsKey = '', animated = false }: {
+/** Free Commons covers for the library poster (only shown when the lookup found any). */
+function CoverSection({ gameId, covers }: { gameId: string; covers: WikiImage[] }) {
+  const [busy, setBusy] = useState(false)
+  const [status, setStatus] = useState('')
+  const use = async (image: WikiImage) => {
+    setBusy(true); setStatus('')
+    try { await window.lobby.wikimedia.useCover(gameId, image.src); setStatus('Cover applied') }
+    catch (e) { setStatus(e instanceof Error ? e.message : typeof e === 'string' ? e : 'Could not use that cover') }
+    finally { setBusy(false) }
+  }
+  return <div className="cz-section">
+    <p className="cz-hint">These covers are free files from Wikimedia Commons. Choosing one replaces the game's current cover; the credit is shown under the poster.</p>
+    <div className="cz-status" role="status" aria-live="polite">{status}</div>
+    <WikiTiles images={covers} kind="cover" busy={busy} onUse={image => void use(image)} />
+  </div>
+}
+
+export function CustomizePanel({ game, custom, heroSrc, logoSrc, layout, onLayout, onClose, sgdbSettingsKey = '', animated = false, wiki }: {
   game: { id: string; title: string }
+  /** The game's Wikimedia lookup: free logos and covers offered as candidates. */
+  wiki?: WikiView
   /** The SteamGridDB filters in effect (keys the session cache of picker pages). */
   sgdbSettingsKey?: string
   /** The "Include animated covers" setting: whether video previews may play. */
@@ -150,7 +188,8 @@ export function CustomizePanel({ game, custom, heroSrc, logoSrc, layout, onLayou
     return () => window.removeEventListener('keydown', key, true)
   }, [onClose])
 
-  const tabs: Array<[Tab, string]> = [['hero', 'Hero'], ['logo', 'Logo'], ['layout', 'Logo layout']]
+  const wikiCovers = wiki?.enabled ? wiki.covers : []
+  const tabs: Array<[Tab, string]> = [['hero', 'Hero'], ['logo', 'Logo'], ...(wikiCovers.length ? [['cover', 'Cover'] as [Tab, string]] : []), ['layout', 'Logo layout']]
   const onTabKey = (event: React.KeyboardEvent) => {
     const i = tabs.findIndex(([id]) => id === tab)
     const step = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0
@@ -169,7 +208,8 @@ export function CustomizePanel({ game, custom, heroSrc, logoSrc, layout, onLayou
     </div>
     <div className="cz-body" id="cz-body" role="tabpanel" aria-labelledby={'cz-tab-' + tab}>
       {tab === 'hero' && <ArtSection kind="hero" gameId={game.id} title="Hero" currentSrc={heroSrc} hasCustom={!!custom.hero} settingsKey={sgdbSettingsKey} animated={animated} />}
-      {tab === 'logo' && <ArtSection kind="logo" gameId={game.id} title="Logo" currentSrc={logoSrc} hasCustom={!!custom.logo} settingsKey={sgdbSettingsKey} animated={animated} />}
+      {tab === 'logo' && <ArtSection kind="logo" gameId={game.id} title="Logo" currentSrc={logoSrc} hasCustom={!!custom.logo} settingsKey={sgdbSettingsKey} animated={animated} wikiLogos={wiki?.enabled ? wiki.logos : []} />}
+      {tab === 'cover' && <CoverSection gameId={game.id} covers={wikiCovers} />}
       {tab === 'layout' && <div className="cz-section">
         <p className="cz-hint">Changes preview live on the page and save automatically.{!logoSrc && ' This game has no logo, so the title text is positioned instead.'}</p>
         <div className="cz-label">Position</div>

@@ -36,7 +36,7 @@ pub fn forbidden_response() -> tauri::http::Response<std::borrow::Cow<'static, [
         .unwrap()
 }
 const PAGES: [&str; 2] = ["/", "/index.html"];
-const EXTERNAL_HOSTS: [&str; 11] = [
+const EXTERNAL_HOSTS: [&str; 15] = [
     "playnite.link",
     // Steam Web API key page, privacy settings and account page (owned-games setup).
     "steamcommunity.com",
@@ -49,6 +49,11 @@ const EXTERNAL_HOSTS: [&str; 11] = [
     "www.igdb.com",
     "howlongtobeat.com",
     "backloggd.com",
+    // Wikipedia articles, Wikidata items, Commons file pages and licence deeds (credits).
+    "en.wikipedia.org",
+    "www.wikidata.org",
+    "commons.wikimedia.org",
+    "creativecommons.org",
 ];
 
 fn is_app_page(url: &Url) -> bool {
@@ -199,6 +204,27 @@ mod tests {
         assert!(SETTINGS_SECTIONS.contains(&"api-keys"));
         assert!(SETTINGS_SECTIONS.contains(&"accounts"));
         assert!(!SETTINGS_SECTIONS.contains(&"libraries"));
+    }
+
+    #[test]
+    fn wikimedia_credit_links_open_only_on_their_exact_hosts() {
+        let ok = |u: &str| is_allowed_external(&Url::parse(u).unwrap());
+        assert!(ok("https://en.wikipedia.org/wiki/Half-Life_2"));
+        assert!(ok("https://www.wikidata.org/wiki/Q193581"));
+        assert!(ok(
+            "https://commons.wikimedia.org/wiki/File:Half-Life_2_text_logo.svg"
+        ));
+        assert!(ok("https://creativecommons.org/licenses/by-sa/4.0/"));
+        for bad in [
+            "http://en.wikipedia.org/wiki/Doom",
+            "https://de.wikipedia.org/wiki/Doom",
+            "https://en.wikipedia.org.evil.example/wiki/Doom",
+            "https://upload.wikimedia.org/wikipedia/commons/a/ab/X.png",
+            "https://query.wikidata.org/sparql?query=x",
+            "https://user@commons.wikimedia.org/wiki/File:X.png",
+        ] {
+            assert!(!ok(bad), "{bad}");
+        }
     }
 
     #[test]

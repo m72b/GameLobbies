@@ -1,0 +1,93 @@
+{
+ "head": {
+  "vars": [
+   "i",
+   "steam",
+   "igdb"
+  ]
+ },
+ "results": {
+  "bindings": [
+   {
+    "i": {
+     "type": "uri",
+     "value": "http://www.wikidata.org/entity/Q193581"
+    },
+    "steam": {
+     "type": "literal",
+     "value": "220"
+    }
+   },
+   {
+    "i": {
+     "type": "uri",
+     "value": "http://www.wikidata.org/entity/Q193581"
+    },
+    "steam": {
+     "type": "literal",
+     "value": "220"
+    }
+   },
+   {
+    "i": {
+     "type": "uri",
+     "value": "http://www.wikidata.org/entity/Q189784"
+    },
+    "igdb": {
+     "type": "literal",
+     "value": "doom"
+    }
+   },
+   {
+    "i": {
+     "type": "uri",
+     "value": "http://www.wikidata.org/entity/Q108022844"
+    },
+    "steam": {
+     "type": "literal",
+     "value": "22370"
+    }
+   },
+   {
+    "i": {
+     "type": "uri",
+     "value": "http://www.wikidata.org/entity/Q221164"
+    },
+    "steam": {
+     "type": "literal",
+     "value": "22370"
+    }
+   },
+   {
+    "i": {
+     "type": "uri",
+     "value": "http://www.wikidata.org/entity/Q14565978"
+    },
+    "steam": {
+     "type": "literal",
+     "value": "239030"
+    }
+   },
+   {
+    "i": {
+     "type": "uri",
+     "value": "http://www.wikidata.org/entity/Q14565978"
+    },
+    "steam": {
+     "type": "literal",
+     "value": "bad id"
+    }
+   },
+   {
+    "i": {
+     "type": "uri",
+     "value": "http://example.org/Q1"
+    },
+    "steam": {
+     "type": "literal",
+     "value": "1"
+    }
+   }
+  ]
+ }
+}

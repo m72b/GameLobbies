@@ -48,6 +48,14 @@ function storeStatusText(store: StoreStatus) {
   return store.found > 0 ? 'Detected · ' + store.found + ' game' + (store.found === 1 ? '' : 's') : 'Not detected on this PC'
 }
 
+/** The switch for the built-in Wikipedia / Wikidata / Commons provider, with what it fetches. */
+function WikimediaToggle({ checked, onChange }: { checked: boolean; onChange(enabled: boolean): void }) {
+  return <>
+    <div className="toggle-row"><div><b>Use Wikipedia &amp; Wikidata (no key needed)</b><small>Facts from Wikidata (release date, platforms, developer, publisher, genres; CC0), the first paragraph of the English Wikipedia article when IGDB has no description (CC BY-SA, credited with a link), and free logos and covers from Wikimedia Commons with their author and licence. Never fair-use images. It only fills what is missing and never changes your own titles, genres, covers or logos.</small></div><input type="checkbox" aria-label="Use Wikipedia and Wikidata" checked={checked} onChange={event => onChange(event.target.checked)} /></div>
+    <p className="muted-text">Lookups run in the background, one request at a time, and are cached for 30 days (7 days when nothing was found). Requests go only to wikidata.org, wikipedia.org and wikimedia.org.</p>
+  </>
+}
+
 export type SettingsPage = Section
 export const defaultPage: SettingsPage = 'Libraries'
 
@@ -205,7 +213,7 @@ export function SettingsView({ settings, onSettings, say, keys, accounts, onRunS
         {section === 'Emulators' && <EmulatorsSection scan={localScan} say={say} />}
         {section === 'Custom launchers' && <LaunchersSection scan={localScan} say={say} />}
         {section === 'Review' && <ReviewSection say={say} />}
-        {section === 'API keys' && <ApiKeysSection keys={keys} />}
+        {section === 'API keys' && <><div className="settings-card"><h3>No key needed</h3><WikimediaToggle checked={settings.wikimediaEnabled} onChange={enabled => void save({ wikimediaEnabled: enabled })} /></div><ApiKeysSection keys={keys} /></>}
         {section === 'Accounts' && <AccountsSection accounts={accounts} onRunSetup={onRunSetup} />}
 
         {section === 'Appearance' && <>
@@ -260,8 +268,14 @@ export function SettingsView({ settings, onSettings, say, keys, accounts, onRunS
           </div>
           <div className="settings-card" id="settings-metadata">
           <div className="sgdb-card plain">
+            <h3>Built-in game details</h3>
+            <WikimediaToggle checked={settings.wikimediaEnabled} onChange={enabled => void save({ wikimediaEnabled: enabled })} />
+          </div>
+          </div>
+          <div className="settings-card">
+          <div className="sgdb-card plain">
             <h3>Metadata provider</h3>
-            <p className="muted-text">IGDB supplies descriptions, genres, developers, publishers and ratings for the game page. It needs a free Twitch application, which you add under API keys.</p>
+            <p className="muted-text">IGDB supplies descriptions, genres, developers, publishers and ratings for the game page. It needs a free Twitch application, which you add under API keys. When both are on, IGDB's details come first and Wikipedia and Wikidata only fill what IGDB has not got.</p>
             <KeyStatusLine id="igdb" keys={keys} />
             <h4 className="settings-subtitle">Whole library</h4>
             <p className="muted-text">Game pages load details from IGDB when you open them and refresh them after 30 days. You can also fetch details for every game now. It runs in the background at about four requests per second.</p>

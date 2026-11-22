@@ -47,7 +47,8 @@ use url::Url;
 
 /// Hosts covers may be downloaded from (https, default port only). The Steam importer and the
 /// game page use `cdn.akamai.steamstatic.com`; SteamGridDB serves images from `cdn2`; IGDB
-/// screenshots and artworks come from `images.igdb.com`.
+/// screenshots and artworks come from `images.igdb.com`. Commons logos and covers
+/// (`upload.wikimedia.org/wikipedia/commons/` only) are allowed by [`is_allowed`] itself.
 pub const ALLOWED_HOSTS: [&str; 7] = [
     "cdn2.steamgriddb.com",
     "steamgriddb.com",
@@ -102,13 +103,17 @@ pub type Allow = fn(&Url) -> bool;
 
 /// https on an [`ALLOWED_HOSTS`] host, default port, no credentials.
 pub fn is_allowed(url: &Url) -> bool {
-    url.scheme() == "https"
+    let plain = url.scheme() == "https"
         && url.username().is_empty()
         && url.password().is_none()
-        && url.port().is_none()
-        && url
-            .host_str()
-            .is_some_and(|h| ALLOWED_HOSTS.contains(&h.to_ascii_lowercase().as_str()))
+        && url.port().is_none();
+    let host = url.host_str().map(str::to_ascii_lowercase);
+    let listed = host.as_deref().is_some_and(|h| ALLOWED_HOSTS.contains(&h));
+    // Wikimedia: only free files in the Commons upload folder, never a Wikipedia's own
+    // (possibly non-free) uploads.
+    let commons = host.as_deref() == Some(crate::wikimedia::licence::IMAGE_HOST)
+        && crate::wikimedia::licence::valid_image_url(url.as_str());
+    plain && (listed || commons)
 }
 
 /// The parsed URL when a stored cover value is a remote image that `allow` lets us cache.
@@ -182,7 +187,8 @@ pub fn http_client(allow: Allow, timeout: Duration) -> reqwest::Result<reqwest::
                 attempt.error("redirect to a host that is not allowed")
             }
         }))
-        .user_agent(concat!("GameLobby/", env!("CARGO_PKG_VERSION")))
+        // Descriptive, as Wikimedia asks of automated clients; no personal data.
+        .user_agent(crate::wikimedia::http::USER_AGENT)
         .build()
 }
 
@@ -575,7 +581,9 @@ fn referenced_files(conn: &Connection) -> Result<HashSet<String>> {
 pub fn sweep(conn: &Connection, covers_dir: &Path) -> Result<usize> {
     let referenced = referenced_files(conn)?;
     // IGDB screenshots and artworks of cached game metadata stay too.
-    let referenced_urls = crate::igdb::referenced_image_urls(conn)?;
+    let mut referenced_urls = crate::igdb::referenced_image_urls(conn)?;
+    // So do the Wikimedia logos and covers of cached matches and chosen Commons logos.
+    referenced_urls.extend(crate::wikimedia::referenced_image_urls(conn)?);
     let rows: Vec<(String, String)> = conn
         .prepare("SELECT url,file FROM cover_cache")?
         .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?

@@ -1,0 +1,227 @@
+{
+ "batchcomplete": true,
+ "query": {
+  "normalized": [
+   {
+    "fromencoded": false,
+    "from": "File:Half-Life_2_text_logo.svg",
+    "to": "File:Half-Life 2 text logo.svg"
+   }
+  ],
+  "pages": [
+   {
+    "ns": 6,
+    "title": "File:Half-Life 2 text logo.svg",
+    "imagerepository": "local",
+    "imageinfo": [
+     {
+      "size": 1000,
+      "width": 699,
+      "height": 52,
+      "mime": "image/svg+xml",
+      "url": "https://upload.wikimedia.org/wikipedia/commons/a/ab/Half-Life_2_text_logo.svg?utm_source=commons.wikimedia.org",
+      "descriptionurl": "https://commons.wikimedia.org/wiki/File:Half-Life_2_text_logo.svg",
+      "extmetadata": {
+       "License": {
+        "value": "pd"
+       },
+       "LicenseShortName": {
+        "value": "Public domain"
+       },
+       "Artist": {
+        "value": "Valve"
+       },
+       "AttributionRequired": {
+        "value": "false"
+       },
+       "Restrictions": {
+        "value": "trademarked"
+       }
+      },
+      "thumburl": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d6/Half-Life_2_text_logo.svg/500px-Half-Life_2_text_logo.svg.png",
+      "thumbwidth": 500,
+      "thumbheight": 37
+     }
+    ]
+   },
+   {
+    "ns": 6,
+    "title": "File:Doom – Game’s logo.svg",
+    "imagerepository": "local",
+    "imageinfo": [
+     {
+      "size": 1000,
+      "width": 1680,
+      "height": 869,
+      "mime": "image/svg+xml",
+      "url": "https://upload.wikimedia.org/wikipedia/commons/a/ab/Doom_–_Game’s_logo.svg?utm_source=commons.wikimedia.org",
+      "descriptionurl": "https://commons.wikimedia.org/wiki/File:Doom_–_Game’s_logo.svg",
+      "extmetadata": {
+       "License": {
+        "value": "pd"
+       },
+       "LicenseShortName": {
+        "value": "Public domain"
+       },
+       "Artist": {
+        "value": "id Software; Bethesda Softworks, LLC"
+       },
+       "AttributionRequired": {
+        "value": "false"
+       },
+       "Restrictions": {
+        "value": "trademarked"
+       }
+      },
+      "thumburl": "https://upload.wikimedia.org/wikipedia/commons/thumb/1/1a/Doom_logo.svg/500px-Doom_logo.svg.png",
+      "thumbwidth": 500,
+      "thumbheight": 259
+     }
+    ]
+   },
+   {
+    "ns": 6,
+    "title": "File:Doom classic box art.png",
+    "imagerepository": "local",
+    "imageinfo": [
+     {
+      "size": 1000,
+      "width": 271,
+      "height": 410,
+      "mime": "image/png",
+      "url": "https://upload.wikimedia.org/wikipedia/commons/a/ab/Doom_classic_box_art.png?utm_source=commons.wikimedia.org",
+      "descriptionurl": "https://commons.wikimedia.org/wiki/File:Doom_classic_box_art.png",
+      "extmetadata": {
+       "License": {
+        "value": "cc-by-3.0"
+       },
+       "LicenseShortName": {
+        "value": "CC BY 3.0"
+       },
+       "Artist": {
+        "value": "Bethesda, Copyright Microsoft"
+       },
+       "AttributionRequired": {
+        "value": "true"
+       },
+       "Restrictions": {
+        "value": "trademarked|design"
+       },
+       "LicenseUrl": {
+        "value": "https://creativecommons.org/licenses/by/3.0"
+       }
+      }
+     }
+    ]
+   },
+   {
+    "ns": 6,
+    "title": "File:Fallout 3 logo transparent.svg",
+    "imagerepository": "local",
+    "imageinfo": [
+     {
+      "size": 1000,
+      "width": 304,
+      "height": 63,
+      "mime": "image/svg+xml",
+      "url": "https://upload.wikimedia.org/wikipedia/commons/a/ab/Fallout_3_logo_transparent.svg?utm_source=commons.wikimedia.org",
+      "descriptionurl": "https://commons.wikimedia.org/wiki/File:Fallout_3_logo_transparent.svg",
+      "extmetadata": {
+       "License": {
+        "value": "pd"
+       },
+       "LicenseShortName": {
+        "value": "Public domain"
+       },
+       "Artist": {
+        "value": "™/®Bethesda Softworks"
+       },
+       "AttributionRequired": {
+        "value": "false"
+       },
+       "Restrictions": {
+        "value": "trademarked"
+       }
+      },
+      "thumburl": "https://upload.wikimedia.org/wikipedia/commons/thumb/f/f3/Fallout_3_logo.svg/500px-Fallout_3_logo.svg.png",
+      "thumbwidth": 500,
+      "thumbheight": 104
+     }
+    ]
+   },
+   {
+    "ns": 6,
+    "title": "File:Fallout 3 cover (cropped).png",
+    "imagerepository": "local",
+    "imageinfo": [
+     {
+      "size": 1000,
+      "width": 270,
+      "height": 365,
+      "mime": "image/png",
+      "url": "https://upload.wikimedia.org/wikipedia/commons/a/ab/Fallout_3_cover_(cropped).png?utm_source=commons.wikimedia.org",
+      "descriptionurl": "https://commons.wikimedia.org/wiki/File:Fallout_3_cover_(cropped).png",
+      "extmetadata": {
+       "License": {
+        "value": "cc-by-3.0"
+       },
+       "LicenseShortName": {
+        "value": "CC BY 3.0"
+       },
+       "Artist": {
+        "value": "<a href=\"https://www.youtube.com/@xboxmexico\">Xbox México</a>"
+       },
+       "AttributionRequired": {
+        "value": "true"
+       },
+       "Restrictions": {
+        "value": "trademarked"
+       },
+       "LicenseUrl": {
+        "value": "https://creativecommons.org/licenses/by/3.0"
+       }
+      }
+     }
+    ]
+   },
+   {
+    "ns": 6,
+    "title": "File:Papers Please - Title Logo.png",
+    "imagerepository": "local",
+    "imageinfo": [
+     {
+      "size": 1000,
+      "width": 359,
+      "height": 195,
+      "mime": "image/png",
+      "url": "https://upload.wikimedia.org/wikipedia/commons/a/ab/Papers_Please_-_Title_Logo.png?utm_source=commons.wikimedia.org",
+      "descriptionurl": "https://commons.wikimedia.org/wiki/File:Papers_Please_-_Title_Logo.png",
+      "extmetadata": {
+       "License": {
+        "value": "pd"
+       },
+       "LicenseShortName": {
+        "value": "Public domain"
+       },
+       "Artist": {
+        "value": "This is modification of a logo owned by Lucas Pope for Papers, Please."
+       },
+       "AttributionRequired": {
+        "value": "false"
+       },
+       "Restrictions": {
+        "value": ""
+       }
+      }
+     }
+    ]
+   },
+   {
+    "ns": 6,
+    "title": "File:Papers Please cover.jpg",
+    "missing": true,
+    "imagerepository": ""
+   }
+  ]
+ }
+}

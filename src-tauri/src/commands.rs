@@ -764,8 +764,17 @@ pub async fn tracking_set_excluded(
 
 /// Hero/logo candidate URLs for the game page; empty lists when nothing is available.
 #[tauri::command]
-pub async fn art_get(state: State<'_, AppState>, game_id: String) -> CmdResult<GameArt> {
-    art::get(&state, &game_id).await.map_err(err)
+pub async fn art_get(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    game_id: String,
+) -> CmdResult<GameArt> {
+    let art = art::get(&state, &game_id).await.map_err(err)?;
+    // Commons images without a credit record (from a backup) are looked up in the background;
+    // `art:changed` follows when one is confirmed.
+    let missing = art::uncredited(&state.db.lock(), &game_id);
+    crate::wikimedia::spawn_restore_credits(&app, &game_id, missing);
+    Ok(art)
 }
 
 // ---------------------------------------------------------------------------
@@ -995,6 +1004,98 @@ pub async fn igdb_cancel_fetch_all(state: State<'_, AppState>) -> CmdResult<()> 
 #[tauri::command]
 pub async fn igdb_progress(state: State<'_, AppState>) -> CmdResult<igdb::BulkProgress> {
     Ok(igdb::progress(&state))
+}
+
+// ---------------------------------------------------------------------------
+// Built-in Wikidata / Wikipedia / Commons provider. The renderer passes only game ids, an item
+// id it was offered (checked again), search text, or the URL of an image this game's lookup
+// offered (looked up in the cache; anything else is refused).
+
+#[tauri::command]
+pub async fn wikimedia_get(
+    app: AppHandle,
+    window: WebviewWindow,
+    game_id: String,
+) -> CmdResult<crate::wikimedia::WikiView> {
+    windows::require_main(&window)?;
+    crate::wikimedia::get(&app, &game_id).map_err(err)
+}
+
+#[tauri::command]
+pub async fn wikimedia_search(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    game_id: String,
+    query: Option<String>,
+) -> CmdResult<Vec<crate::wikimedia::Candidate>> {
+    windows::require_main(&window)?;
+    if query.as_deref().is_some_and(|q| q.len() > 1024) {
+        return Err("The search text is too long.".into());
+    }
+    crate::wikimedia::search(&state, &game_id, query.as_deref())
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn wikimedia_choose(
+    app: AppHandle,
+    window: WebviewWindow,
+    game_id: String,
+    qid: String,
+) -> CmdResult<crate::wikimedia::WikiView> {
+    windows::require_main(&window)?;
+    crate::wikimedia::choose(&app, &game_id, &qid)
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn wikimedia_reset_match(
+    app: AppHandle,
+    window: WebviewWindow,
+    game_id: String,
+) -> CmdResult<crate::wikimedia::WikiView> {
+    windows::require_main(&window)?;
+    crate::wikimedia::reset_match(&app, &game_id).map_err(err)
+}
+
+/// Uses one of the game's offered Commons logos as its logo (`art:changed` follows).
+#[tauri::command]
+pub async fn wikimedia_use_logo(
+    app: AppHandle,
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    game_id: String,
+    src: String,
+) -> CmdResult<GamePageCustom> {
+    windows::require_main(&window)?;
+    let custom = crate::wikimedia::use_logo(&state, &game_id, &src).map_err(err)?;
+    Ok(notify_art(&app, &game_id, custom))
+}
+
+/// Uses one of the game's offered Commons covers as its cover.
+#[tauri::command]
+pub async fn wikimedia_use_cover(
+    app: AppHandle,
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    game_id: String,
+    src: String,
+) -> CmdResult<Vec<Game>> {
+    windows::require_main(&window)?;
+    let games = crate::wikimedia::use_cover(&state, &game_id, &src)
+        .await
+        .map_err(err)?;
+    let remote = games
+        .iter()
+        .find(|g| g.id == game_id)
+        .is_some_and(|g| covercache::needs_caching(g.cover.as_deref()));
+    if remote {
+        covercache::spawn_pass(&app, std::time::Duration::ZERO);
+    }
+    notify_library(&app);
+    Ok(games)
 }
 
 #[cfg(test)]

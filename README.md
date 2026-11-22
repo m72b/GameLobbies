@@ -38,6 +38,7 @@ Game Lobby is **my first Rust project**. It started as an Electron app and was r
 **Rich game pages**
 - Cover art, heroes and logos from SteamGridDB, including animated art.
 - Descriptions, genres, developers, ratings, screenshots and time to beat from IGDB.
+- Built in, with no key: release dates, platforms, developers, publishers and genres from Wikidata, a short description from Wikipedia, and free logos (and covers where a free one exists) from Wikimedia Commons, each credited.
 - A screenshot wall, your own score, notes and memories, and controller details.
 
 **Playtime that stays yours**
@@ -83,6 +84,8 @@ Game Lobby works without any account. Three optional features use free keys that
 
 Settings opens inside the main window (the gear in the side rail, or **Ctrl+,**; **Esc** goes back). **Settings → API keys** lists all three keys with what each unlocks and whether it is set; **Add keys** opens a side sheet with every key at once, with links and short steps. Keys you have set can be changed or removed there.
 
+Without any key, Game Lobby still fills in game details from **Wikidata** (facts, CC0), **Wikipedia** (the first paragraph of the article, CC BY-SA 4.0, credited with a link, only when IGDB has none) and **Wikimedia Commons** (free logos and covers with their author and licence; never fair-use images). It only fills what is missing, IGDB's details come first, and it can be turned off with **Use Wikipedia & Wikidata (no key needed)** in **Settings → API keys** or **Settings → Playtime and Stats**. See the [user guide](docs/USER-GUIDE.md#game-details-from-wikipedia-and-wikidata-no-key).
+
 Keep your keys private: don't paste them into issues, screenshots or logs. **Copy diagnostics** in **Settings → About and Updates** leaves them out.
 
 ## Supported stores
@@ -101,13 +104,14 @@ No store accounts or keys are needed. Game Lobby reads each launcher's local dat
 ## Privacy and data
 
 - Everything is stored locally in `%APPDATA%\app.gamelobby.desktop`: the library database, cached artwork, screenshots and logs.
-- Game Lobby only goes online for the features you use: SteamGridDB, IGDB, the Steam artwork CDN, themes you add, and update checks on GitHub.
+- Game Lobby only goes online for the features you use: SteamGridDB, IGDB, Wikidata, Wikipedia and Wikimedia Commons (unless turned off), the Steam artwork CDN, themes you add, and update checks on GitHub.
 - JSON backups include your games, settings, emulators, custom launchers and play history, but never API keys.
 
 ### Data sources and terms
 
 Each service is used under its own terms:
 - **SteamGridDB** artwork belongs to its creators and is for personal, non-commercial use under the [SteamGridDB Terms of Use](https://www.steamgriddb.com/terms).
+- **Wikidata** facts are CC0; **Wikipedia** text is CC BY-SA 4.0 and shown with *From Wikipedia*, a link to the article and the licence; **Wikimedia Commons** images are used only under public domain, CC0, CC BY or CC BY-SA and are shown with their author, licence and file page. Requests identify Game Lobby with a descriptive User-Agent and follow Wikimedia's API etiquette (one request at a time, `maxlag`, caching).
 - **IGDB** data is requested with your own Twitch application under the [Twitch Developer Services Agreement](https://www.twitch.tv/p/legal/developer-agreement/) and IGDB's terms, and is shown with an "IGDB.com" attribution.
 - **Steam** store artwork belongs to Valve and the games' publishers.
 
@@ -160,11 +164,11 @@ Game Lobby is licensed under the [GNU General Public License v3.0](LICENSE) (GPL
 
 ## Trademarks
 
-Game Lobby is an independent project. It is not affiliated with or endorsed by Valve, Epic Games, GOG, Microsoft, Ubisoft, Electronic Arts, Blizzard, Amazon, itch.io, Twitch, IGDB, SteamGridDB, Playnite, One Game Launcher, or any emulator project. Store names and logos are trademarks of their owners and are used only to identify the stores Game Lobby works with. Store icons come from [Simple Icons](https://simpleicons.org/) (CC0).
+Game Lobby is an independent project. It is not affiliated with or endorsed by Valve, Epic Games, GOG, Microsoft, Ubisoft, Electronic Arts, Blizzard, Amazon, itch.io, Twitch, IGDB, SteamGridDB, the Wikimedia Foundation, Playnite, One Game Launcher, or any emulator project. Store names and logos are trademarks of their owners and are used only to identify the stores Game Lobby works with. Store icons come from [Simple Icons](https://simpleicons.org/) (CC0).
 
 ## Acknowledgements
 
 - [Playnite](https://playnite.link/) inspired the idea of one library for every store. Game Lobby includes none of its code or assets.
-- Cover art comes from the [SteamGridDB](https://www.steamgriddb.com/) community, and game details from [IGDB.com](https://www.igdb.com/).
+- Cover art comes from the [SteamGridDB](https://www.steamgriddb.com/) community, and game details from [IGDB.com](https://www.igdb.com/), [Wikidata](https://www.wikidata.org/), [Wikipedia](https://en.wikipedia.org/) and [Wikimedia Commons](https://commons.wikimedia.org/).
 - The [Quantico](https://fonts.google.com/specimen/Quantico) font by Matthew Desmond is bundled through [`@fontsource/quantico`](https://fontsource.org/fonts/quantico) under the [SIL Open Font License 1.1](https://openfontlicense.org/).
 - The app icon uses letter shapes from [Roboto](https://fonts.google.com/specimen/Roboto) (Apache License 2.0).

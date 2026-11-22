@@ -89,6 +89,7 @@ const SETTINGS_KEYS: &[&str] = &[
     "minimizeToTray",
     "closeToTray",
     "motion",
+    "wikimediaEnabled",
 ];
 /// Settings keys of older versions that are dropped (not rejected) when a backup is imported.
 const RETIRED_SETTINGS_KEYS: &[&str] = &["steamId", "steamApiKey", "legendaryPath"];
@@ -700,6 +701,7 @@ pub fn settings_patch(value: &Value) -> Result<Map<String, Value>> {
         "launchOnBoot",
         "minimizeToTray",
         "closeToTray",
+        "wikimediaEnabled",
     ] {
         bool_field(&map, key)?;
     }
@@ -882,7 +884,8 @@ pub fn lobby_cover_name(raw: &str) -> Option<&str> {
     (!device).then_some(name)
 }
 
-/// A custom hero/logo value: a SteamGridDB https image URL (not a video) or a
+/// A custom hero/logo value: a SteamGridDB https image URL (not a video), a free Wikimedia
+/// Commons file (`upload.wikimedia.org/wikipedia/commons/...`, raster only) or a
 /// `lobby-cover://<name>` value with a safe name. Returns the value to store.
 pub fn page_art_value(raw: &str) -> Result<String> {
     let raw = raw.trim();
@@ -890,6 +893,9 @@ pub fn page_art_value(raw: &str) -> Result<String> {
         return lobby_cover_name(raw)
             .map(|name| format!("{LOBBY_COVER_PREFIX}{name}"))
             .ok_or_else(|| anyhow!("That image file name is not valid."));
+    }
+    if crate::wikimedia::licence::valid_image_url(raw) {
+        return Ok(raw.to_string());
     }
     let url = crate::steamgriddb::validate_cover_url(raw)
         .map_err(|_| anyhow!("Only SteamGridDB images or your own image files can be used."))?;

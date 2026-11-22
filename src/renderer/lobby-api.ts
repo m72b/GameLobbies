@@ -210,6 +210,15 @@ const api: LobbyAPI = {
     onMetadata: callback => subscribe<IgdbMetadataEvent>('igdb:metadata', callback),
     onProgress: callback => subscribe<IgdbBulkProgress>('igdb:progress', callback)
   },
+  wikimedia: {
+    get: gameId => call('wikimedia_get', { gameId }),
+    search: (gameId, query) => call('wikimedia_search', { gameId, query: query ?? null }),
+    choose: (gameId, qid) => call('wikimedia_choose', { gameId, qid }),
+    resetMatch: gameId => call('wikimedia_reset_match', { gameId }),
+    useLogo: (gameId, src) => call('wikimedia_use_logo', { gameId, src }),
+    useCover: (gameId, src) => call('wikimedia_use_cover', { gameId, src }),
+    onMetadata: callback => subscribe<IgdbMetadataEvent>('wikimedia:metadata', callback)
+  },
   updates: {
     check: () => call('updates_check'),
     autoCheck: () => call('updates_auto_check'),

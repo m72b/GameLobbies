@@ -615,3 +615,17 @@
 @media(max-width:900px){.setup-progress{display:none}.setup-content{padding:24px 20px 32px}}
 .setup-key{margin-top:16px;padding-top:14px;border-top:1px solid #ffffff0c}.setup-key h3{font-size:13px;margin:0 0 6px}
 .account-paste{display:flex;flex-direction:column;gap:6px;margin-top:8px}.account-paste input{font-size:11px}.account-paste small{font-size:10px}
+
+/* Wikimedia credits (author, licence, link to the Commons file page or the Wikipedia article) */
+.wiki-credit{display:inline-block;font-size:10px;color:var(--muted);line-height:1.4}
+.wiki-credit a{color:var(--muted);text-decoration:underline}
+.wiki-credit a:hover{color:var(--accent)}
+.gp-art-credits{position:absolute;right:14px;bottom:6px;z-index:3;max-width:45%;display:flex;flex-direction:column;align-items:flex-end;text-align:right;text-shadow:0 1px 2px rgba(0,0,0,.8)}
+.gp-cover-credit{margin:6px 0 2px}
+.gp-about .wiki-credit{margin:-4px 0 10px}
+.cz-wiki{margin:10px 0 14px}
+.cz-wiki-item{display:flex;flex-direction:column;gap:4px;min-width:0}
+.cz-wiki-item .wiki-credit{overflow-wrap:anywhere}
+.cz-wiki-note{font-size:10px;color:var(--muted)}
+.cz-grid.cover{grid-template-columns:repeat(auto-fill,minmax(110px,1fr))}
+.cz-grid.cover .cz-tile{aspect-ratio:2/3}.cz-grid.cover .cz-tile img{width:100%;height:100%;object-fit:cover;display:block}

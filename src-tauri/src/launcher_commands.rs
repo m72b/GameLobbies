@@ -513,6 +513,7 @@ pub async fn launchers_add_game(
     notify_library(&app, &state);
     // Covers come from SteamGridDB by title, like other custom games (when a key is set).
     crate::steamgriddb::spawn_auto_fetch(&app);
+    crate::wikimedia::spawn_auto(&app, std::time::Duration::from_secs(5));
     Ok(Some(AddedLauncherGame { game_id, games }))
 }
 
@@ -575,6 +576,7 @@ async fn add_label_only_game(
     };
     notify_library(app, state);
     crate::steamgriddb::spawn_auto_fetch(app);
+    crate::wikimedia::spawn_auto(app, std::time::Duration::from_secs(5));
     Ok(Some(AddedLauncherGame { game_id, games }))
 }
 
