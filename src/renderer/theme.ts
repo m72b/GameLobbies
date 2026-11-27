@@ -1,6 +1,9 @@
 import type { Settings, ThemeTokens } from '../shared/types'
+import { defaultTheme } from '../shared/defaults'
 
-export function applyTheme(theme: ThemeTokens, settings?: Settings) {
+export function applyTheme(stored: ThemeTokens, settings?: Settings) {
+  // The built-in theme always shows today's values, even where an older default is persisted.
+  const theme = stored.name === defaultTheme.name ? { ...defaultTheme, hover: stored.hover, backgroundImage: stored.backgroundImage } : stored
   const root = document.documentElement
   root.style.setProperty('--bg', theme.bg)
   root.style.setProperty('--surface', theme.surface)

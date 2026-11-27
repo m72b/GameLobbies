@@ -42,17 +42,17 @@ export function LauncherBlock({ game, launchers, libraryVersion, onOpenLink, onU
   }
 
   if (launchers.length === 0) return null
-  return <div className="gp-side-block gp-launchers"><div className="detail-label">LAUNCHERS</div>
-    {listed.length === 0 && <div className="muted-text">Not in any custom launcher.</div>}
+  return <div className="gp-side-block gp-launchers"><div className="detail-label">Launchers</div>
+    {listed.length === 0 && <div className="muted-text">Not in any custom launcher</div>}
     {listed.map(option => {
       const launcher = byId.get(option.launcherId)!
       return <div className="gp-route-row" key={option.launcherId}>
         <span className="store-badge small"><LauncherIcon launcher={launcher} /></span>
         <span className="route-name"><span className="route-label">{launcher.name}</span><small>{option.assigned ? (isLabelOnly(launcher) ? 'Listed here' : playsWithText(launcher)) : 'Added in the launcher'}</small></span>
-        {option.assigned && <button type="button" className="gp-launcher-remove" disabled={busy} title={'Unlink from ' + launcher.name} aria-label={'Unlink from ' + launcher.name} onClick={() => void remove(option.launcherId)}><X size={13} /></button>}
+        {option.assigned && <button type="button" className="gp-launcher-remove" disabled={busy} title={'Unlink from ' + launcher.name} aria-label={'Unlink from ' + launcher.name} onClick={() => void remove(option.launcherId)}><X size={16} /></button>}
       </div>
     })}
-    {canLink && <div className="gp-launcher-add"><button type="button" className="secondary-button" onClick={onOpenLink}><Link2 size={14} /> Link to launcher…</button></div>}
+    {canLink && <div className="gp-launcher-add"><button type="button" className="secondary-button" onClick={onOpenLink}><Link2 size={16} /> Link to launcher…</button></div>}
     {error && <div className="form-error" role="alert">{error}</div>}
   </div>
 }
@@ -101,10 +101,10 @@ export function LinkLauncherDialog({ game, launchers, onGames, onClose }: {
 
   return <div className="modal-scrim" onMouseDown={event => { if (event.target === event.currentTarget && !busy) onClose() }}>
     <div className="modal link-modal link-launcher-modal" role="dialog" aria-modal="true" aria-labelledby="link-launcher-title">
-      <div className="modal-head"><h2 id="link-launcher-title">Link to launcher</h2><button type="button" aria-label="Close" disabled={busy} onClick={onClose}><X size={17} /></button></div>
+      <div className="modal-head"><h2 id="link-launcher-title">Link to launcher</h2><button type="button" aria-label="Close" disabled={busy} onClick={onClose}><X size={16} /></button></div>
       <p>Choose the launcher that starts <b>{game.title}</b>. Its other ways to start stay under Play from.</p>
       {done && <div className="link-launcher-done" role="status">
-        <Check size={15} /><span>{done.message}</span>
+        <Check size={16} /><span>{done.message}</span>
         <button type="button" className="link-button" disabled={busy} onClick={() => void unlink(done.launcherId)}>Undo</button>
       </div>}
       <div className="link-game-list link-launcher-list">
@@ -141,7 +141,7 @@ export function LinkLauncherDialog({ game, launchers, onGames, onClose }: {
         })}
       </div>
       {error && <div className="form-error" role="alert">{error}</div>}
-      <p className="link-launcher-note">Launch options for the launcher can be added afterwards with Launch options under Play from.</p>
+      <p className="link-launcher-note">Launch options for the launcher can be added afterwards with Launch options under Play from</p>
       <div className="modal-actions"><button type="button" className="primary-button" disabled={busy} onClick={onClose}>Done</button></div>
     </div>
   </div>

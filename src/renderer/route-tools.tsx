@@ -69,7 +69,7 @@ export function LaunchOptionsField({ value, onChange, check, checkKey, launcher,
         ? <>Added after {launcher}’s own arguments and the game. Files must be inside {launcher}’s folder.</>
         : <>Passed to the game’s .exe. Files must be inside the game’s folder.</>}
       {' '}Separate options with spaces and quote parts that contain spaces. No command prompt is used, and Windows shows exactly what will run before anything is saved.
-      {' '}<a className="lo-help" href={LAUNCH_OPTIONS_HELP}>How launch options work <ExternalLink size={10} /></a>
+      {' '}<a className="lo-help" href={LAUNCH_OPTIONS_HELP}>How launch options work <ExternalLink size={16} /></a>
     </p>
   </div>
 }
@@ -103,7 +103,7 @@ export function LaunchOptionsEditor({ route, support, pending, autoFocus, onSave
   }
   return <form className="lo-editor" onSubmit={event => { event.preventDefault(); void save(args) }}>
     <LaunchOptionsField value={args} onChange={setArgs} check={onCheck} checkKey={route.sourceId + '|' + route.launchTarget} launcher={support.launcher} autoFocus={autoFocus} disabled={busy} />
-    {confirming && <div className="lo-pending" role="status"><b>Needs confirmation.</b> These options came from a backup or an older version, or {support.launcher ? support.launcher + '’s program, arguments or working folder, or the game’s target,' : 'the game’s .exe'} changed, so Play won’t use them until you confirm them.</div>}
+    {confirming && <div className="lo-pending" role="status"><b>Needs confirmation</b> These options came from a backup or an older version, or {support.launcher ? support.launcher + '’s program, arguments or working folder, or the game’s target,' : 'the game’s .exe'} changed, so Play won’t use them until you confirm them.</div>}
     {error && <div className="form-error" role="alert">{error}</div>}
     <div className="settings-actions">
       <button className="primary-button" disabled={busy || (unchanged && !confirming)}>{confirming ? 'Confirm options…' : args.trim() ? 'Save options…' : 'Remove options'}</button>
@@ -181,7 +181,7 @@ export function RouteToolPanel({ tool, route, launchers, canUnlink, onRename, on
       ? <LaunchOptionsEditor route={route} support={support} pending={pending} autoFocus onSave={onArgs} onCheck={onArgsCheck} onClose={onClose} />
       : <><p className="muted-text">{support.reason}</p><div className="settings-actions"><button type="button" className="secondary-button" onClick={onClose}>Close</button></div></>)}
     {tool === 'unlink' && (!canUnlink
-      ? <><p className="muted-text">This is the game’s only launch route, so there is nothing to unlink.</p><div className="settings-actions"><button type="button" className="secondary-button" onClick={onClose}>Close</button></div></>
+      ? <><p className="muted-text">This is the game’s only launch route, so there is nothing to unlink</p><div className="settings-actions"><button type="button" className="secondary-button" onClick={onClose}>Close</button></div></>
       : preview
         ? <>
           <p className="muted-text">{preview.restores

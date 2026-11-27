@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
-import { LogIn, RefreshCw, ShieldCheck } from 'lucide-react'
+import { Check, LogIn, RefreshCw, ShieldCheck, X } from 'lucide-react'
 import type { AccountMode, AccountStatus, AccountStore } from '../shared/types'
 import { accountLine, canSync } from '../shared/accounts'
 import { StoreIcon } from './store-icons'
@@ -60,7 +60,7 @@ const WINDOW_NOTE = "Battle.net signs in in GameLobbies's own private window sho
 
 export function SignInNote({ store }: { store?: AccountStore }) {
   const text = store === 'steam' ? STEAM_NOTE : store === 'gog' ? GOG_NOTE : store ? WINDOW_NOTE : [STEAM_NOTE, GOG_NOTE, WINDOW_NOTE].join(' ')
-  return <p className="account-note"><ShieldCheck size={14} aria-hidden="true" /><span>{text}</span></p>
+  return <p className="account-note"><ShieldCheck size={16} aria-hidden="true" /><span>{text}</span></p>
 }
 
 /** A store's sign-in with its states (Settings → Accounts and the first-time setup). */
@@ -88,7 +88,7 @@ export function StoreSignIn({ accounts, status }: { accounts: Accounts; status: 
   if (status.signingIn) return <div className="account-actions"><span className="account-waiting" role="status">{steam ? 'Continue in your browser…' : 'Finish signing in in the ' + status.name + ' window…'}</span><button type="button" className="secondary-button" disabled={busy} onClick={() => void accounts.cancel(status.store)}>Cancel sign-in</button></div>
   const again = status.signedIn
   const label = again ? 'Sign in again' : steam ? 'Sign in through Steam' : gog ? 'Sign in to GOG in your browser' : 'Sign in to ' + status.name
-  return <div className="account-actions"><button type="button" className={again ? 'secondary-button' : 'primary-button'} disabled={busy} onClick={() => void accounts.signIn(status.store)}><LogIn size={14} /> {label}</button></div>
+  return <div className="account-actions"><button type="button" className={again ? 'secondary-button' : 'primary-button'} disabled={busy} onClick={() => void accounts.signIn(status.store)}><LogIn size={16} /> {label}</button></div>
 }
 
 function AccountRow({ status, accounts }: { status: AccountStatus; accounts: Accounts }) {
@@ -102,8 +102,8 @@ function AccountRow({ status, accounts }: { status: AccountStatus; accounts: Acc
     <div className="account-main">
       <div className="key-row-title"><b>{status.name}</b><span className={'key-pill ' + (line.state === 'ok' ? 'set' : line.state === 'partial' ? 'partial' : '')}>{line.pill}</span></div>
       <small>{line.label}</small>
-      {status.last && status.signedIn && <small className={status.last.ok ? 'account-last' : 'key-row-problem'}>{status.last.ok ? '✓' : '✗'} {status.last.message} · {new Date(status.last.checkedAt).toLocaleString()}</small>}
-      {status.notice && !status.notice.ok && <small className="key-row-problem" role="status">✗ {status.notice.message}</small>}
+      {status.last && status.signedIn && <small className={status.last.ok ? 'account-last' : 'key-row-problem'}>{status.last.ok ? <Check size={14} strokeWidth={1.5} /> : <X size={14} strokeWidth={1.5} />} {status.last.message} · {new Date(status.last.checkedAt).toLocaleString()}</small>}
+      {status.notice && !status.notice.ok && <small className="key-row-problem" role="status"><X size={14} strokeWidth={1.5} /> {status.notice.message}</small>}
       {status.store === 'gog' && status.signedIn && status.notice?.ok && status.notice.message.startsWith('Signed in to GOG as ') && <small className="account-last" role="status">{status.notice.message} <button type="button" className="link-button" onClick={() => setConfirming('out')}>Not you? Sign out</button></small>}
       {status.available && <>
         {(!status.signedIn || status.last?.needsSignIn) && <StoreSignIn accounts={accounts} status={status} />}
@@ -113,7 +113,7 @@ function AccountRow({ status, accounts }: { status: AccountStatus; accounts: Acc
             <option value="installed">Installed files only</option>
           </select></label>
           {status.store === 'steam' && !status.keySet && <button type="button" className="primary-button" onClick={() => openSheet('steam')}>Add API key</button>}
-          <button type="button" className="secondary-button" disabled={busy || !canSync(status)} onClick={() => void accounts.sync(status.store)}><RefreshCw size={13} className={busy ? 'spin' : ''} /> Sync now</button>
+          <button type="button" className="secondary-button" disabled={busy || !canSync(status)} onClick={() => void accounts.sync(status.store)}><RefreshCw size={16} className={busy ? 'spin' : ''} /> Sync now</button>
           {confirming === 'out'
             ? <span className="confirm-group"><span>Sign out and remove the not-installed games it added?</span><button type="button" className="secondary-button danger" disabled={busy} onClick={() => { setConfirming(null); void accounts.signOut(status.store) }}>Sign out</button><button type="button" className="secondary-button" onClick={() => setConfirming(null)}>Cancel</button></span>
             : confirming === 'installed'

@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Check, X } from 'lucide-react'
 import type { SteamOwnedStatus } from '../shared/types'
 import { cleanPaste } from './igdb-setup'
 import { steamSummary } from '../shared/api-keys'
@@ -68,7 +69,7 @@ export function SteamOwnedSetup({ status, busy, error, onSave, onRemove }: {
     </form>
     <div className="sgdb-status-row" role="status">
       <span className="sgdb-status">{steamSummary(status).label}</span>
-      {status.last && <span className={'sgdb-test ' + (status.last.ok ? 'ok' : 'fail')}>{status.last.ok ? '✓' : '✗'} {status.last.message}{status.last.checkedAt ? ' · ' + new Date(status.last.checkedAt).toLocaleString() : ''}</span>}
+      {status.last && <span className={'sgdb-test ' + (status.last.ok ? 'ok' : 'fail')}>{status.last.ok ? <Check size={14} strokeWidth={1.5} /> : <X size={14} strokeWidth={1.5} />} {status.last.message}{status.last.checkedAt ? ' · ' + new Date(status.last.checkedAt).toLocaleString() : ''}</span>}
     </div>
   </div>
 }

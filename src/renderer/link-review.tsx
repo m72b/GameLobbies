@@ -63,7 +63,7 @@ export function LinkReview({ gameIds, reviewId, onClose, onLinked }: { gameIds: 
   const pick = (key: ChoiceKey) => (id: string) => set({ [key]: id } as Partial<LinkChoices>)
 
   return <div className="modal-scrim"><div className="modal link-modal link-review" role="dialog" aria-label="Review link">
-    <div className="modal-head"><h2>Link {gameIds.length} games</h2><button type="button" aria-label="Close" onClick={onClose}><X size={17} /></button></div>
+    <div className="modal-head"><h2>Link {gameIds.length} games</h2><button type="button" aria-label="Close" onClick={onClose}><X size={16} /></button></div>
     {!preview && !error && <div className="empty-inline">Preparing…</div>}
     {error && <div className="form-error" role="alert">{error}</div>}
     {preview && choices && <div className="link-review-body">

@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import Fuse from 'fuse.js'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { BarChart3, CircleUserRound, CloudDownload, EyeOff, Gamepad2, HardDrive, Heart, History, Library, MoreHorizontal, Pencil, Play, Plus, Search, Settings2, Star, X } from 'lucide-react'
+import { BarChart3, ChevronDown, CircleUserRound, CloudDownload, EyeOff, Gamepad2, HardDrive, Heart, History, Library, Minus, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pencil, Play, Plus, Search, Settings2, Square, X } from 'lucide-react'
 import { StoreIcon } from './store-icons'
 import { GlMark } from './gl-mark'
 import type { CustomLauncher, Game, LauncherTargetKind, RunningGame, Settings, SetupInfo, Store as StoreName, SteamGridDbCover, StoreTime, UpdateInfo } from '../shared/types'
@@ -95,7 +95,8 @@ export default function App() {
   const [sgdbGame, setSgdbGame] = useState<Game | null>(null)
   const [sgdbApplying, setSgdbApplying] = useState(false)
   const [editMode, setEditMode] = useState(false)
-  const [collapsed, setCollapsed] = useState(true)
+  const [collapsed, setCollapsed] = useState(false)
+  const [addMenu, setAddMenu] = useState(false)
   const [gridWidth, setGridWidth] = useState(1200)
   const [focusedId, setFocusedId] = useState<string | null>(null)
   const [historyOpen, setHistoryOpen] = useState(false)
@@ -390,7 +391,7 @@ export default function App() {
       }
       if (event.key === 'Escape') {
         if (sheet.open) return
-        const dialogOpen = !!(menu || adding || editingGame || sgdbGame || linkingGame || linkReview || launcherLinkId || document.querySelector('.modal-scrim'))
+        const dialogOpen = !!(menu || addMenu || adding || editingGame || sgdbGame || linkingGame || linkReview || launcherLinkId || document.querySelector('.modal-scrim'))
         if (settingsOpen && !dialogOpen) {
           // A focused field gives up focus first; a second Escape leaves Settings.
           if (typing) target.blur(); else closeSettings()
@@ -402,6 +403,7 @@ export default function App() {
         }
         if (!dialogOpen && openId) closeGame()
         setMenu(null)
+        setAddMenu(false)
         setLauncherLinkId(null)
         setAdding(false)
         setEditingGame(null)
@@ -442,7 +444,7 @@ export default function App() {
       observer.disconnect()
       window.removeEventListener('keydown', key)
     }
-  }, [openId, menu, adding, editingGame, sgdbGame, linkingGame, linkReview, launcherLinkId, settingsOpen, statsOpen, sheet.open])
+  }, [openId, menu, addMenu, adding, editingGame, sgdbGame, linkingGame, linkReview, launcherLinkId, settingsOpen, statsOpen, sheet.open])
 
   useEffect(() => { applyTheme(settings.theme, settings); return applyMotion(settings.motion, settings.animations) }, [settings])
   useEffect(() => {
@@ -456,6 +458,7 @@ export default function App() {
   const pageOpen = !!openGameData && !settingsOpen
   // The library is out of view while a game page or Settings is showing.
   const awayFromLibrary = pageOpen || settingsOpen || statsOpen || setupOpen
+  const libActive = !statsOpen && !storageOpen && !settingsOpen && !setupOpen
   const wasAway = useRef(false)
   useLayoutEffect(() => {
     if (wasAway.current && !awayFromLibrary && scrollRef.current) {
@@ -471,7 +474,7 @@ export default function App() {
           const grid = scrollRef.current?.getBoundingClientRect()
           const box = poster?.getBoundingClientRect()
           if (!poster || !grid || !box || !isRectVisible(rectOf(box), rectOf(grid))) return null
-          return { rect: rectOf(box), radius: Number.parseFloat(getComputedStyle(poster).borderTopLeftRadius) || 10 }
+          return { rect: rectOf(box), radius: Number.parseFloat(getComputedStyle(poster).borderTopLeftRadius) || 12 }
         }
         const parts = mainRef.current ? Array.from(mainRef.current.children) : []
         requestAnimationFrame(() => requestAnimationFrame(() => {
@@ -515,6 +518,13 @@ export default function App() {
     )
   }, [games, query, store, view, fuzzy, onlyInstalled])
   const railStores = useMemo(() => stores.filter(item => item === store || games.some(game => game.store === item && !game.hidden && (!onlyInstalled || isInstalled(game)))).slice(0, 8), [games, store, onlyInstalled])
+  // Sidebar counts use the same rules as the grid: hidden games apart, and the Installed filter applied.
+  const counts = useMemo(() => {
+    const shown = games.filter(game => !onlyInstalled || isInstalled(game))
+    const visible = shown.filter(game => !game.hidden)
+    const per = (filter: string) => visible.filter(game => gameMatchesFilter(game, filter)).length
+    return { all: visible.length, favorites: visible.filter(game => game.favorite).length, hidden: shown.length - visible.length, per }
+  }, [games, onlyInstalled])
   const activeLauncher = useMemo(() => { const id = filterLauncherId(store); return id ? launchers.find(item => item.id === id) : undefined }, [store, launchers])
   // A launcher filter whose launcher was deleted goes back to all games.
   useEffect(() => { if (filterLauncherId(store) && !activeLauncher) setStore('All Games') }, [store, activeLauncher])
@@ -536,12 +546,12 @@ export default function App() {
   const swapping = shownKey !== filterKey
   if (!swapping) shownGames.current = ordered
   const gridGames = swapping ? shownGames.current : ordered
-  const cols = Math.max(2, Math.floor(gridWidth / (settings.posterWidth + Number.parseInt(settings.theme.gap || '9'))))
+  const cols = Math.max(2, Math.floor(gridWidth / (settings.posterWidth + Number.parseInt(settings.theme.gap || '16'))))
   filteredRef.current = ordered
   focusedIdRef.current = focusedId
   colsRef.current = cols
   const rows = useMemo(() => Array.from({ length: Math.ceil(gridGames.length / cols) }, (_, index) => gridGames.slice(index * cols, (index + 1) * cols)), [gridGames, cols])
-  const virtual = useVirtualizer({ count: rows.length, getScrollElement: () => scrollRef.current, estimateSize: () => settings.posterWidth * 1.5 + 62, overscan: 3 })
+  const virtual = useVirtualizer({ count: rows.length, getScrollElement: () => scrollRef.current, estimateSize: () => settings.posterWidth * 1.5 + 72, overscan: 3 })
   scrollToRowRef.current = row => virtual.scrollToIndex(row, { align: 'auto' })
   useEffect(() => {
     if (shownKey === filterKey) return
@@ -615,35 +625,41 @@ export default function App() {
     }
   }
 
-  return <KeysUiContext.Provider value={{ keys, openSheet, openTab: () => openSettings('api-keys') }}><div className="app-shell">
+  return <KeysUiContext.Provider value={{ keys, openSheet, openTab: () => openSettings('api-keys') }}><div className={'app-shell' + (collapsed ? ' side-compact' : '')}>
     <header className="titlebar">
-      <div className="brand"><GlMark size={12} className="gl-mark" />GameLobbies</div>{nowPlaying && !(pageOpen && openId === nowPlaying.game.id) && <NowPlaying game={nowPlaying.game} entry={nowPlaying.item} onOpen={() => openGame(nowPlaying.game)} />}<div className="drag-space" data-tauri-drag-region />
-      <button className="title-action" onClick={() => window.lobby.window.minimize()} aria-label="Minimize">—</button>
-      <button className="title-action" onClick={() => window.lobby.window.toggleMaximize()} aria-label="Maximize">□</button>
-      <button className="title-action close" onClick={() => window.lobby.window.close()} aria-label="Close">×</button>
+      {nowPlaying && !(pageOpen && openId === nowPlaying.game.id) && <NowPlaying game={nowPlaying.game} entry={nowPlaying.item} onOpen={() => openGame(nowPlaying.game)} />}<div className="drag-space" data-tauri-drag-region />
+      <button className="title-action" onClick={() => window.lobby.window.minimize()} aria-label="Minimize"><Minus size={16} strokeWidth={1.5} /></button>
+      <button className="title-action" onClick={() => window.lobby.window.toggleMaximize()} aria-label="Maximize"><Square size={16} strokeWidth={1.5} /></button>
+      <button className="title-action close" onClick={() => window.lobby.window.close()} aria-label="Close"><X size={16} strokeWidth={1.5} /></button>
     </header>
-    <aside className={'rail ' + (collapsed ? 'compact' : '')} onClickCapture={() => { if (setupOpen) setSetupOpen(false) }}>
-      <button className="rail-button" onClick={() => setCollapsed(!collapsed)} title="Menu"><GlMark size={16} className="gl-mark" /></button>
-      <button className="rail-button search-button" onClick={() => searchRef.current?.focus()} title="Search"><Search /></button>
-      <div className="rail-sep" />
-      <button className={'rail-button ' + (view === 'All Games' ? 'active' : '')} onClick={() => { setStorageOpen(false); setSettingsOpen(false); setStatsOpen(false); setView('All Games'); setStore('All Games') }} title="All games"><Library /></button>
-      <button className={'rail-button ' + (view === 'Favorites' ? 'active' : '')} onClick={() => { setStorageOpen(false); setSettingsOpen(false); setStatsOpen(false); setView('Favorites') }} title="Favorites"><Heart /></button>
-      <button className={'rail-button ' + (statsOpen ? 'active' : '')} onClick={() => statsOpen ? closeStats() : openStats()} title="Statistics"><BarChart3 /></button>
-      <button className={'rail-button ' + (view === 'Hidden' ? 'active' : '')} onClick={() => { setStorageOpen(false); setSettingsOpen(false); setStatsOpen(false); setView('Hidden') }} title="Hidden games"><EyeOff /></button>
-      <button className={'rail-button ' + (storageOpen ? 'active' : '')} onClick={() => { setOpenId(null); setSettingsOpen(false); setStatsOpen(false); setStorageOpen(!storageOpen) }} title="Storage"><HardDrive /></button>
-      <button className={'rail-button ' + (historyOpen ? 'active' : '')} onClick={() => setHistoryOpen(true)} title="Play history (all games)"><History /></button>
-      <div className="rail-sep" />
-      <div className="rail-stores">{railStores.map(item =>
-        <button key={item} className={'rail-button mini ' + (store === item ? 'active' : '')} title={item} onClick={() => { setSettingsOpen(false); setStatsOpen(false); setStorageOpen(false); setStore(store === item ? 'All Games' : item); setView('All Games') }}><StoreIcon store={item} size={16} /></button>
+    <aside className={'sidebar' + (collapsed ? ' compact' : '')} onClickCapture={() => { if (setupOpen) setSetupOpen(false) }}>
+      <div className="side-head">
+        <GlMark size={24} className="gl-mark" />
+        {!collapsed && <span className="side-brand">GameLobbies</span>}
+        <button className="side-toggle" onClick={() => setCollapsed(!collapsed)} title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-expanded={!collapsed}>{collapsed ? <PanelLeftOpen size={16} strokeWidth={1.5} /> : <PanelLeftClose size={16} strokeWidth={1.5} />}</button>
+      </div>
+      <button className="side-row side-search" onClick={() => searchRef.current?.focus()} title="Search (Ctrl+K)"><Search size={16} strokeWidth={1.5} /><span className="side-text">Search</span><kbd>Ctrl K</kbd></button>
+      <div className="side-label">Library</div>
+      <div className="side-list">
+        <button className={'side-row' + (libActive && view === 'All Games' ? ' active' : '')} onClick={() => { setStorageOpen(false); setSettingsOpen(false); setStatsOpen(false); setView('All Games'); setStore('All Games') }} title="All games"><Library size={16} strokeWidth={1.5} /><span className="side-text">All games</span><span className="side-count">{counts.all}</span></button>
+        <button className={'side-row' + (libActive && view === 'Favorites' ? ' active' : '')} onClick={() => { setStorageOpen(false); setSettingsOpen(false); setStatsOpen(false); setView('Favorites') }} title="Favorites"><Heart size={16} strokeWidth={1.5} /><span className="side-text">Favorites</span><span className="side-count">{counts.favorites}</span></button>
+        <button className={'side-row' + (statsOpen ? ' active' : '')} onClick={() => statsOpen ? closeStats() : openStats()} title="Statistics"><BarChart3 size={16} strokeWidth={1.5} /><span className="side-text">Statistics</span></button>
+        <button className={'side-row' + (libActive && view === 'Hidden' ? ' active' : '')} onClick={() => { setStorageOpen(false); setSettingsOpen(false); setStatsOpen(false); setView('Hidden') }} title="Hidden games"><EyeOff size={16} strokeWidth={1.5} /><span className="side-text">Hidden</span><span className="side-count">{counts.hidden}</span></button>
+        <button className={'side-row' + (storageOpen ? ' active' : '')} onClick={() => { setOpenId(null); setSettingsOpen(false); setStatsOpen(false); setStorageOpen(!storageOpen) }} title="Storage"><HardDrive size={16} strokeWidth={1.5} /><span className="side-text">Storage</span></button>
+        <button className={'side-row' + (historyOpen ? ' active' : '')} onClick={() => setHistoryOpen(true)} title="Play history (all games)"><History size={16} strokeWidth={1.5} /><span className="side-text">Play history</span></button>
+      </div>
+      <div className="side-label">Stores</div>
+      <div className="side-list">{railStores.map(item =>
+        <button key={item} className={'side-row' + (libActive && store === item ? ' active' : '')} title={item} onClick={() => { setSettingsOpen(false); setStatsOpen(false); setStorageOpen(false); setStore(libActive && store === item ? 'All Games' : item); setView('All Games') }}><StoreIcon store={item} size={16} /><span className="side-text">{item}</span><span className="side-count">{counts.per(item)}</span></button>
       )}{launchers.map(item => {
         const filter = launcherFilter(item.id)
-        return <button key={filter} className={'rail-button mini ' + (store === filter ? 'active' : '')} title={item.name} aria-label={item.name} onClick={() => { setSettingsOpen(false); setStatsOpen(false); setStorageOpen(false); setStore(store === filter ? 'All Games' : filter); setView('All Games') }}><LauncherIcon launcher={item} size={16} /></button>
-      })}<button className="rail-button mini" title="Add source" onClick={() => openSettings()}><Plus /></button></div>
-      <div className="rail-bottom">
-        <button className="rail-button" title="Export library" onClick={() => void window.lobby.backup.export()}><CloudDownload /></button>
-        <button className={'rail-button ' + (editMode ? 'active' : '')} title="Edit mode" onClick={() => setEditMode(!editMode)}><Pencil /></button>
-        <button className={'rail-button ' + (settingsOpen ? 'active' : '')} title="Settings (Ctrl+,)" onClick={() => openSettings()}><Settings2 /></button>
-        <button className="rail-button" title="Quit" onClick={() => window.lobby.app.quit()}><X /></button>
+        return <button key={filter} className={'side-row' + (libActive && store === filter ? ' active' : '')} title={item.name} aria-label={item.name} onClick={() => { setSettingsOpen(false); setStatsOpen(false); setStorageOpen(false); setStore(libActive && store === filter ? 'All Games' : filter); setView('All Games') }}><LauncherIcon launcher={item} size={16} /><span className="side-text">{item.name}</span><span className="side-count">{counts.per(filter)}</span></button>
+      })}<button className="side-row" title="Add source" onClick={() => openSettings()}><Plus size={16} strokeWidth={1.5} /><span className="side-text">Add source</span></button></div>
+      <div className="side-bottom">
+        <button className="side-row" title="Export library" onClick={() => void window.lobby.backup.export()}><CloudDownload size={16} strokeWidth={1.5} /><span className="side-text">Export library</span></button>
+        <button className={'side-row' + (editMode ? ' active' : '')} title="Edit mode" onClick={() => setEditMode(!editMode)}><Pencil size={16} strokeWidth={1.5} /><span className="side-text">Edit mode</span></button>
+        <button className={'side-row' + (settingsOpen ? ' active' : '')} title="Settings (Ctrl+,)" onClick={() => openSettings()}><Settings2 size={16} strokeWidth={1.5} /><span className="side-text">Settings</span><kbd>Ctrl ,</kbd></button>
+        <button className="side-row" title="Quit" onClick={() => window.lobby.app.quit()}><X size={16} strokeWidth={1.5} /><span className="side-text">Quit</span></button>
       </div>
     </aside>
     <main ref={mainRef} className={'main' + (pageOpen ? ' page-open' : '') + (settingsOpen || setupOpen ? ' settings-open' : '') + (statsOpen && !pageOpen && !settingsOpen ? ' stats-open' : '')}>
@@ -657,27 +673,29 @@ export default function App() {
         <CircleUserRound size={16} aria-hidden="true" />
         <span><b>Add store accounts</b> · Sign in to Steam to also list the games you own but haven't installed. Installed games are found without an account.</span>
         <button type="button" className="primary-button" onClick={() => void openSetup()}>Set up</button>
-        <button type="button" className="update-notice-close" title="Dismiss" aria-label="Dismiss the store accounts banner" onClick={() => void dismissSetupBanner()}><X size={14} /></button>
+        <button type="button" className="update-notice-close" title="Dismiss" aria-label="Dismiss the store accounts banner" onClick={() => void dismissSetupBanner()}><X size={16} /></button>
       </div>}
       <div className="toolbar">
-        <div><div className="eyebrow">YOUR COLLECTION</div><h1>{view === 'All Games' ? (store === 'All Games' ? 'All games' : activeLauncher ? activeLauncher.name : store) : view}</h1></div>
+        <h1>{view === 'All Games' ? (store === 'All Games' ? 'All games' : activeLauncher ? activeLauncher.name : store) : view}<span className="title-count">{filtered.length}</span></h1>
         <div className="toolbar-actions">
-          <label className="searchbox"><Search size={16} /><input ref={searchRef} value={query} onChange={event => setQuery(event.target.value)} placeholder="Search your library" /><kbd>Ctrl K</kbd></label>
-          <button className="icon-button" title="Scan libraries" onClick={() => void scan()} disabled={scanBusy}><CloudDownload size={17} className={scanBusy ? 'spin' : ''} /></button>
-          <button className="secondary-button" onClick={() => void addLocalGame()} disabled={localBusy} title="Pick a PC game (.exe, .lnk, .url) or a ROM file"><Plus size={16} /> Add local game</button>
-          {activeLauncher
-            ? <button className="primary-button" onClick={() => openAdd(activeLauncher.id)}><Plus size={16} /> Add game to {activeLauncher.name}</button>
-            : <button className="primary-button" onClick={() => openAdd()}><Plus size={16} /> Add game</button>}
+          <label className="searchbox"><Search size={16} strokeWidth={1.5} /><input ref={searchRef} value={query} onChange={event => setQuery(event.target.value)} placeholder="Search" /><kbd>Ctrl K</kbd></label>
+          <button className="icon-button" title="Scan libraries" aria-label="Scan libraries" onClick={() => void scan()} disabled={scanBusy}><CloudDownload size={16} strokeWidth={1.5} className={scanBusy ? 'spin' : ''} /></button>
+          <div className="add-wrap">
+            <button className="primary-button" aria-haspopup="menu" aria-expanded={addMenu} onClick={() => setAddMenu(open => !open)}><Plus size={16} strokeWidth={1.5} /> Add game <ChevronDown size={16} strokeWidth={1.5} /></button>
+            {addMenu && <>
+              <div className="menu-dismiss gp-dismiss" onMouseDown={() => setAddMenu(false)} />
+              <div className="context-menu add-menu" role="menu">
+                <button role="menuitem" onClick={() => { setAddMenu(false); openAdd(activeLauncher?.id) }}>{activeLauncher ? 'Add game to ' + activeLauncher.name + '…' : 'Store link or launcher…'}</button>
+                <button role="menuitem" disabled={localBusy} title="Pick a PC game (.exe, .lnk, .url) or a ROM file" onClick={() => { setAddMenu(false); void addLocalGame() }}>Add local game…</button>
+              </div>
+            </>}
+          </div>
         </div>
       </div>
       <div className="library-meta">
-        <span>{filtered.length} GAMES</span><span className="meta-dot" />
-        <button onClick={openStats}><BarChart3 size={13} /> Statistics</button>
-        <button onClick={() => setHistoryOpen(true)}><History size={13} /> Play history</button>
         <label className="sort-control">Sort<select value={sortBy} onChange={event => setSortBy(event.target.value as SortBy)}><option value="title">Title</option><option value="lastPlayed">Last played</option><option value="playtime">Playtime</option><option value="library">Library</option></select></label>
         <span className="meta-spacer" />
         <div className="segmented" role="group" aria-label="Installed filter"><button className={onlyInstalled ? 'active' : ''} aria-pressed={onlyInstalled} onClick={() => void setInstalledFilter(true)}>Installed</button><button className={!onlyInstalled ? 'active' : ''} aria-pressed={!onlyInstalled} onClick={() => void setInstalledFilter(false)}>All</button></div>
-        <button onClick={() => setView('Favorites')}><Star size={13} /> Favorites</button>
       </div>
       {view === 'All Games' && store === 'All Games' && !query && <RecentShelf games={games} libraryVersion={libraryVersion} onOpen={openGame} />}
       <section className="grid-scroll" ref={scrollRef} onContextMenu={event => { if (!(event.target as HTMLElement).closest('.game-card')) event.preventDefault() }}>
@@ -697,16 +715,16 @@ export default function App() {
                 <CardPoster game={game} index={row.index * cols + index}>
                   {runningById.has(game.id) && <span className={'run-badge ' + runningById.get(game.id)!.state}><span className="gp-live-dot" />{runningById.get(game.id)!.state === 'launching' ? 'Launching' : 'Playing'}</span>}
                   {settings.showBadges && <CardBadge game={game} launchers={launchers} />}
-                  <button className="play-overlay" onClick={event => { event.stopPropagation(); void launch(game) }}><Play size={14} fill="currentColor" /> Play</button>
-                  <button className="card-more" aria-label="Game actions" onClick={event => { event.stopPropagation(); setMenu({ x: event.clientX, y: event.clientY, game }) }}><MoreHorizontal size={17} /></button>
+                  <button className="play-overlay" onClick={event => { event.stopPropagation(); void launch(game) }}><Play size={16} fill="currentColor" strokeWidth={1.5} /> Play</button>
+                  <button className="card-more" aria-label="Game actions" onClick={event => { event.stopPropagation(); setMenu({ x: event.clientX, y: event.clientY, game }) }}><MoreHorizontal size={16} strokeWidth={1.5} /></button>
                 </CardPoster>
                 <div className="card-title">{game.title}</div>
-                <div className="card-subtitle">{storeName(game)}{effectiveSeconds(game, storeTimes) >= 60 ? ' · ' + Math.floor(effectiveSeconds(game, storeTimes) / 3600) + 'h played' : ''}</div>
+                <div className="card-subtitle">{storeName(game)}{effectiveSeconds(game, storeTimes) >= 60 && <> · <span className="card-hours">{Math.floor(effectiveSeconds(game, storeTimes) / 3600)} h</span></>}</div>
               </article>)}
             </div>
           })}
         </div>
-        {!swapping && !filtered.length && onlyInstalled && !query && games.some(game => (view === 'Hidden' ? game.hidden : !game.hidden) && gameMatchesFilter(game, store) && (view !== 'Favorites' || game.favorite)) ? <div className="empty"><Gamepad2 size={30} /><h3>No installed games here</h3><p>Uninstalled games are hidden. Show all to see games you own but haven't installed.</p><button className="primary-button" onClick={() => void setInstalledFilter(false)}>Show all games</button></div> : !swapping && !filtered.length && <div className="empty"><Gamepad2 size={30} /><h3>{query ? 'No matching games' : view === 'Hidden' ? 'No hidden games' : 'Your library is empty'}</h3><p>{view === 'Hidden' ? 'Games you hide will appear here.' : 'Scan your stores or add a game manually.'}</p><button className="primary-button" onClick={() => void scan()}><CloudDownload size={15} /> Scan libraries</button></div>}
+        {!swapping && !filtered.length && onlyInstalled && !query && games.some(game => (view === 'Hidden' ? game.hidden : !game.hidden) && gameMatchesFilter(game, store) && (view !== 'Favorites' || game.favorite)) ? <div className="empty"><Gamepad2 size={30} /><h3>No installed games here</h3><p>Uninstalled games are hidden. Show all to see games you own but haven't installed.</p><button className="primary-button" onClick={() => void setInstalledFilter(false)}>Show all games</button></div> : !swapping && !filtered.length && <div className="empty"><Gamepad2 size={30} /><h3>{query ? 'No matching games' : view === 'Hidden' ? 'No hidden games' : 'Your library is empty'}</h3><p>{view === 'Hidden' ? 'Games you hide will appear here' : 'Scan your stores or add a game manually'}</p><button className="primary-button" onClick={() => void scan()}><CloudDownload size={16} /> Scan libraries</button></div>}
       </section>
       </>}
     </main>
@@ -722,7 +740,7 @@ export default function App() {
         const kind = launcher ? (labelOnly ? 'file' : kindFor(launcher)) : undefined
         const identifierError = kind === 'identifier' && addIdentifier ? identifierProblem(addIdentifier) : ''
         return <>
-          <div className="modal-head"><h2>{launcher ? 'Add game to ' + launcher.name : 'Add a game'}</h2><button type="button" aria-label="Close" onClick={() => setAdding(false)}><X size={17} /></button></div>
+          <div className="modal-head"><h2>{launcher ? 'Add game to ' + launcher.name : 'Add a game'}</h2><button type="button" aria-label="Close" onClick={() => setAdding(false)}><X size={16} /></button></div>
           {launchers.length > 0 && <label>Launch with<select value={addSource} onChange={event => { setAddSource(event.target.value); setAddIdentifier('') }}>
             <option value="">A store link</option>
             {launchers.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
@@ -734,7 +752,7 @@ export default function App() {
           <label>Title<input required={!launcher || kind === 'identifier'} name="title" placeholder={launcher && kind !== 'identifier' ? 'Optional: the ' + kind + ' name is used' : 'Game title'} autoFocus /></label>
           {!launcher && <>
             <label>Store link<input required name="target" placeholder="steam://run/123" /></label>
-            <p className="muted-text">For a program, shortcut or ROM file on this PC, use Add local game.</p>
+            <p className="muted-text">For a program, shortcut or ROM file on this PC, use Add game → Add local game</p>
           </>}
           {launcher && kind === 'identifier' && <>
             <label>Identifier<input required value={addIdentifier} onChange={event => setAddIdentifier(event.target.value)} placeholder="The game’s id in this launcher" spellCheck={false} aria-invalid={!!identifierError} /></label>
@@ -747,28 +765,28 @@ export default function App() {
       })()}
     </form></div>}
     {editingGame && <div className="modal-scrim"><form className="modal edit-modal" onSubmit={saveEdit}>
-      <div className="modal-head"><h2>Edit metadata</h2><button type="button" aria-label="Close" onClick={() => setEditingGame(null)}><X size={17} /></button></div>
+      <div className="modal-head"><h2>Edit metadata</h2><button type="button" aria-label="Close" onClick={() => setEditingGame(null)}><X size={16} /></button></div>
       <label>Title<input required value={editTitle} onChange={event => setEditTitle(event.target.value)} autoFocus /></label>
       <label>Genre<input value={editGenre} onChange={event => setEditGenre(event.target.value)} placeholder="Optional" /></label>
       <label className="toggle-row"><span>Favorite</span><input type="checkbox" checked={editFavorite} onChange={event => setEditFavorite(event.target.checked)} /></label>
       <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setEditingGame(null)}>Cancel</button><button className="primary-button">Save changes</button></div>
     </form></div>}
     {linkingGame && !linkReview && <div className="modal-scrim"><div className="modal link-modal">
-      <div className="modal-head"><h2>Link games</h2><button type="button" aria-label="Close" onClick={() => setLinkingGame(null)}><X size={17} /></button></div>
+      <div className="modal-head"><h2>Link games</h2><button type="button" aria-label="Close" onClick={() => setLinkingGame(null)}><X size={16} /></button></div>
       <p>Choose the other entries of <b>{linkingGame.title}</b> (other stores, editions or versions, even from the same store). Next you review what is combined and pick the title, cover and other details. Each entry becomes a route under “Play from”.</p>
-      <label>Find a game<input value={linkQuery} onChange={event => setLinkQuery(event.target.value)} placeholder="Search your library" autoFocus /></label>
+      <label>Find a game<input value={linkQuery} onChange={event => setLinkQuery(event.target.value)} placeholder="Search" autoFocus /></label>
       <div className="link-game-list">
         {games.filter(game => game.id !== linkingGame.id && (!linkQuery.trim() || game.title.toLocaleLowerCase().includes(linkQuery.trim().toLocaleLowerCase()))).slice(0, 100).map(game =>
           <button className={'link-game-row' + (linkPicked.includes(game.id) ? ' picked' : '')} key={game.id} aria-pressed={linkPicked.includes(game.id)} onClick={() => toggleLinkPick(game.id)}><span><b>{game.title}</b><small>{storeName(game)} · {game.routes.length} launch source{game.routes.length === 1 ? '' : 's'}</small></span><span>{linkPicked.includes(game.id) ? 'Selected' : 'Select'}</span></button>
         )}
-        {games.filter(game => game.id !== linkingGame.id && (!linkQuery.trim() || game.title.toLocaleLowerCase().includes(linkQuery.trim().toLocaleLowerCase()))).length === 0 && <div className="empty-inline">No other matching games.</div>}
+        {games.filter(game => game.id !== linkingGame.id && (!linkQuery.trim() || game.title.toLocaleLowerCase().includes(linkQuery.trim().toLocaleLowerCase()))).length === 0 && <div className="empty-inline">No other matching games</div>}
       </div>
       <div className="modal-actions"><button className="secondary-button" onClick={() => setLinkingGame(null)}>Cancel</button><button className="primary-button" disabled={linkPicked.length === 0} onClick={() => setLinkReview([linkingGame.id, ...linkPicked])}>Review link{linkPicked.length > 1 ? ' (' + (linkPicked.length + 1) + ' games)' : ''}…</button></div>
     </div></div>}
     {launcherLinkGame && <LinkLauncherDialog game={launcherLinkGame} launchers={launchers} onGames={setGames} onClose={() => setLauncherLinkId(null)} />}
     {linkReview && <LinkReview gameIds={linkReview} onClose={() => setLinkReview(null)} onLinked={linked} />}
     {sgdbGame && <div className="modal-scrim"><div className="modal sgdb-modal" role="dialog" aria-label={'Find cover for ' + sgdbGame.title}>
-      <div className="modal-head"><h2>{sgdbGame.title}</h2><button type="button" aria-label="Close" onClick={closeFindCover}><X size={17} /></button></div>
+      <div className="modal-head"><h2>{sgdbGame.title}</h2><button type="button" aria-label="Close" onClick={closeFindCover}><X size={16} /></button></div>
       {sgdbPages.state === 'loading' && <div className="empty-inline">Searching SteamGridDB…</div>}
       {sgdbPages.state === 'nokey' && <div className="empty-inline">Add a free SteamGridDB API key to search for covers.<br /><button className="secondary-button" onClick={() => openSheet('steamgriddb')}>Add API key</button></div>}
       {sgdbPages.state === 'error' && <div className="empty-inline">{sgdbPages.error}</div>}
@@ -786,7 +804,7 @@ export default function App() {
       <CloudDownload size={16} />
       <span>GameLobbies {updateNotice.version} is available</span>
       <button type="button" className="primary-button" onClick={() => { setUpdateNotice(null); openSettings('updates') }}>View update</button>
-      <button type="button" className="update-notice-close" title="Dismiss" aria-label="Dismiss update notice" onClick={() => setUpdateNotice(null)}><X size={14} /></button>
+      <button type="button" className="update-notice-close" title="Dismiss" aria-label="Dismiss update notice" onClick={() => setUpdateNotice(null)}><X size={16} /></button>
     </div>}
     <ApiKeysSheet open={sheet.open} focus={sheet.focus} keys={keys} onClose={closeSheet} />
   </div></KeysUiContext.Provider>

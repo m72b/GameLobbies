@@ -2,6 +2,9 @@ import './lobby-api'
 import React from 'react'
 import { createRoot } from 'react-dom/client'
 import App from './App'
+// Bundled (SIL Open Font License), never loaded from the network: regular and bold only.
+import '@fontsource/quantico/400.css'
+import '@fontsource/quantico/700.css'
 import './styles.css'
 
 // index.html runs /freeze-prototype.js before any app code (it replaces Tauri's app-wide

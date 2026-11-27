@@ -74,7 +74,7 @@ function LauncherEditor({ initial, gameCount, onSaved, onCancel }: { initial: Dr
         </button>)}
       </div>
       <span className="inline-field">
-        <button type="button" className="secondary-button" onClick={() => void chooseIcon()}><ImagePlus size={14} /> Use an image…</button>
+        <button type="button" className="secondary-button" onClick={() => void chooseIcon()}><ImagePlus size={16} /> Use an image…</button>
         {draft.iconKind === 'image' && <span className="launcher-icon-current"><LauncherIcon launcher={{ ...draft, name: draft.name }} size={22} /> Your image</span>}
       </span>
       <small className="chip-hint">PNG, JPEG, WebP or GIF up to 5 MB. It is copied into GameLobbies’s data folder.</small>
@@ -85,7 +85,7 @@ function LauncherEditor({ initial, gameCount, onSaved, onCancel }: { initial: Dr
         {LAUNCHER_SWATCHES.map(color => <button key={color} type="button" className={'launcher-swatch' + (draft.color.toLowerCase() === color ? ' active' : '')} style={{ background: color }} aria-label={'Colour ' + color} aria-pressed={draft.color.toLowerCase() === color} onClick={() => { set({ color }); setHex(color) }} />)}
         <input className="launcher-hex" value={hex} onChange={event => { setHex(event.target.value); set({ color: event.target.value.trim() }) }} aria-label="Colour as hex" aria-invalid={!colorOk} maxLength={7} spellCheck={false} />
       </span>
-      {!colorOk && <small className="chip-hint text-warn">Use a hex colour like #4f8cff.</small>}
+      {!colorOk && <small className="chip-hint text-warn">Use a hex colour like #4f8cff</small>}
     </div>
 
     <label className="field-label">Program (optional)<span className="inline-field"><input value={noProgram ? '' : draft.executablePath} readOnly onClick={() => { if (!programLocked) void browseExe() }} placeholder={noProgram ? 'No program: each game runs directly' : 'Choose the launcher’s .exe with Browse…'} title="The program is chosen with Browse…, so only programs you picked are run" spellCheck={false} disabled={programLocked && noProgram} />
@@ -100,7 +100,7 @@ function LauncherEditor({ initial, gameCount, onSaved, onCancel }: { initial: Dr
           <span><b>{option.label}</b><small>{option.hint}</small></span>
         </label>)}
       </div>
-      <small className="chip-hint">Changing this asks you to confirm what will run.</small>
+      <small className="chip-hint">Changing this asks you to confirm what will run</small>
     </div>}
 
     <div className="field-label">Each game may use
@@ -166,11 +166,11 @@ function GamesFolders({ launcher, roots, scan, onRoots, onError }: { launcher: C
     setConfirming(null)
     try { onRoots(await window.lobby.roots.remove(root.id, mode)) } catch (caught) { onError(errorText(caught, 'Could not remove the folder')) }
   }
-  if (!canScanFolders(launcher)) return <small className="chip-hint">Games folders need a launcher whose games use files or folders, or one without a program.</small>
+  if (!canScanFolders(launcher)) return <small className="chip-hint">Games folders need a launcher whose games use files or folders, or one without a program</small>
   return <div className="launcher-folders">
     <div className="card-heading"><div><b>Games folders</b><small className="chip-hint">GameLobbies looks through each folder and its subfolders for PC games (one folder per game, or shortcuts), emulators and ROMs, and adds them {isLabelOnly(launcher) ? 'to run directly, labelled “' + launcher.name + '”' : opensFirst(launcher) ? 'to start directly once ' + launcher.name + ' is open' : 'to run through ' + launcher.name}. Nothing found is run while scanning. Games already in your library get another route instead of a copy.</small></div>
-      <button type="button" className="secondary-button" disabled={scanning} onClick={() => void add()}><FolderPlus size={14} /> Add folder…</button></div>
-    {folders.length === 0 && <div className="empty-inline">No games folders yet.</div>}
+      <button type="button" className="secondary-button" disabled={scanning} onClick={() => void add()}><FolderPlus size={16} /> Add folder…</button></div>
+    {folders.length === 0 && <div className="empty-inline">No games folders yet</div>}
     {folders.map(root => {
       const games = root.lastResult?.games
       return <div className={'root-row' + (root.enabled ? '' : ' disabled')} key={root.id}>
@@ -238,7 +238,7 @@ export function LaunchersSection({ scan, say }: { scan: LocalScan; say(text: str
       <button type="button" className="primary-button" onClick={() => setEditing({ draft: blankDraft() })}>Add launcher</button></div>
     {error && <div className="form-error" role="alert">{error}</div>}
     {editing && !editing.id && <LauncherEditor initial={editing.draft} gameCount={0} onSaved={saved} onCancel={() => setEditing(null)} />}
-    {launchers.length === 0 && !editing && <div className="empty-inline">No custom launchers yet.</div>}
+    {launchers.length === 0 && !editing && <div className="empty-inline">No custom launchers yet</div>}
     {launchers.map(launcher => {
       const count = counts.get(launcher.id) ?? 0
       const folderCount = launcherRoots(roots, launcher.id).length

@@ -208,15 +208,15 @@ impl Default for ThemeTokens {
     fn default() -> Self {
         Self {
             name: "Game Lobby Dark".into(),
-            bg: "#101113".into(),
-            surface: "#181a1d".into(),
-            surface2: "#22252a".into(),
+            bg: "#141415".into(),
+            surface: "#19191b".into(),
+            surface2: "#232325".into(),
             accent: "#75d18a".into(),
-            text: "#f2f3f4".into(),
-            muted: "#969ba3".into(),
-            radius: "10px".into(),
-            gap: "9px".into(),
-            font: "Inter, Segoe UI, sans-serif".into(),
+            text: "#ededed".into(),
+            muted: "#85858b".into(),
+            radius: "12px".into(),
+            gap: "16px".into(),
+            font: "\"Segoe UI Variable Text\",\"Segoe UI\",sans-serif".into(),
             hover: "lift".into(),
             background_image: None,
         }

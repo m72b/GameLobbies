@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useState } from 'react'
-import { ArrowLeft, Blocks, ChevronRight, CircleHelp, CircleUserRound, Cloud, FolderSearch, Gamepad2, Keyboard, KeyRound, Library, ListChecks, Puzzle, Rocket, RotateCcw, Settings2, SlidersHorizontal, Sparkles, Star } from 'lucide-react'
+import { ArrowLeft, Blocks, CircleHelp, CircleUserRound, Cloud, FolderSearch, Gamepad2, Keyboard, KeyRound, Library, ListChecks, Paintbrush, Puzzle, Rocket, RotateCcw, Settings2, SlidersHorizontal, Star } from 'lucide-react'
 import type { IgdbBulkProgress, MotionPreference, Settings, SettingsSection, SteamGridDbStyle, StoreId, StoreStatus } from '../shared/types'
 import { steamGridDbStyles } from '../shared/types'
 import { osPrefersReducedMotion } from './motion'
@@ -13,28 +13,28 @@ import { ApiKeysSection, KeyStatusLine, type ApiKeys } from './api-keys'
 import { AccountsSection, type Accounts } from './accounts'
 
 const sections = [
-  ['Libraries', 'Stores and launchers GameLobbies detects on this PC, and how often it scans.', Library],
-  ['Accounts', 'Store sign-in for games you own but have not installed, and the first-time setup.', CircleUserRound],
-  ['Library folders', 'Choose game and emulator folders and scan them.', FolderSearch],
-  ['Emulators', 'Manage emulator profiles and the systems they run.', Gamepad2],
-  ['Custom launchers', 'Your own launchers: name, icon, colour and how they start a game.', Rocket],
-  ['Review', 'Decide on duplicates and games a scan could not place.', ListChecks],
-  ['API keys', 'Optional keys that unlock cover art, game details and games you own on Steam.', KeyRound],
-  ['Appearance', 'Poster size and motion, cover art from SteamGridDB, and themes.', SlidersHorizontal],
-  ['Startup and Behavior', 'Choose how the app opens and closes.', Settings2],
-  ['Playtime and Stats', 'Playtime tracking, game details from IGDB, and the cover cache.', Star],
-  ['Collections and Tags', 'Organize the library into collections.', Blocks],
-  ['Backup and Sync', 'Export or restore your local library.', Cloud],
-  ['Keyboard Shortcuts', 'Browse available keyboard controls.', Keyboard],
-  ['Plugins / Add-ons', 'Install declarative community library plugins.', Puzzle],
-  ['About and Updates', 'Version, project information and updates.', CircleHelp]
+  ['Libraries', 'Stores and launchers GameLobbies detects on this PC, and how often it scans', Library],
+  ['Accounts', 'Store sign-in for games you own but have not installed, and the first-time setup', CircleUserRound],
+  ['Library folders', 'Choose game and emulator folders and scan them', FolderSearch],
+  ['Emulators', 'Manage emulator profiles and the systems they run', Gamepad2],
+  ['Custom launchers', 'Your own launchers: name, icon, colour and how they start a game', Rocket],
+  ['Review', 'Decide on duplicates and games a scan could not place', ListChecks],
+  ['API keys', 'Optional keys that unlock cover art, game details and games you own on Steam', KeyRound],
+  ['Appearance', 'Poster size and motion, cover art from SteamGridDB, and themes', SlidersHorizontal],
+  ['Startup and behavior', 'Choose how the app opens and closes', Settings2],
+  ['Playtime and stats', 'Playtime tracking, game details from IGDB, and the cover cache', Star],
+  ['Collections and tags', 'Organize the library into collections', Blocks],
+  ['Backup and sync', 'Export or restore your local library', Cloud],
+  ['Keyboard shortcuts', 'Browse available keyboard controls', Keyboard],
+  ['Plugins / Add-ons', 'Install declarative community library plugins', Puzzle],
+  ['About and updates', 'Version, project information and updates', CircleHelp]
 ] as const
 
 const sgdbStyleLabels: Record<SteamGridDbStyle, string> = { alternate: 'Alternate', blurred: 'Blurred', white_logo: 'White logo', material: 'Material', no_logo: 'No logo' }
 
 type Section = typeof sections[number][0]
 
-const sectionIds: Record<SettingsSection, Section> = { updates: 'About and Updates', 'cover-art': 'Appearance', metadata: 'Playtime and Stats', 'api-keys': 'API keys', accounts: 'Accounts' }
+const sectionIds: Record<SettingsSection, Section> = { updates: 'About and updates', 'cover-art': 'Appearance', metadata: 'Playtime and stats', 'api-keys': 'API keys', accounts: 'Accounts' }
 /** Cards a deep link scrolls to once its section is shown. */
 const sectionAnchors: Partial<Record<SettingsSection, string>> = { 'cover-art': 'settings-cover-art', metadata: 'settings-metadata' }
 export const anchorFor = (id: string | null) => id !== null && Object.prototype.hasOwnProperty.call(sectionAnchors, id) ? sectionAnchors[id as SettingsSection] : undefined
@@ -177,16 +177,16 @@ export function SettingsView({ settings, onSettings, say, keys, accounts, onRunS
 
   return <div className="settings-view">
     <header className="settings-head">
-      <button className="back-button" onClick={onClose} aria-label="Back to the library" title="Back (Esc)"><ArrowLeft size={15} /></button>
+      <button className="back-button" onClick={onClose} aria-label="Back to the library" title="Back (Esc)"><ArrowLeft size={16} /></button>
       <div className="brand">Settings</div>
     </header>
     <div className="settings-layout">
       <nav className="settings-nav" aria-label="Settings sections">
-        <div className="settings-nav-label">PREFERENCES</div>
-        {sections.map(([name, , Icon]) => <button key={name} className={section === name ? 'selected' : ''} aria-current={section === name ? 'page' : undefined} onClick={() => setSection(name)}><Icon size={16} /><span>{name}</span><ChevronRight size={13} /></button>)}
+        <div className="settings-nav-label">Preferences</div>
+        {sections.map(([name, , Icon]) => <button key={name} className={section === name ? 'selected' : ''} aria-current={section === name ? 'page' : undefined} onClick={() => setSection(name)}><Icon size={16} strokeWidth={1.5} /><span>{name}</span></button>)}
       </nav>
       <main className="settings-content" key={section}>
-        <div className="eyebrow">SETTINGS</div><h1>{section}</h1>
+        <h1>{section}</h1>
         <p className="settings-description">{sections.find(item => item[0] === section)?.[1]}</p>
 
         {section === 'Libraries' && <>
@@ -201,7 +201,7 @@ export function SettingsView({ settings, onSettings, say, keys, accounts, onRunS
               </div>
               {store.id === 'steam' && <KeyStatusLine id="steam" keys={keys} />}
             </Fragment>)}
-            <div className="settings-actions"><button className="primary-button" onClick={() => void scanLibraries()}><Library size={15} /> Scan libraries</button></div>
+            <div className="settings-actions"><button className="primary-button" onClick={() => void scanLibraries()}><Library size={16} /> Scan libraries</button></div>
           </div>
           <div className="settings-card"><div className="toggle-row"><div><b>Show only installed games</b><small>Hide games that are not installed</small></div><input type="checkbox" checked={settings.showOnlyInstalled} onChange={event => void save({ showOnlyInstalled: event.target.checked })} /></div><div className="toggle-row"><div><b>Minimize when a game starts</b><small>GameLobbies moves to the taskbar after you press Play</small></div><input type="checkbox" checked={settings.minimizeOnLaunch} onChange={event => void save({ minimizeOnLaunch: event.target.checked })} /></div></div>
           <label className="setting-row">Scan interval<select value={settings.scanIntervalHours} onChange={event => void save({ scanIntervalHours: +event.target.value })}><option value={0}>Manual only</option><option value={6}>Every 6 hours</option><option value={12}>Every 12 hours</option><option value={24}>Daily</option></select></label>
@@ -222,7 +222,7 @@ export function SettingsView({ settings, onSettings, say, keys, accounts, onRunS
             <div className="toggle-row"><div><b>Animations</b><small>Enable poster hover motion</small></div><input type="checkbox" checked={settings.animations} onChange={event => void save({ animations: event.target.checked })} /></div>
             <label className="setting-row"><span><b>Reduce motion</b><small className="setting-help">Full always animates. Follow Windows uses its animation setting. Reduced keeps only short fades. Off turns all animation off.</small></span><select value={settings.motion} aria-label="Reduce motion" onChange={event => void save({ motion: event.target.value as MotionPreference })}><option value="full">Full (always animate)</option><option value="system">Follow Windows</option><option value="reduced">Reduced</option><option value="off">Off (no animation)</option></select></label>
             {settings.motion === 'system' && osReduced && <p className="setting-note" role="note">Windows animation effects are off, so GameLobbies reduces motion. Choose Full to always animate.</p>}
-            <div className="feature-row"><span>Grid density</span><span className="coming-soon">COMING SOON</span></div>
+            <div className="feature-row"><span>Grid density</span><span className="coming-soon">Coming soon</span></div>
           </div>
           <div className="settings-card" id="settings-cover-art">
           <div className="sgdb-card plain">
@@ -235,7 +235,7 @@ export function SettingsView({ settings, onSettings, say, keys, accounts, onRunS
           </div>
           <div className="settings-card">
             <h3>Cover art preferences</h3>
-            <p className="muted-text">Applied when searching for covers and when fetching missing ones.</p>
+            <p className="muted-text">Applied when searching for covers and when fetching missing ones</p>
             <div className="chip-group" role="group" aria-label="Cover styles">{steamGridDbStyles.map(style => <button key={style} type="button" className={'chip ' + (settings.steamGridDbStyles.includes(style) ? 'active' : '')} aria-pressed={settings.steamGridDbStyles.includes(style)} onClick={() => toggleSgdbStyle(style)}>{sgdbStyleLabels[style]}</button>)}</div>
             <small className="chip-hint">None selected = any style</small>
             <div className="toggle-row"><div><b>Include animated covers</b></div><input type="checkbox" checked={settings.steamGridDbAnimated} onChange={event => void save({ steamGridDbAnimated: event.target.checked })} /></div>
@@ -245,19 +245,19 @@ export function SettingsView({ settings, onSettings, say, keys, accounts, onRunS
           <div className="settings-card">
             <h3>Themes</h3><p className="muted-text settings-subhead">MyUI remote theme</p><p>Load token-only JSON or CSS from a trusted HTTPS URL. Theme content is validated and applied live. No remote scripts are executed.</p>
             <label className="field-label">Theme URL<input value={themeUrl || settings.themeUrl || ''} onChange={event => setThemeUrl(event.target.value)} placeholder="https://example.com/my-theme.json" /></label>
-            <div className="settings-actions"><button className="primary-button" disabled={busy || !themeUrl.trim()} onClick={() => void doTheme()}><Sparkles size={15} />{busy ? 'Loading…' : 'Load theme'}</button><button className="secondary-button" onClick={() => void resetTheme()}><RotateCcw size={15} /> Reset to default</button></div>
-            {settings.themeName && settings.themeUrl && <div className="remote-tag">REMOTE THEME · {settings.themeName}</div>}
+            <div className="settings-actions"><button className="primary-button" disabled={busy || !themeUrl.trim()} onClick={() => void doTheme()}><Paintbrush size={16} />{busy ? 'Loading…' : 'Load theme'}</button><button className="secondary-button" onClick={() => void resetTheme()}><RotateCcw size={16} /> Reset to default</button></div>
+            {settings.themeName && settings.themeUrl && <div className="remote-tag">Remote theme · {settings.themeName}</div>}
           </div>
-          <div className="settings-card"><h3>Theme repository</h3><p>Theme repository browsing is not available yet.</p><label className="field-label">Repository index URL<input value={repoUrl} onChange={event => setRepoUrl(event.target.value)} placeholder="Coming soon" disabled /></label><span className="coming-soon">COMING SOON</span></div>
+          <div className="settings-card"><h3>Theme repository</h3><p>Theme repository browsing is not available yet</p><label className="field-label">Repository index URL<input value={repoUrl} onChange={event => setRepoUrl(event.target.value)} placeholder="Coming soon" disabled /></label><span className="coming-soon">Coming soon</span></div>
         </>}
 
-        {section === 'Startup and Behavior' && <div className="settings-card">
+        {section === 'Startup and behavior' && <div className="settings-card">
           <div className="toggle-row"><div><b>Launch on boot</b><small>Start GameLobbies when you sign in to Windows. It starts minimized, in the tray if a tray option is on.</small></div><input type="checkbox" aria-label="Launch on boot" checked={settings.launchOnBoot} onChange={event => void save({ launchOnBoot: event.target.checked })} /></div>
           <div className="toggle-row"><div><b>Minimize to tray</b><small>Minimizing hides GameLobbies to the tray icon instead of the taskbar</small></div><input type="checkbox" aria-label="Minimize to tray" checked={settings.minimizeToTray} onChange={event => void save({ minimizeToTray: event.target.checked })} /></div>
           <div className="toggle-row"><div><b>Close to tray</b><small>The close button hides GameLobbies and keeps it running, so playtime tracking continues. Quit from the tray menu.</small></div><input type="checkbox" aria-label="Close to tray" checked={settings.closeToTray} onChange={event => void save({ closeToTray: event.target.checked })} /></div>
         </div>}
 
-        {section === 'Playtime and Stats' && <>
+        {section === 'Playtime and stats' && <>
           <div className="settings-card">
             <h3>Playtime</h3>
             <div className="toggle-row"><div><b>Track playtime</b><small>Store session time in the local library</small></div><input type="checkbox" checked={settings.tracking} onChange={event => void save({ tracking: event.target.checked })} /></div>
@@ -296,18 +296,18 @@ export function SettingsView({ settings, onSettings, say, keys, accounts, onRunS
           </div>
         </>}
 
-        {section === 'Collections and Tags' && <div className="settings-card">
-          <h3>Collections</h3><p>Collection creation and tags are not available yet.</p>
+        {section === 'Collections and tags' && <div className="settings-card">
+          <h3>Collections</h3><p>Collection creation and tags are not available yet</p>
           <button className="secondary-button coming-soon-control" disabled>Manage collections · Coming soon</button>
         </div>}
 
-        {section === 'Backup and Sync' && <div className="settings-card">
+        {section === 'Backup and sync' && <div className="settings-card">
           <h3>Local backup</h3><p>Export titles, routes, settings and emulator profiles to JSON. Image files are not included: covers and your screenshots stay in GameLobbies's local data folder, and screenshots must be added again on another PC.</p>
           <div className="settings-actions"><button className="primary-button" onClick={() => void exportBackup()}>Export library</button><button className="secondary-button" onClick={() => void importBackup()}>Import backup</button></div>
-          <div className="feature-row"><span>Automatic backup</span><span className="coming-soon">COMING SOON</span></div>
+          <div className="feature-row"><span>Automatic backup</span><span className="coming-soon">Coming soon</span></div>
         </div>}
 
-        {section === 'Keyboard Shortcuts' && <div className="settings-card shortcuts">
+        {section === 'Keyboard shortcuts' && <div className="settings-card shortcuts">
           {[
             ['Ctrl + K', 'Focus search'], ['Ctrl + ,', 'Open Settings'], ['Enter', 'Launch focused game'], ['Escape', 'Close Settings, a sheet, detail or modal'],
             ['Arrow keys', 'Move grid focus and scroll'], ['Right click', 'Open game menu']
@@ -315,12 +315,12 @@ export function SettingsView({ settings, onSettings, say, keys, accounts, onRunS
         </div>}
 
         {section === 'Plugins / Add-ons' && <div className="settings-card">
-          <div className="card-heading"><div><h3>Community plugins</h3><p>Install declarative JSON manifests. Plugin JavaScript is not downloaded or executed.</p></div><button className="secondary-button" onClick={() => void installPlugin()}><Puzzle size={14} /> Add manifest</button></div>
+          <div className="card-heading"><div><h3>Community plugins</h3><p>Install declarative JSON manifests. Plugin JavaScript is not downloaded or executed.</p></div><button className="secondary-button" onClick={() => void installPlugin()}><Puzzle size={16} /> Add manifest</button></div>
           {plugins.map(plugin => <div className="feature-row" key={plugin.id}>{plugin.name}<span className="status-pill">v{plugin.version}</span></div>)}
           <a className="external-link" href="https://playnite.link/addons.html">Browse the Playnite add-on catalog</a>
         </div>}
 
-        {section === 'About and Updates' && <UpdatesSection autoCheck={settings.autoCheckUpdates} onAutoCheckChange={enabled => void save({ autoCheckUpdates: enabled })} />}
+        {section === 'About and updates' && <UpdatesSection autoCheck={settings.autoCheckUpdates} onAutoCheckChange={enabled => void save({ autoCheckUpdates: enabled })} />}
       </main>
     </div>
   </div>

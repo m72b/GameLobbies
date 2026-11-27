@@ -31,7 +31,7 @@ Behaviour to know:
 
 ## Diagnostics
 
-1. Settings > About and Updates > Support > Copy diagnostics shows "Copied"; paste into a text
+1. Settings > About and updates > Support > Copy diagnostics shows "Copied"; paste into a text
    editor: versions, counts, yes/no key flags, last log lines, `%USERPROFILE%` instead of the
    user folder, no keys.
 2. Open logs folder opens `<data folder>\logs` in Explorer.

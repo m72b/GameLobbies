@@ -122,9 +122,9 @@ function ArtSection({ kind, gameId, title, currentSrc, hasCustom, settingsKey, a
       {currentSrc ? <img key={currentSrc} src={currentSrc} alt={'Current ' + noun} onError={event => { event.currentTarget.style.display = 'none' }} /> : <span>No {noun} available. The game title is shown instead.</span>}
     </div>
     <div className="cz-row">
-      <button type="button" className="secondary-button" onClick={() => void openPicker()} disabled={busy || state === 'loading'}><Search size={13} /> Choose from SteamGridDB</button>
-      <button type="button" className="secondary-button" onClick={() => void chooseFile()} disabled={busy}><ImagePlus size={13} /> Choose image file…</button>
-      <button type="button" className="secondary-button" onClick={() => void reset()} disabled={busy || !hasCustom} title={hasCustom ? undefined : 'Already using the automatic ' + noun}><RotateCcw size={13} /> Reset to default</button>
+      <button type="button" className="secondary-button" onClick={() => void openPicker()} disabled={busy || state === 'loading'}><Search size={16} /> Choose from SteamGridDB</button>
+      <button type="button" className="secondary-button" onClick={() => void chooseFile()} disabled={busy}><ImagePlus size={16} /> Choose image file…</button>
+      <button type="button" className="secondary-button" onClick={() => void reset()} disabled={busy || !hasCustom} title={hasCustom ? undefined : 'Already using the automatic ' + noun}><RotateCcw size={16} /> Reset to default</button>
     </div>
     <div className="cz-status" role="status" aria-live="polite">{error ? <span className="cz-error">{error}</span> : notice}</div>
     {kind === 'logo' && <WikiTiles images={wikiLogos} kind="logo" busy={busy} onUse={image => void act(() => window.lobby.wikimedia.useLogo(gameId, image.src), 'Applied')} />}
@@ -221,7 +221,7 @@ export function CustomizePanel({ game, custom, heroSrc, logoSrc, layout, onLayou
         <input id="cz-scale" className="cz-slider" type="range" min={logoScaleRange.min} max={logoScaleRange.max} step={0.05} value={layout.scale}
           aria-valuetext={layout.scale.toFixed(2) + ' times'} onChange={event => onLayout({ ...layout, scale: Number(event.target.value) })} />
         <div className="cz-scale-ends"><span>{logoScaleRange.min}×</span><span>{logoScaleRange.max}×</span></div>
-        <div className="cz-row"><button type="button" className="secondary-button" disabled={isDefaultLayout} onClick={() => onLayout({ position: defaultGamePageCustom.logoPosition, scale: defaultGamePageCustom.logoScale })}><RotateCcw size={13} /> Reset layout</button></div>
+        <div className="cz-row"><button type="button" className="secondary-button" disabled={isDefaultLayout} onClick={() => onLayout({ position: defaultGamePageCustom.logoPosition, scale: defaultGamePageCustom.logoScale })}><RotateCcw size={16} /> Reset layout</button></div>
       </div>}
     </div>
   </aside>

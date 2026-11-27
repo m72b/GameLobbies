@@ -60,16 +60,16 @@ function SupportCard() {
       <div><h3>Support</h3><p>Copy a report with your versions, library size and recent log lines to include in a bug report. API keys, tokens and your user folder name are left out.</p></div>
     </div>
     <div className="settings-actions">
-      <button type="button" className="secondary-button" disabled={busy} onClick={() => void copyDiagnostics()}><ClipboardCopy size={14} /> Copy diagnostics</button>
-      <button type="button" className="secondary-button" onClick={() => void openLogs()}><FolderOpen size={14} /> Open logs folder</button>
+      <button type="button" className="secondary-button" disabled={busy} onClick={() => void copyDiagnostics()}><ClipboardCopy size={16} /> Copy diagnostics</button>
+      <button type="button" className="secondary-button" onClick={() => void openLogs()}><FolderOpen size={16} /> Open logs folder</button>
     </div>
     {status && (status.error
       ? <div className="form-error" role="alert">{status.text}</div>
-      : <div className="update-status" role="status"><CheckCircle2 size={15} /> {status.text}</div>)}
+      : <div className="update-status" role="status"><CheckCircle2 size={16} /> {status.text}</div>)}
   </div>
 }
 
-/** Settings → About and Updates: version, update check/install and the automatic-check setting. */
+/** Settings → About and updates: version, update check/install and the automatic-check setting. */
 export function UpdatesSection({ autoCheck, onAutoCheckChange }: { autoCheck: boolean; onAutoCheckChange(enabled: boolean): void }) {
   const [phase, setPhase] = useState<Phase>('idle')
   const [info, setInfo] = useState<UpdateInfo | null>(null)
@@ -108,7 +108,7 @@ export function UpdatesSection({ autoCheck, onAutoCheckChange }: { autoCheck: bo
     <div className="settings-card">
       <div className="about-mark"><Gamepad2 /></div><h2>GameLobbies</h2>
       <p>Version {info?.currentVersion ?? packageInfo.version} · Local-first library manager</p>
-      <p>Built with Tauri, Rust, React, TypeScript and SQLite.</p>
+      <p>Built with Tauri, Rust, React, TypeScript and SQLite</p>
       <p>Free and open source under the GNU GPL v3.0. GameLobbies includes no games, ROMs, BIOS files or game artwork; it shows the games you already have.</p>
       <p>Cover art is provided by the SteamGridDB community and Steam, and stays on this PC. GameLobbies is not affiliated with or endorsed by Valve, Epic Games, GOG, Microsoft, Ubisoft, Electronic Arts, Blizzard, Amazon, itch.io, SteamGridDB or any emulator project. All names, logos and artwork belong to their owners.</p>
     </div>
@@ -116,18 +116,18 @@ export function UpdatesSection({ autoCheck, onAutoCheckChange }: { autoCheck: bo
       <div className="card-heading">
         <div><h3>Updates</h3><p>New versions come from the GameLobbies releases page on GitHub. An update is installed only after its signature is verified, and only when you choose to.</p></div>
         <button type="button" className="secondary-button" disabled={busy} onClick={() => void check()}>
-          {phase === 'checking' ? <><RefreshCw size={14} className="spin" /> Checking…</> : <><RefreshCw size={14} /> Check for updates</>}
+          {phase === 'checking' ? <><RefreshCw size={16} className="spin" /> Checking…</> : <><RefreshCw size={16} /> Check for updates</>}
         </button>
       </div>
       {error && <div className="form-error" role="alert">{error}</div>}
-      {info && !info.available && phase !== 'checking' && <div className="update-status" role="status"><CheckCircle2 size={15} /> You're up to date.</div>}
+      {info && !info.available && phase !== 'checking' && <div className="update-status" role="status"><CheckCircle2 size={16} /> You're up to date</div>}
       {info?.available && <div className="update-available">
         <div className="update-title"><b>GameLobbies {info.version} is available</b>{date && <span>Released {date}</span>}</div>
         {info.notes && <div className="update-notes" tabIndex={0} aria-label="Release notes">{info.notes}</div>}
         {phase === 'installing' && <DownloadProgress progress={progress} />}
-        {phase === 'restarting' && <div className="update-status" role="status"><RefreshCw size={15} className="spin" /> Restarting…</div>}
+        {phase === 'restarting' && <div className="update-status" role="status"><RefreshCw size={16} className="spin" /> Restarting…</div>}
         {phase !== 'installing' && phase !== 'restarting' && <div className="settings-actions">
-          <button type="button" className="primary-button" disabled={busy} onClick={() => void install()}><CloudDownload size={14} /> Download and install</button>
+          <button type="button" className="primary-button" disabled={busy} onClick={() => void install()}><CloudDownload size={16} /> Download and install</button>
         </div>}
         <small className="update-hint">GameLobbies closes while the update installs and starts again afterwards. Running play sessions are saved and your library is backed up first.</small>
       </div>}

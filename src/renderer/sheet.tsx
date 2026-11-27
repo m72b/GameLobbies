@@ -75,7 +75,7 @@ export function Sheet({ open, title, subtitle, onClose, children }: { open: bool
     <div className="sheet" ref={panel} role="dialog" aria-modal="true" aria-label={title}>
       <header className="sheet-head">
         <div><h2>{title}</h2>{subtitle && <p>{subtitle}</p>}</div>
-        <button type="button" className="sheet-close" aria-label="Close" onClick={onClose}><X size={17} /></button>
+        <button type="button" className="sheet-close" aria-label="Close" onClick={onClose}><X size={16} /></button>
       </header>
       <div className="sheet-body">{children}</div>
     </div>

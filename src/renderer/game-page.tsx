@@ -195,8 +195,8 @@ export function GamePage({ game, index, settings, launchers, running, libraryVer
         ? <FadeImg key={heroSrc} className="gp-hero-img" src={heroSrc} alt="" onError={() => setHeroIdx(value => value + 1)} />
         : <div className="gp-hero-fallback" style={cover.src && cover.status === 'loaded' ? coverLayerStyle(cover.src) : coverStyle(game, index)} />}
       <div className="gp-hero-fade" />
-      <button className="gp-back" onClick={actions.back}><ArrowLeft size={15} /> Library</button>
-      <button className="gp-customize" onClick={() => setCustomizing(true)} aria-haspopup="dialog" title="Customize hero, logo and layout"><Pencil size={13} /> Customize</button>
+      <button className="gp-back" onClick={actions.back}><ArrowLeft size={16} /> Library</button>
+      <button className="gp-customize" onClick={() => setCustomizing(true)} aria-haspopup="dialog" title="Customize hero, logo and layout"><Pencil size={16} /> Customize</button>
       <div className={'gp-logo-wrap pos-' + layout.position} style={{ '--logo-scale': layout.scale } as React.CSSProperties}>
         {logoSrc
           ? <FadeImg key={logoSrc} className="gp-logo" src={logoSrc} alt={game.title} onError={() => setLogoIdx(value => value + 1)} />
@@ -214,10 +214,10 @@ export function GamePage({ game, index, settings, launchers, running, libraryVer
 
     <div className="gp-bar">
       {launching
-        ? <button className="gp-play" disabled><Play size={18} fill="currentColor" /> Launching…</button>
+        ? <button className="gp-play" disabled><Play size={16} fill="currentColor" /> Launching…</button>
         : isRunning
           ? <button className="gp-play running" disabled><span className="gp-live-dot" /> Running <span className="gp-clock">{formatClock(elapsedSeconds(running.startedAt, now))}</span></button>
-          : <button className="gp-play" onClick={() => actions.play(game, routeIdx)} title={route ? 'Play from ' + labelTitle(route) : undefined}><Play size={18} fill="currentColor" /> Play{playVia
+          : <button className="gp-play" onClick={() => actions.play(game, routeIdx)} title={route ? 'Play from ' + labelTitle(route) : undefined}><Play size={16} fill="currentColor" /> Play{playVia
             ? <span className="gp-play-via"><LauncherIcon launcher={playVia} size={12} /> {route ? label(route) : playVia.name}</span>
             : route && (game.routes.length > 1 || route.name) && <span className="gp-play-via">{label(route)}</span>}</button>}
       {game.routes.length > 0 && <div className="gp-route">
@@ -228,7 +228,7 @@ export function GamePage({ game, index, settings, launchers, running, libraryVer
             <select value={routeIdx} onChange={event => setRouteIdx(Number(event.target.value))} aria-label="Play from">
               {game.routes.map((item, i) => <option key={item.sourceId + '-' + i} value={i} title={labelTitle(item)}>{label(item)}{item.installed ? '' : ' (not installed)'}</option>)}
             </select>
-            <ChevronDown size={13} />
+            <ChevronDown size={16} />
           </span>
         </label>
         {route && argsSupport(route, launchers).ok && <div className="gp-route-options">
@@ -236,7 +236,7 @@ export function GamePage({ game, index, settings, launchers, running, libraryVer
             ? <span className="gp-options-text" title={argsText(route.launchArgs)}>Options: <code>{argsText(route.launchArgs)}</code></span>
             : null}
           {route.launchArgs && argsPending && <><span className="gp-options-pending">Needs confirmation</span><button type="button" className="gp-options-button strong" disabled={argsBusy} onClick={() => void confirmArgs()}>Confirm…</button></>}
-          <button type="button" className="gp-options-button" onClick={() => setOptionsOpen(true)}>{route.launchArgs ? 'Edit' : <><SlidersHorizontal size={11} /> Launch options</>}</button>
+          <button type="button" className="gp-options-button" onClick={() => setOptionsOpen(true)}>{route.launchArgs ? 'Edit' : <><SlidersHorizontal size={16} /> Launch options</>}</button>
         </div>}
         {argsError && <div className="gp-options-error" role="alert">{argsError}</div>}
       </div>}
@@ -252,13 +252,13 @@ export function GamePage({ game, index, settings, launchers, running, libraryVer
       </div>
       <div className={'gp-track' + (!settings.tracking ? ' off' : running ? ' on' : '')}
         title={running ? (running.exe ? 'Tracking ' + running.exe + ' · ' : '') + (running.source === 'detected' ? 'detected running' : 'launched from GameLobbies') : undefined}>
-        {settings.tracking && running && <span className="gp-live-dot" />}
+        {settings.tracking && running ? <span className="gp-live-dot" /> : <span className="gp-dot-off" />}
         {!settings.tracking ? 'Tracking off' : running ? 'Tracking' : 'Not running'}
       </div>
       <ControllerBadge input={inputState.input} />
-      <button className={'gp-icon' + (game.favorite ? ' active' : '')} aria-pressed={game.favorite} title={game.favorite ? 'Remove from favorites' : 'Add to favorites'} onClick={() => actions.toggleFavorite(game)}><Heart size={18} fill={game.favorite ? 'currentColor' : 'none'} /></button>
+      <button className={'gp-icon' + (game.favorite ? ' active' : '')} aria-pressed={game.favorite} title={game.favorite ? 'Remove from favorites' : 'Add to favorites'} onClick={() => actions.toggleFavorite(game)}><Heart size={16} fill={game.favorite ? 'currentColor' : 'none'} /></button>
       <div className="gp-more">
-        <button className="gp-icon" title="More actions" aria-haspopup="menu" aria-expanded={menuOpen} onClick={() => setMenuOpen(value => !value)}><MoreHorizontal size={18} /></button>
+        <button className="gp-icon" title="More actions" aria-haspopup="menu" aria-expanded={menuOpen} onClick={() => setMenuOpen(value => !value)}><MoreHorizontal size={16} /></button>
         {menuOpen && <>
           <div className="menu-dismiss gp-dismiss" onMouseDown={() => setMenuOpen(false)} />
           <div className="context-menu gp-menu" role="menu">
@@ -310,16 +310,16 @@ export function GamePage({ game, index, settings, launchers, running, libraryVer
       <aside className="gp-side">
         <div className={'gp-poster cover-' + cover.status} style={coverStyle(game, index)}><CoverLayer src={cover.src} status={cover.status} />{cover.status !== 'loaded' && <span>{game.title}</span>}</div>
         {wiki.coverCredit && <ImageCredit image={wiki.coverCredit} className="gp-cover-credit" />}
-        <div className="gp-side-block"><div className="detail-label">STORES</div>
+        <div className="gp-side-block"><div className="detail-label">Stores</div>
           {game.routes.length === 0 && <div className="muted-text">No launch routes</div>}
           {game.routes.map((item, i) => <div key={item.sourceId + '-' + i}>
             <div className="gp-route-row">
               <span className="store-badge small"><RouteIcon route={item} launchers={launchers} /></span>
               <span className="route-name"><span className="route-label" title={labelTitle(item)}>{label(item)}</span><small>{item.installed ? 'Installed' : item.owned ? 'Owned · not installed' : 'Launch route'}{item.launchArgs ? ' · launch options' : ''}</small></span>
               <span className="gp-route-actions">
-                <button type="button" title="Name this route" aria-label={'Rename ' + label(item)} onClick={() => toggleTool(i, 'name')}><Pencil size={12} /></button>
-                <button type="button" title="Launch options" aria-label={'Launch options for ' + label(item)} onClick={() => toggleTool(i, 'args')}><SlidersHorizontal size={12} /></button>
-                {game.routes.length > 1 && <button type="button" title="Unlink into its own game" aria-label={'Unlink ' + label(item)} onClick={() => toggleTool(i, 'unlink')}><Unlink size={12} /></button>}
+                <button type="button" title="Name this route" aria-label={'Rename ' + label(item)} onClick={() => toggleTool(i, 'name')}><Pencil size={16} /></button>
+                <button type="button" title="Launch options" aria-label={'Launch options for ' + label(item)} onClick={() => toggleTool(i, 'args')}><SlidersHorizontal size={16} /></button>
+                {game.routes.length > 1 && <button type="button" title="Unlink into its own game" aria-label={'Unlink ' + label(item)} onClick={() => toggleTool(i, 'unlink')}><Unlink size={16} /></button>}
               </span>
             </div>
             {tool && tool.index === i && <RouteToolPanel key={tool.tool + i} tool={tool.tool} route={item} launchers={launchers} canUnlink={game.routes.length > 1}
@@ -334,7 +334,7 @@ export function GamePage({ game, index, settings, launchers, running, libraryVer
             const options = assigned && !candidates.some(profile => profile.id === assigned.id) ? [...candidates, assigned] : candidates
             return <div className="gp-emulator" key={'emu-' + item.sourceId + '-' + i}>
               <label>
-                <span className="detail-label">EMULATOR · {systemName.toUpperCase()}</span>
+                <span className="detail-label">Emulator · {systemName}</span>
                 <select aria-label={'Emulator for ' + systemName} value={assigned ? assigned.id : ''} onChange={event => changeEmulator(i, event.target.value)}>
                   <option value="">Default (automatic)</option>
                   {options.map(profile => <option key={profile.id} value={profile.id}>{profile.name}{profile.enabled === false ? ' (disabled)' : profile.available === false ? ' (not found)' : profile.needsConfiguration ? ' (needs setup)' : ''}</option>)}
@@ -351,11 +351,11 @@ export function GamePage({ game, index, settings, launchers, running, libraryVer
         <YourScore gameId={game.id} />
         <IgdbRatings view={igdb} />
         <ControllerBlock gameId={game.id} state={inputState} />
-        <div className="gp-side-block"><div className="detail-label">INSTALL FOLDER</div>
+        <div className="gp-side-block"><div className="detail-label">Install folder</div>
           <div className="muted-text gp-path">{installFolder || 'Unknown'}</div>
-          <button className="secondary-button gp-folder" onClick={() => actions.openFolder(game)}><FolderOpen size={14} /> Open folder</button>
+          <button className="secondary-button gp-folder" onClick={() => actions.openFolder(game)}><FolderOpen size={16} /> Open folder</button>
         </div>
-        <div className="gp-side-block"><div className="detail-label">PLAYTIME</div>
+        <div className="gp-side-block"><div className="detail-label">Playtime</div>
           <div className="gp-totals"><div><span>Total</span><b>{formatTotal(totalSeconds)}</b></div><div><span>Last two weeks</span><b>{formatTotal(stats?.lastTwoWeeksSeconds ?? 0)}</b></div></div>
         </div>
       </aside>

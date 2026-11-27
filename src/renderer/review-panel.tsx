@@ -111,7 +111,7 @@ export function ReviewSection({ say }: { say(text: string): void }) {
     <div className="settings-card">
       <details className="collapsible"><summary>Ignored paths ({ignored.length})</summary>
         <p className="muted-text">Scans skip these files and folders. Restore one to include it again.</p>
-        {ignored.length === 0 && <div className="empty-inline">Nothing ignored.</div>}
+        {ignored.length === 0 && <div className="empty-inline">Nothing ignored</div>}
         {ignored.map(item => <div className="root-row" key={item.path}><div className="root-main"><div className="root-path" title={item.path}>{item.path}</div></div><button type="button" className="secondary-button" onClick={() => void unignore(item.path)}>Restore</button></div>)}
       </details>
     </div>

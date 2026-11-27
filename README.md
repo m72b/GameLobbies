@@ -59,7 +59,7 @@ GameLobbies is **my first Rust project**. It started as an Electron app and was 
 
 Windows 10 and 11 already include the WebView2 runtime that GameLobbies uses.
 
-**Updating:** use **Settings → About and Updates** inside the app; it installs over the old version and keeps your library. If you run a newer installer by hand instead, your library is also kept, as long as you leave **Also delete my library and settings** unticked.
+**Updating:** use **Settings → About and updates** inside the app; it installs over the old version and keeps your library. If you run a newer installer by hand instead, your library is also kept, as long as you leave **Also delete my library and settings** unticked.
 
 **Coming from Game Lobby:** GameLobbies was called Game Lobby up to 0.9.0. Updating, in the app or with the installer, replaces the old install and keeps your library, settings and accounts.
 
@@ -86,9 +86,9 @@ GameLobbies works without any account. Three optional features use free keys tha
 
 Settings opens inside the main window (the gear in the side rail, or **Ctrl+,**; **Esc** goes back). **Settings → API keys** lists all three keys with what each unlocks and whether it is set; **Add keys** opens a side sheet with every key at once, with links and short steps. Keys you have set can be changed or removed there.
 
-Without any key, GameLobbies still fills in game details from **Wikidata** (facts, CC0), **Wikipedia** (the first paragraph of the article, CC BY-SA 4.0, credited with a link, only when IGDB has none) and **Wikimedia Commons** (free logos and covers with their author and licence; never fair-use images). It only fills what is missing, IGDB's details come first, and it can be turned off with **Use Wikipedia & Wikidata (no key needed)** in **Settings → API keys** or **Settings → Playtime and Stats**. See the [user guide](docs/USER-GUIDE.md#game-details-from-wikipedia-and-wikidata-no-key).
+Without any key, GameLobbies still fills in game details from **Wikidata** (facts, CC0), **Wikipedia** (the first paragraph of the article, CC BY-SA 4.0, credited with a link, only when IGDB has none) and **Wikimedia Commons** (free logos and covers with their author and licence; never fair-use images). It only fills what is missing, IGDB's details come first, and it can be turned off with **Use Wikipedia & Wikidata (no key needed)** in **Settings → API keys** or **Settings → Playtime and stats**. See the [user guide](docs/USER-GUIDE.md#game-details-from-wikipedia-and-wikidata-no-key).
 
-Keep your keys private: don't paste them into issues, screenshots or logs. **Copy diagnostics** in **Settings → About and Updates** leaves them out.
+Keep your keys private: don't paste them into issues, screenshots or logs. **Copy diagnostics** in **Settings → About and updates** leaves them out.
 
 ## Supported stores
 

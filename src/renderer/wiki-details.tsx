@@ -74,12 +74,12 @@ export function WikiPicker({ game, view, onClose, onChosen }: { game: Game; view
   const current = view.metadata?.qid
   return <div className="modal-scrim" onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}>
     <div className="modal link-modal" role="dialog" aria-label={'Find ' + game.title + ' on Wikidata'}>
-      <div className="modal-head"><h2>Find on Wikidata</h2><button type="button" aria-label="Close" onClick={onClose}><X size={17} /></button></div>
+      <div className="modal-head"><h2>Find on Wikidata</h2><button type="button" aria-label="Close" onClick={onClose}><X size={16} /></button></div>
       {!view.enabled
         ? <div className="empty-inline">Wikipedia and Wikidata are turned off.<br /><button className="secondary-button" onClick={() => void window.lobby.settings.open('metadata')}>Open Settings</button></div>
         : <>
           <p>Choose the Wikidata item for <b>{game.title}</b>. Your choice is kept for this game. Facts from Wikidata (CC0).</p>
-          {view.status === 'ambiguous' && <p className="muted-text">Several items match this title, so none was picked automatically.</p>}
+          {view.status === 'ambiguous' && <p className="muted-text">Several items match this title, so none was picked automatically</p>}
           <form onSubmit={event => { event.preventDefault(); void run(query) }}>
             <label>Search Wikidata<input value={query} onChange={event => setQuery(event.target.value)} placeholder={game.title} maxLength={200} autoFocus spellCheck={false} /></label>
           </form>

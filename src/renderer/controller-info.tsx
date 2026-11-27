@@ -30,7 +30,7 @@ export function ControllerBadge({ input }: { input: GameInput }) {
   if (input.support !== 'full' && input.support !== 'partial') return null
   const label = input.support === 'full' ? 'Full' : 'Partial'
   return <div className={'yn-badge ' + input.support} title={SUPPORT_LABELS[input.support] + (input.supportSource === 'steam' ? ' (from Steam)' : '')}>
-    <Gamepad2 size={14} /> <span>Controller: {label}</span>
+    <Gamepad2 size={16} /> <span>Controller: {label}</span>
   </div>
 }
 
@@ -68,7 +68,7 @@ export function ControllerBlock({ gameId, state }: { gameId: string; state: Game
   }
 
   const source = input.supportSource === 'steam' ? 'From Steam' : input.supportSource === 'user' ? 'Set by you' : ''
-  return <div className="gp-side-block"><div className="detail-label">CONTROLLER</div>
+  return <div className="gp-side-block"><div className="detail-label">Controller</div>
     <div className="yn-fields">
       <label>Support
         <select value={input.support} disabled={!loaded} onChange={event => change({ support: event.target.value as ControllerSupport })}>

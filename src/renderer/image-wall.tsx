@@ -168,7 +168,7 @@ export function ImageWall({ game, igdb, shots, onShots }: { game: Game; igdb: Ig
       </div>}
       <span className="wall-spacer" />
       {steam && <button type="button" className="secondary-button wall-action" onClick={() => void add(true)} disabled={busy}>Import from Steam</button>}
-      <button type="button" className="secondary-button wall-action" onClick={() => void add(false)} disabled={busy}><ImagePlus size={14} /> Add screenshots</button>
+      <button type="button" className="secondary-button wall-action" onClick={() => void add(false)} disabled={busy}><ImagePlus size={16} /> Add screenshots</button>
     </div>
     <div className="wall-grid" ref={setGrid} style={{ gridTemplateColumns: 'repeat(' + columns + ',minmax(0,1fr))', gridAutoRows: cell + 'px' }}>
       {order.map((index, position) => <Tile key={visible[index].key} image={visible[index]} place={placed[index]} onOpen={() => setOpen(position)} onAspect={onAspect} onFailed={onFailed}
@@ -187,7 +187,7 @@ export function ImageWall({ game, igdb, shots, onShots }: { game: Game; igdb: Ig
       </div>
     </>}
     {confirm && <div className="modal-scrim"><div className="modal" role="alertdialog" aria-label="Remove screenshot">
-      <div className="modal-head"><h2>Remove screenshot</h2><button type="button" aria-label="Close" onClick={() => setConfirm(null)}><X size={17} /></button></div>
+      <div className="modal-head"><h2>Remove screenshot</h2><button type="button" aria-label="Close" onClick={() => setConfirm(null)}><X size={16} /></button></div>
       <p className="muted-text">This removes GameLobbies's copy of the screenshot. The original file on your PC is not changed.</p>
       <div className="modal-actions"><button className="secondary-button" onClick={() => setConfirm(null)}>Cancel</button><button className="primary-button" onClick={() => void remove(confirm)}>Remove</button></div>
     </div></div>}

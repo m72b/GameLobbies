@@ -3,9 +3,6 @@
 // plain React text; pictures come only from URLs the backend built from validated image ids.
 import { useCallback, useEffect, useState } from 'react'
 import { ChevronLeft, ChevronRight, X } from 'lucide-react'
-// Bundled (SIL Open Font License), never loaded from the network: regular and bold only.
-import '@fontsource/quantico/400.css'
-import '@fontsource/quantico/700.css'
 import type { Game, IgdbMetadataView, IgdbRating, IgdbSearchResult, IgdbTimeToBeat, WikiView } from '../shared/types'
 import { mergeAbout } from '../shared/about'
 import { WikipediaCredit } from './wiki-details'
@@ -65,13 +62,13 @@ export function Lightbox({ images, index, onIndex, onClose }: { images: Lightbox
     <div className="gp-lightbox-frame">
       {status === 'loading' && <div className="cover-shimmer" aria-hidden="true"><Spinner /></div>}
       {src && <img key={src} src={src} alt={image.alt} className={status === 'loaded' ? 'loaded' : ''} />}
-      {status === 'error' && <div className="gp-lightbox-error">This picture could not be loaded.</div>}
+      {status === 'error' && <div className="gp-lightbox-error">This picture could not be loaded</div>}
     </div>
     {images.length > 1 && <>
       <button type="button" className="gp-lightbox-nav prev" aria-label="Previous picture" onClick={() => step(-1)}><ChevronLeft size={22} /></button>
       <button type="button" className="gp-lightbox-nav next" aria-label="Next picture" onClick={() => step(1)}><ChevronRight size={22} /></button>
     </>}
-    <button type="button" className="gp-lightbox-close" aria-label="Close" onClick={onClose}><X size={18} /></button>
+    <button type="button" className="gp-lightbox-close" aria-label="Close" onClick={onClose}><X size={16} /></button>
     <div className="gp-lightbox-meta">{index + 1} / {images.length}{image.igdb && <> · <IgdbAttribution images /></>}</div>
   </div>
 }
@@ -129,9 +126,9 @@ export function IgdbAbout({ view, wiki, title, onSearch, onWikiSearch }: { view:
     <h2>About</h2>
     {description
       ? <><p className="gp-about-text">{description.text}</p>{description.source === 'wikipedia' && <WikipediaCredit url={description.url} title={description.title} licence={wiki.textLicence} />}</>
-      : metadata && <div className="muted-text">IGDB has no description for this game.</div>}
+      : metadata && <div className="muted-text">IGDB has no description for this game</div>}
     {metadata?.storyline && (more
-      ? <><div className="detail-label gp-about-label">STORYLINE</div><p className="gp-about-text">{metadata.storyline}</p><button className="link-button gp-about-more" onClick={() => setMore(false)}>Less</button></>
+      ? <><div className="detail-label gp-about-label">Storyline</div><p className="gp-about-text">{metadata.storyline}</p><button className="link-button gp-about-more" onClick={() => setMore(false)}>Less</button></>
       : <button className="link-button gp-about-more" onClick={() => setMore(true)}>More: storyline</button>)}
     {facts.some(([, value]) => value) && <div className="gp-facts">
       {facts.map(([label, value]) => value ? <div key={label}><span>{label}</span><b>{value}</b></div> : null)}
@@ -168,7 +165,7 @@ export function IgdbRatings({ view }: { view: IgdbMetadataView }) {
   const critic = view.metadata?.criticRating
   const user = view.metadata?.userRating
   if (!critic && !user) return null
-  return <div className="gp-side-block"><div className="detail-label">RATING</div>
+  return <div className="gp-side-block"><div className="detail-label">Rating</div>
     <div className="gp-scores">
       {critic && <ScoreTile label="Critics" title="IGDB aggregated critic rating" rating={critic} noun="review" />}
       {user && <ScoreTile label="Users" title="IGDB user rating" rating={user} noun="rating" />}
@@ -178,7 +175,7 @@ export function IgdbRatings({ view }: { view: IgdbMetadataView }) {
 }
 
 /**
- * The GENRE block: the user's genre stays first; IGDB's genres are shown alongside (never saved).
+ * The genre block: the user's genre stays first; IGDB's genres are shown alongside (never saved).
  * Without IGDB genres and without the user's own, Wikidata's genres are shown instead.
  */
 export function GenreBlock({ game, view, wiki }: { game: Game; view: IgdbMetadataView; wiki?: WikiView }) {
@@ -188,7 +185,7 @@ export function GenreBlock({ game, view, wiki }: { game: Game; view: IgdbMetadat
   const igdbGenres = merged.genres.values
   // The ratings block below carries the attribution when it is shown.
   const hasRatings = !!(view.metadata?.criticRating || view.metadata?.userRating)
-  return <div className="gp-side-block"><div className="detail-label">GENRE</div>
+  return <div className="gp-side-block"><div className="detail-label">Genre</div>
     {userGenre ? <div className="muted-text">{userGenre}</div> : igdbGenres.length === 0 && <div className="muted-text">Not set</div>}
     {igdbGenres.length > 0 && <div className="chip-group compact" title={fromWikidata ? 'Genres from Wikidata' : 'Genres from IGDB'}>{igdbGenres.map(genre => <span key={genre} className="chip static">{genre}</span>)}</div>}
     {igdbGenres.length > 0 && !hasRatings && !fromWikidata && <IgdbAttribution className="gp-side-attribution" />}
@@ -234,7 +231,7 @@ export function IgdbPicker({ game, view, onClose, onChosen }: { game: Game; view
   const current = view.metadata?.igdbId
   return <div className="modal-scrim" onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}>
     <div className="modal link-modal" role="dialog" aria-label={'Find ' + game.title + ' on IGDB'}>
-      <div className="modal-head"><h2>Find on IGDB</h2><button type="button" aria-label="Close" onClick={onClose}><X size={17} /></button></div>
+      <div className="modal-head"><h2>Find on IGDB</h2><button type="button" aria-label="Close" onClick={onClose}><X size={16} /></button></div>
       {!view.configured
         ? <div className="empty-inline">Add your IGDB (Twitch) Client ID and Client Secret to search IGDB.<br /><button className="secondary-button" onClick={() => openSheet('igdb')}>Add API key</button></div>
         : <>

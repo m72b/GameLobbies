@@ -60,7 +60,7 @@ export function YourScore({ gameId }: { gameId: string }) {
     setError('')
     window.lobby.notes.setRating(gameId, rating).then(next => setData(prev => ({ ...prev, rating: next.rating }))).catch(e => setError(errorText(e)))
   }
-  return <div className="gp-side-block"><div className="detail-label">YOUR SCORE</div>
+  return <div className="gp-side-block"><div className="detail-label">Your score</div>
     <StarPicker value={data.rating} onChange={change} disabled={!loaded} />
     <div className="yn-score-line">
       <span className="muted-text">{data.rating === null ? 'Not rated' : <b className="yn-score">{data.rating}</b>}{data.rating !== null && ' out of 5'}</span>
@@ -172,8 +172,8 @@ function Memories({ gameId, memories, shots, onData }: { gameId: string; memorie
           {shot && !shot.missing && <img className="yn-thumb" src={coverUrl(shot.src)} alt="Linked screenshot" loading="lazy" />}
           <div className="yn-body"><b>{formatMemoryDate(memory.date)}</b><p>{memory.text}</p></div>
           <div className="yn-row-actions">
-            <button className="gp-icon" title="Edit memory" aria-label="Edit memory" onClick={() => open(memory)}><Pencil size={14} /></button>
-            <button className="gp-icon" title="Delete memory" aria-label="Delete memory" onClick={() => remove(memory)}><Trash2 size={14} /></button>
+            <button className="gp-icon" title="Edit memory" aria-label="Edit memory" onClick={() => open(memory)}><Pencil size={16} /></button>
+            <button className="gp-icon" title="Delete memory" aria-label="Delete memory" onClick={() => remove(memory)}><Trash2 size={16} /></button>
           </div>
         </li>
       })}

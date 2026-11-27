@@ -11,7 +11,7 @@ function ShelfCard({ game, index, onOpen, onDismiss }: { game: Game; index: numb
       <CoverLayer src={src} status={status} />
       <div className="poster-vignette" />
       <div className="poster-title-mark">{status !== 'loaded' && game.title.toUpperCase()}</div>
-      <button className="recent-dismiss" aria-label={'Dismiss ' + game.title} title="Seen it" onClick={event => { event.stopPropagation(); onDismiss() }}><X size={13} /></button>
+      <button className="recent-dismiss" aria-label={'Dismiss ' + game.title} title="Seen it" onClick={event => { event.stopPropagation(); onDismiss() }}><X size={16} /></button>
     </div>
     <div className="card-title">{game.title}</div>
   </article>

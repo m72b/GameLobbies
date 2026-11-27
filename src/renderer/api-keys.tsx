@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
-import { KeyRound } from 'lucide-react'
+import { Check, KeyRound, X } from 'lucide-react'
 import type { IgdbCredentialStatus, SteamOwnedStatus } from '../shared/types'
 import { igdbSummary, keyInfo, keyOrder, pillWord, sgdbSummary, steamSummary, type KeyId, type KeySummary } from '../shared/api-keys'
 import { IgdbSetup, cleanPaste } from './igdb-setup'
@@ -133,7 +133,7 @@ export function ApiKeysSection({ keys }: { keys: ApiKeys }) {
   const [confirming, setConfirming] = useState<KeyId | null>(null)
   return <>
     <div className="settings-card">
-      <div className="card-heading"><div><h3>Optional keys</h3><p>GameLobbies works without any of these. Each one unlocks extra information or art from a free service. Keys are encrypted by Windows, are never shown again after saving, and never leave this PC except to the service they belong to.</p></div><button className="primary-button" onClick={() => openSheet()}><KeyRound size={15} /> Add keys</button></div>
+      <div className="card-heading"><div><h3>Optional keys</h3><p>GameLobbies works without any of these. Each one unlocks extra information or art from a free service. Keys are encrypted by Windows, are never shown again after saving, and never leave this PC except to the service they belong to.</p></div><button className="primary-button" onClick={() => openSheet()}><KeyRound size={16} /> Add keys</button></div>
       {keyOrder.map(id => {
         const { state, label } = keys.summary[id]
         const saved = state !== 'unset'
@@ -143,7 +143,7 @@ export function ApiKeysSection({ keys }: { keys: ApiKeys }) {
             <div className="key-row-title"><b>{keyInfo[id].name}</b><span className={'key-pill ' + state}>{pillWord(state)}</span></div>
             <small>{keyInfo[id].unlocks}</small>
             <small className="key-row-status">{label}</small>
-            {problem && <small className="key-row-problem" role="status">✗ {problem}</small>}
+            {problem && <small className="key-row-problem" role="status"><X size={14} strokeWidth={1.5} /> {problem}</small>}
           </div>
           <div className="key-row-actions">
             {confirming === id
@@ -173,7 +173,7 @@ function SgdbForm({ keys }: { keys: ApiKeys }) {
     <div className="sgdb-status-row" role="status">
       <span className="sgdb-status">{keys.summary.steamgriddb.label}</span>
       <button type="button" className="secondary-button" disabled={!sgdb.keySet || sgdb.testing} onClick={() => void sgdb.runTest()}>{sgdb.testing ? 'Testing…' : 'Test key'}</button>
-      {sgdb.test && <span className={'sgdb-test ' + (sgdb.test.ok ? 'ok' : 'fail')}>{sgdb.test.ok ? '✓' : '✗'} {sgdb.test.message}</span>}
+      {sgdb.test && <span className={'sgdb-test ' + (sgdb.test.ok ? 'ok' : 'fail')}>{sgdb.test.ok ? <Check size={14} strokeWidth={1.5} /> : <X size={14} strokeWidth={1.5} />} {sgdb.test.message}</span>}
     </div>
   </>
 }

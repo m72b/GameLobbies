@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowDown, ArrowLeft, ArrowUp, BarChart3, Gamepad2 } from 'lucide-react'
+import { ArrowDown, ArrowLeft, ArrowUp, Gamepad2 } from 'lucide-react'
 import type { StatsSummary, StatsTopGame } from '../shared/types'
 import { formatBytes } from '../shared/storage'
 import { barWidth, defaultDirection, formatPercent, playtimeBreakdown, sortTop, storeHint, type SortDirection, type TopSortKey } from '../shared/stats'
@@ -16,8 +16,8 @@ function storedHidden(): boolean {
 
 const plural = (n: number, one: string, many = one + 's') => n.toLocaleString() + ' ' + (n === 1 ? one : many)
 
-function Tile({ label, value, note, title }: { label: string; value: string; note?: string; title?: string }) {
-  return <div className="stat-tile" title={title}><div className="stat-label">{label}</div><div className="stat-value">{value}</div>{note && <div className="stat-note">{note}</div>}</div>
+function Tile({ label, value, note, title, lead }: { label: string; value: string; note?: string; title?: string; lead?: boolean }) {
+  return <div className={'stat-tile' + (lead ? ' lead' : '')} title={title}><div className="stat-label">{label}</div><div className="stat-value">{value}</div>{note && <div className="stat-note">{note}</div>}</div>
 }
 
 function Empty({ title, text }: { title: string; text: string }) {
@@ -56,12 +56,12 @@ function TopTable({ data, onOpen }: { data: StatsSummary; onOpen: (gameId: strin
       {header('seconds', 'Time played', 'top-time')}
       {header('seconds', '% of total', 'top-percent')}
     </div>
-    {rows.map(row => <TopRow key={row.gameId} row={row} biggest={biggest} onOpen={onOpen} />)}
+    {rows.map((row, index) => <TopRow key={row.gameId} row={row} biggest={biggest} lead={index === 0} onOpen={onOpen} />)}
     <p className="stats-foot">Top {data.top.length} of {plural(data.playtime.playedGames, 'game')} with play time. The percentage is the share of the total play time ({formatTotal(data.playtime.totalSeconds)}).</p>
   </div>
 }
 
-function TopRow({ row, biggest, onOpen }: { row: StatsTopGame; biggest: number; onOpen: (gameId: string) => void }) {
+function TopRow({ row, biggest, lead, onOpen }: { row: StatsTopGame; biggest: number; lead: boolean; onOpen: (gameId: string) => void }) {
   const src = coverSrc(row.cover)
   const fromStore = row.storeSeconds !== undefined && row.storeSeconds > row.trackedSeconds
   return <div className="top-row" role="row">
@@ -73,7 +73,7 @@ function TopRow({ row, biggest, onOpen }: { row: StatsTopGame; biggest: number; 
       {formatTotal(row.seconds)}{fromStore && <small>{row.storeSource ?? 'Store'}</small>}
     </div>
     <div className="top-percent" role="cell">
-      <span className="stat-bar-track" aria-hidden><span className="stat-bar-fill" style={{ width: barWidth(row.percent, biggest) + '%' }} /></span>
+      <span className="stat-bar-track" aria-hidden><span className={'stat-bar-fill' + (lead ? '' : ' muted')} style={{ width: barWidth(row.percent, biggest) + '%' }} /></span>
       <span>{formatPercent(row.percent)}</span>
     </div>
   </div>
@@ -127,7 +127,7 @@ export function StatsView({ onClose, onOpenGame, say }: { onClose(): void; onOpe
         <Tile label="Not installed" value={counts.notInstalled.toLocaleString()} />
         <Tile label="Hidden" value={counts.hidden.toLocaleString()} note={includeHidden ? 'counted in the figures' : 'not counted in the figures'} />
         <Tile label="Favorites" value={counts.favorite.toLocaleString()} />
-        <Tile label="Total play time" value={formatTotal(playtime.totalSeconds)} note={hint || undefined} />
+        <Tile label="Total play time" value={formatTotal(playtime.totalSeconds)} note={hint || undefined} lead />
         <Tile label="Average play time" value={playtime.playedGames ? formatTotal(playtime.averageSeconds) : '–'} note={'per game with play time (' + playtime.playedGames.toLocaleString() + ')'} title="Total play time divided by the games you have played for at least a moment. Unplayed games are not averaged in." />
         <Tile label="Total install size" value={installSize.known ? formatBytes(installSize.bytes) : '–'} note={installSize.unknown ? plural(installSize.unknown, 'installed game') + ' with unknown size' + (installSize.known ? ', not counted' : '') : installSize.partial ? 'some sizes are lower bounds' : undefined} title="Sum of the known sizes of installed games. Rescan sizes in Storage to measure more." />
       </div>
@@ -150,7 +150,7 @@ export function StatsView({ onClose, onOpenGame, say }: { onClose(): void; onOpe
     const most = Math.max(...library.map(entry => entry.count), 0)
     return <div className="stats-card">
       <div className="stat-bars" role="list">
-        {library.map(entry => <BarRow key={entry.name} name={entry.name} count={plural(entry.count, 'game')} percent={entry.percent} width={barWidth(entry.count, most)} />)}
+        {library.map((entry, index) => <BarRow key={entry.name} name={entry.name} count={plural(entry.count, 'game')} percent={entry.percent} width={barWidth(entry.count, most)} tone={index === 0 ? undefined : 'muted'} />)}
       </div>
       <p className="stats-foot">Each game is counted once, under the store or launcher shown on its card, even when it has several ways to play. The percentage is the share of the {plural(counts.all, 'game')} counted.</p>
     </div>
@@ -158,12 +158,12 @@ export function StatsView({ onClose, onOpenGame, say }: { onClose(): void; onOpe
 
   return <div className="settings-view stats-view">
     <header className="settings-head">
-      <button className="back-button" onClick={onClose} aria-label="Back to the library" title="Back (Esc)"><ArrowLeft size={15} /></button>
-      <div className="brand"><BarChart3 size={14} /> Statistics</div>
+      <button className="back-button" onClick={onClose} aria-label="Back to the library" title="Back (Esc)"><ArrowLeft size={16} /></button>
       <span className="meta-spacer" />
       <label className="stats-toggle" title="Hidden games are left out of every figure unless this is on"><input type="checkbox" checked={includeHidden} onChange={event => toggleHidden(event.target.checked)} />Include hidden games</label>
     </header>
     <div className="stats-body">
+      <h1>Statistics</h1>
       <div className="stats-tabs" role="tablist" aria-label="Statistics sections">
         {tabs.map((name, index) => <button key={name} id={'stats-tab-' + name} role="tab" aria-selected={tab === name} aria-controls="stats-panel" tabIndex={tab === name ? 0 : -1} className={tab === name ? 'active' : ''} onClick={() => setTab(name)} onKeyDown={event => moveTab(event, index)}>{name}</button>)}
       </div>

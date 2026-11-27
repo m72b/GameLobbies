@@ -85,7 +85,7 @@ Every optional key lives in **Settings → API keys**: the SteamGridDB key (cove
 
 ### Game details from Wikipedia and Wikidata (no key)
 
-GameLobbies has a built-in source of game details that needs no key or account: **Wikidata**, **Wikipedia** and **Wikimedia Commons**. It is on by default; turn it off with **Use Wikipedia & Wikidata (no key needed)** under **Settings → Playtime and Stats** (or the same switch at the top of **Settings → API keys**). When it is off, nothing is requested from those sites and their details, logos and covers are hidden (a cover you already chose keeps its credit).
+GameLobbies has a built-in source of game details that needs no key or account: **Wikidata**, **Wikipedia** and **Wikimedia Commons**. It is on by default; turn it off with **Use Wikipedia & Wikidata (no key needed)** under **Settings → Playtime and stats** (or the same switch at the top of **Settings → API keys**). When it is off, nothing is requested from those sites and their details, logos and covers are hidden (a cover you already chose keeps its credit).
 
 - **What it fetches**: from Wikidata, the release date, platforms, developer, publisher and genres (CC0, credited as *Facts from Wikidata*). From English Wikipedia, the first paragraph of the game's article, shown only when IGDB has no description, with *From Wikipedia*, a link to the article and its licence (CC BY-SA 4.0). From Wikimedia Commons, free logos, and a cover where a free one exists, each credited with its author and licence and a link to its file page.
 - **Only free images**: GameLobbies uses an image only when Wikimedia Commons hosts it under public domain, CC0, CC BY or CC BY-SA. Fair-use and other non-free images (most box art on Wikipedia) are never used, and nor are NonCommercial, NoDerivatives, GFDL-only or unclear licences. Many logos are trademarks; the credit notes it.
@@ -97,9 +97,9 @@ GameLobbies has a built-in source of game details that needs no key or account: 
 
 Screens and game pages animate subtly: a game page grows out of the poster you clicked, the library fades when you switch launcher or filter, and buttons respond to a press. **Settings → Appearance → Reduce motion** sets this: **Full** always animates, **Follow Windows** (the default) uses Windows' animation setting, **Reduced** keeps only short fades, and **Off** turns every animation off. If Windows' *Animation effects* are off, Follow Windows reduces motion and Settings shows a note saying so; choose **Full** to see every animation anyway.
 
-### Startup and Behavior
+### Startup and behavior
 
-**Settings → Startup and Behavior** has three options, all off by default.
+**Settings → Startup and behavior** has three options, all off by default.
 
 - **Launch on boot** starts GameLobbies when you sign in to Windows, minimized: in the tray if **Minimize to tray** or **Close to tray** is on, otherwise as a minimized taskbar button. It adds a per-user entry (`Run`, for your Windows user only, no administrator rights); turning the option off, or uninstalling GameLobbies, removes it. GameLobbies checks the entry each time it starts and when you change settings, so it keeps working after an update moves the program.
 - **Minimize to tray** hides the window to the notification area (the icon next to the clock, possibly under the **^** arrow) when you minimize it, instead of leaving a taskbar button.
@@ -136,7 +136,7 @@ Add library folders in **Settings → Library folders**: one or more **Game fold
 - Under **PC**, each subfolder is one game. The main `.exe` is chosen automatically, or the game goes to **Review** when the choice is unclear.
 - Internet shortcuts (`.url`) are accepted only for supported store links, such as `steam:` and Epic links. A `.lnk` that points to a plain `.exe` is stored as that `.exe`. Any other `.lnk`, such as one with arguments or a non-`.exe` target, goes to **Review**, must be confirmed, and will not launch if it changes after confirmation.
 
-**Add local game** in the library adds a single `.exe`, `.lnk`, or `.url` by browsing, using the same shortcut rules.
+**Add game → Add local game** in the library adds a single `.exe`, `.lnk`, or `.url` by browsing, using the same shortcut rules.
 
 **Emulator folders** are searched up to four levels deep for known emulators: Dolphin, PCSX2, RPCS3, DuckStation, PPSSPP, Ryujinx, yuzu forks, Cemu, xemu, Xenia and Xenia Canary, melonDS, Azahar/Lime3DS/Citra, mGBA, Project64, Snes9x, Mesen, Flycast, Vita3K, shadPS4, and RetroArch. Emulators can also be added manually with **Browse**. Each profile has editable launch arguments (a new emulator, or a new program or arguments, is confirmed in a Windows dialog) with the placeholders `{rom}`, `{romdir}`, and `{romname}`. Quotes group text. If `{rom}` is missing, the ROM path is appended. RetroArch needs its core set in the arguments before it can be used. The default argument templates come from each emulator's documentation; edit them if your build differs. A removed emulator stays removed on rescan, and you can restore it from **Ignored emulators**. A second copy of an already-known emulator is added disabled.
 

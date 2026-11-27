@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { Check, X } from 'lucide-react'
 import type { IgdbCredentialStatus } from '../shared/types'
 
 const CONSOLE_URL = 'https://dev.twitch.tv/console/apps'
@@ -73,11 +74,11 @@ export function IgdbSetup(p: IgdbSetupProps) {
     {configured && <button type="button" className="link-button igdb-toggle" aria-expanded={open} aria-controls="igdb-walkthrough" onClick={() => setShowSteps(!open)}>{open ? 'Hide setup steps' : 'Show setup steps'}</button>}
     {open && <ol className="igdb-steps igdb-walkthrough" id="igdb-walkthrough">
       <li>
-        <b>Sign in and turn on two-factor authentication.</b> Twitch requires a verified email and two-factor authentication on your account before it lets you register an application. Turn it on under Security and Privacy in your Twitch settings, then reload the console.
+        <b>Sign in and turn on two-factor authentication</b> Twitch requires a verified email and two-factor authentication on your account before it lets you register an application. Turn it on under Security and Privacy in your Twitch settings, then reload the console.
         <div className="igdb-step-actions"><a className="secondary-button" href={CONSOLE_URL}>Open the Twitch developer console</a></div>
       </li>
       <li>
-        <b>Register your application.</b> On the Applications tab choose "Register Your Application" and fill in:
+        <b>Register your application</b> On the Applications tab choose "Register Your Application" and fill in:
         <dl className="igdb-values">
           <dt>Name</dt><dd>Any name no one else uses, for example "GameLobbies" and your name.</dd>
           <dt>OAuth Redirect URLs</dt><dd><code>{REDIRECT_URL}</code><CopyButton value={REDIRECT_URL} label="redirect URL" /> then choose Add.</dd>
@@ -86,8 +87,8 @@ export function IgdbSetup(p: IgdbSetupProps) {
         </dl>
         Tick "I'm not a robot" and choose Create.
       </li>
-      <li><b>Copy the Client ID.</b> Under Developer Applications choose Manage next to your application and copy the Client ID.</li>
-      <li><b>Create the Client Secret.</b> Choose New Secret and copy it straight away. Twitch shows it only once, and a new secret replaces the old one.</li>
+      <li><b>Copy the Client ID</b> Under Developer Applications choose Manage next to your application and copy the Client ID.</li>
+      <li><b>Create the Client Secret</b> Choose New Secret and copy it straight away. Twitch shows it only once, and a new secret replaces the old one.</li>
       <li><b>Paste both below and save</b>, then choose Test connection. They are encrypted by Windows and are not shown again.</li>
     </ol>}
     {open && <div className="igdb-links igdb-doc-links"><a className="external-link" href={REGISTER_DOCS_URL}>Twitch: registering an app</a><a className="external-link" href={IGDB_DOCS_URL}>IGDB account setup guide</a></div>}
@@ -108,7 +109,7 @@ export function IgdbSetup(p: IgdbSetupProps) {
     <div className="sgdb-status-row">
       <span className="sgdb-status">{state}</span>
       <button type="button" className="secondary-button" disabled={!configured || p.testing} onClick={p.onTest}>{p.testing ? 'Testing…' : 'Test connection'}</button>
-      {p.test && <span className={'sgdb-test ' + (p.test.ok ? 'ok' : 'fail')} role="status">{p.test.ok ? '✓' : '✗'} {describeTest(p.test.ok, p.test.message)}</span>}
+      {p.test && <span className={'sgdb-test ' + (p.test.ok ? 'ok' : 'fail')} role="status">{p.test.ok ? <Check size={14} strokeWidth={1.5} /> : <X size={14} strokeWidth={1.5} />} {describeTest(p.test.ok, p.test.message)}</span>}
     </div>
   </>
 }

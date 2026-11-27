@@ -69,8 +69,8 @@ export function SessionHistory({ gameId, title, running, onClose }: { gameId?: s
       <div className="modal-head">
         <h2><History size={16} /> Play history{title ? ' · ' + title : ' · all games'}</h2>
         <div className="sh-head-actions">
-          <button type="button" title="Reload" aria-label="Reload" onClick={() => void load(null)} disabled={loading}><RefreshCw size={15} className={loading ? 'spin' : ''} /></button>
-          <button type="button" aria-label="Close" onClick={onClose}><X size={17} /></button>
+          <button type="button" title="Reload" aria-label="Reload" onClick={() => void load(null)} disabled={loading}><RefreshCw size={16} className={loading ? 'spin' : ''} /></button>
+          <button type="button" aria-label="Close" onClick={onClose}><X size={16} /></button>
         </div>
       </div>
       <details className="sh-about">
@@ -82,7 +82,7 @@ export function SessionHistory({ gameId, title, running, onClose }: { gameId?: s
       </details>
       {error && <div className="form-error" role="alert">{error}</div>}
       <div className="sh-list">
-        {!loading && sessions.length === 0 && storeEntries.length === 0 && !error && <div className="empty-inline">No play sessions recorded yet.</div>}
+        {!loading && sessions.length === 0 && storeEntries.length === 0 && !error && <div className="empty-inline">No play sessions recorded yet</div>}
         {mergeActivity(sessions, storeEntries).map(row => {
           if (row.kind === 'steam') return <div key={'steam-' + row.entry.gameId} className="sh-row sh-steam-row" title={addedTooltip(row.entry)}>
             <div className="sh-main">
@@ -111,10 +111,10 @@ export function SessionHistory({ gameId, title, running, onClose }: { gameId?: s
               </div>
               <span className="gp-dur">{isRunning ? <><span className="gp-live-dot" /> {formatClock(elapsedSeconds(session.startedAt, now))}</> : formatSession(session.seconds)}</span>
               <div className="sh-actions">
-                <button type="button" title={live ? 'Running sessions can be edited after they end' : 'Correct start and end'} aria-label="Edit times" disabled={live} aria-pressed={mode === 'edit'} onClick={() => toggle(session.id, 'edit')}><Pencil size={14} /></button>
-                <button type="button" title="Note and screenshots" aria-label="Journal" aria-pressed={mode === 'journal'} onClick={() => toggle(session.id, 'journal')}><BookOpen size={14} /></button>
-                <button type="button" title="Share session" aria-label="Share session" aria-pressed={mode === 'share'} onClick={() => toggle(session.id, 'share')}><Share2 size={14} /></button>
-                <button type="button" className="danger" title={live ? 'Running sessions can be deleted after they end' : 'Delete session'} aria-label="Delete session" disabled={live} onClick={() => void remove(session)}><Trash2 size={14} /></button>
+                <button type="button" title={live ? 'Running sessions can be edited after they end' : 'Correct start and end'} aria-label="Edit times" disabled={live} aria-pressed={mode === 'edit'} onClick={() => toggle(session.id, 'edit')}><Pencil size={16} /></button>
+                <button type="button" title="Note and screenshots" aria-label="Journal" aria-pressed={mode === 'journal'} onClick={() => toggle(session.id, 'journal')}><BookOpen size={16} /></button>
+                <button type="button" title="Share session" aria-label="Share session" aria-pressed={mode === 'share'} onClick={() => toggle(session.id, 'share')}><Share2 size={16} /></button>
+                <button type="button" className="danger" title={live ? 'Running sessions can be deleted after they end' : 'Delete session'} aria-label="Delete session" disabled={live} onClick={() => void remove(session)}><Trash2 size={16} /></button>
               </div>
             </div>
             {(session.note || session.screenshots.length > 0) && mode !== 'journal' && <div className="sh-journal-view">
@@ -228,9 +228,9 @@ function Share({ session }: { session: SessionEntry }) {
         <button type="button" className={format === 'txt' ? 'active' : ''} aria-pressed={format === 'txt'} onClick={() => setFormat('txt')}>Text</button>
         <button type="button" className={format === 'md' ? 'active' : ''} aria-pressed={format === 'md'} onClick={() => setFormat('md')}>Markdown</button>
       </div>
-      <button type="button" className="secondary-button" disabled={!text} onClick={() => void copy()}><Copy size={14} /> Copy</button>
-      <button type="button" className="secondary-button" disabled={!text} onClick={() => void save()}><Download size={14} /> Save as .{format}…</button>
-      <a className="external-link sh-link" href={backloggdSearchUrl(session.gameTitle)} title="Opens a Backloggd search for this game in your browser">Open on Backloggd <ExternalLink size={12} /></a>
+      <button type="button" className="secondary-button" disabled={!text} onClick={() => void copy()}><Copy size={16} /> Copy</button>
+      <button type="button" className="secondary-button" disabled={!text} onClick={() => void save()}><Download size={16} /> Save as .{format}…</button>
+      <a className="external-link sh-link" href={backloggdSearchUrl(session.gameTitle)} title="Opens a Backloggd search for this game in your browser">Open on Backloggd <ExternalLink size={16} /></a>
     </div>
     <textarea className="sh-preview" readOnly value={text} rows={Math.min(14, Math.max(6, text.split('\n').length + 1))} aria-label="Summary preview" />
     {status && <div className="sh-hint" role="status">{status}</div>}

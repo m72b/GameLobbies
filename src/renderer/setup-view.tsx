@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowLeft, ArrowRight, Check, Sparkles } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Check, X } from 'lucide-react'
 import type { AccountStore, SetupChoice, SetupInfo, SetupStore, SetupStoreInfo } from '../shared/types'
 import { choiceLabel, choicesFor, defaultChoice, setupSteps, signInStores, type SetupStep } from '../shared/accounts'
 import { StoreIcon } from './store-icons'
@@ -63,13 +63,13 @@ export function SetupView({ info, accounts, keys, say, onDone }: { info: SetupIn
 
   return <div className="settings-view setup-view">
     <header className="settings-head">
-      <div className="brand"><GlMark size={12} className="gl-mark" />Set up GameLobbies</div>
+      <div className="brand"><GlMark size={20} className="gl-mark" />Set up GameLobbies</div>
       <ol className="setup-progress" aria-label="Setup steps">{steps.map((item, i) => <li key={item} className={i < index ? 'done' : i === index ? 'current' : ''} aria-current={i === index ? 'step' : undefined}><span>{stepTitles[item]}</span></li>)}</ol>
       <button type="button" className="link-button setup-skip" disabled={saving} onClick={() => void skipAll()}>Skip setup</button>
     </header>
     <div className="setup-body" ref={body}>
       <main className="setup-content" key={step}>
-        <div className="eyebrow">STEP {index + 1} OF {steps.length}</div>
+        <div className="step-count">Step {index + 1} of {steps.length}</div>
         <h1 tabIndex={-1}>{stepTitles[step]}</h1>
 
         {step === 'welcome' && <>
@@ -81,10 +81,10 @@ export function SetupView({ info, accounts, keys, say, onDone }: { info: SetupIn
           <p className="settings-description">Which stores do you use? Pick all that apply.</p>
           <div className="setup-stores" role="group" aria-label="Stores">
             {info.stores.map(store => <button type="button" key={store.id} className={'setup-store' + (picked.includes(store.id) ? ' picked' : '')} aria-pressed={picked.includes(store.id)} onClick={() => toggle(store)}>
-              <span className="store-badge small"><StoreIcon store={iconName[store.id]} /></span><b>{store.name}</b>{picked.includes(store.id) && <Check size={14} className="setup-check" />}
+              <span className="store-badge small"><StoreIcon store={iconName[store.id]} /></span><b>{store.name}</b>{picked.includes(store.id) && <Check size={16} className="setup-check" />}
             </button>)}
           </div>
-          <p className="muted-text">Amazon Games, emulators and other launchers are still found on this PC; they need no setup.</p>
+          <p className="muted-text">Amazon Games, emulators and other launchers are still found on this PC; they need no setup</p>
         </>}
 
         {step === 'choices' && <>
@@ -93,7 +93,7 @@ export function SetupView({ info, accounts, keys, say, onDone }: { info: SetupIn
             const options: SetupChoice[] = store.signIn ? ['signin', 'installed', 'skip'] : ['installed', 'skip']
             const current = all[store.id] ?? defaultChoice(store)
             return <div className="settings-card setup-choice" key={store.id}>
-              <div className="setup-choice-head"><span className="store-badge small"><StoreIcon store={iconName[store.id]} /></span><b>{store.name}</b>{!store.signIn && store.id !== 'ea' && store.id !== 'ubisoft' && store.id !== 'itch' && <span className="coming-soon">SIGN-IN COMING SOON</span>}</div>
+              <div className="setup-choice-head"><span className="store-badge small"><StoreIcon store={iconName[store.id]} /></span><b>{store.name}</b>{!store.signIn && store.id !== 'ea' && store.id !== 'ubisoft' && store.id !== 'itch' && <span className="coming-soon">Sign-in coming soon</span>}</div>
               <p className="muted-text">{store.note}</p>
               <div className="chip-group" role="radiogroup" aria-label={'How to use ' + store.name}>
                 {options.map(option => <button type="button" key={option} role="radio" aria-checked={current === option} className={'chip ' + (current === option ? 'active' : '')} onClick={() => setChoices(value => ({ ...value, [store.id]: option }))}>{option === 'signin' ? (store.id === 'steam' ? 'Sign in through Steam' : 'Sign in to ' + store.name) : choiceLabel[option]}</button>)}
@@ -111,13 +111,13 @@ export function SetupView({ info, accounts, keys, say, onDone }: { info: SetupIn
             return <div className="settings-card setup-choice" key={store.id}>
               <div className="setup-choice-head"><span className="store-badge small"><StoreIcon store={iconName[store.id]} /></span><b>{steamStore ? 'Sign in through Steam' : 'Sign in to ' + store.name}</b></div>
               {status.signedIn && !status.signingIn
-                ? <p className="setup-ok" role="status"><Check size={14} /> Signed in to {store.name}.</p>
+                ? <p className="setup-ok" role="status"><Check size={14} strokeWidth={1.5} /> Signed in to {store.name}</p>
                 : <p className="muted-text">{steamStore
                   ? 'Your web browser opens steamcommunity.com. Sign in there (approve with Steam Guard as usual); when Steam confirms, the tab says so and GameLobbies comes back to the front.'
                   : store.id === 'gog'
                     ? "Your web browser opens GOG's sign-in. Sign in any way GOG offers; then copy the address GOG ends on and paste it below."
                     : 'A GameLobbies window opens with ' + store.name + "'s sign-in page. Sign in there; when the store's account page appears, the window closes by itself. If it never finishes, close it and choose Installed files only."}</p>}
-              {status.notice && !status.notice.ok && <p className="key-row-problem" role="status">✗ {status.notice.message}</p>}
+              {status.notice && !status.notice.ok && <p className="key-row-problem" role="status"><X size={14} strokeWidth={1.5} /> {status.notice.message}</p>}
               <StoreSignIn accounts={accounts} status={status} />
               <SignInNote store={status.store} />
               {steamStore && <div className="setup-key">
@@ -139,18 +139,18 @@ export function SetupView({ info, accounts, keys, say, onDone }: { info: SetupIn
         </>}
 
         {step === 'done' && <>
-          <p className="settings-description"><Sparkles size={15} className="setup-sparkle" /> GameLobbies now scans your stores and folders{accounts.statuses.some(s => s.signedIn && s.mode === 'account') ? ' and asks your signed-in stores for the games you own' : ''}.</p>
+          <p className="settings-description">GameLobbies now scans your stores and folders{accounts.statuses.some(s => s.signedIn && s.mode === 'account') ? ' and asks your signed-in stores for the games you own' : ''}.</p>
           <p className="muted-text">Change any of this later: stores and accounts in Settings → Accounts and Libraries, folders in Library folders, keys in API keys. Settings → Accounts also has Run setup again.</p>
         </>}
       </main>
     </div>
     <footer className="setup-foot">
-      {index > 0 ? <button type="button" className="secondary-button" disabled={saving} onClick={back}><ArrowLeft size={14} /> Back</button> : <span />}
+      {index > 0 ? <button type="button" className="secondary-button" disabled={saving} onClick={back}><ArrowLeft size={16} /> Back</button> : <span />}
       <span className="setup-foot-space" />
       {step !== 'done' && step !== 'welcome' && <button type="button" className="link-button" disabled={saving} onClick={next}>Skip this step</button>}
       {step === 'done'
         ? <button type="button" className="primary-button" disabled={saving} onClick={() => void finish()}>{saving ? 'Finishing…' : 'Finish and scan'}</button>
-        : <button type="button" className="primary-button" disabled={saving} onClick={next}>{step === 'welcome' ? 'Get started' : 'Next'} <ArrowRight size={14} /></button>}
+        : <button type="button" className="primary-button" disabled={saving} onClick={next}>{step === 'welcome' ? 'Get started' : 'Next'} <ArrowRight size={16} /></button>}
     </footer>
   </div>
 }
