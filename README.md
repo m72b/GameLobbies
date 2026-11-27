@@ -18,7 +18,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/images/library.png" alt="The GameLobbies library: a side menu with stores and counts, and a grid of game covers" width="900">
+  <img src="docs/images/library.jpg" alt="The GameLobbies library: a side menu with stores and counts, and a grid of game covers" width="900">
 </p>
 
 ---
@@ -44,7 +44,7 @@ GameLobbies is **my first Rust project**. It started as an Electron app and was 
 **Rich game pages**
 
 <p align="center">
-  <img src="docs/images/game-page.png" alt="A game page: hero art and title, the Play bar with playtime, and the activity list" width="900">
+  <img src="docs/images/game-page.jpg" alt="A game page: hero art and title, the Play bar with playtime, and the activity list" width="900">
 </p>
 
 - Cover art, heroes and logos from SteamGridDB, including animated art.
@@ -55,7 +55,7 @@ GameLobbies is **my first Rust project**. It started as an Electron app and was 
 **Playtime and statistics**
 
 <p align="center">
-  <img src="docs/images/statistics.png" alt="The Statistics view: overview tiles and a bar for each store" width="900">
+  <img src="docs/images/statistics.jpg" alt="The Statistics view: a bar for each store with its share of the library" width="740">
 </p>
 
 - Tracks play sessions for games you launch and for store games you start elsewhere.
