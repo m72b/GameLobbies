@@ -17,13 +17,17 @@
   <img src="https://img.shields.io/badge/built%20with-Rust%20%2B%20Tauri%202-dea584" alt="Built with Rust and Tauri 2">
 </p>
 
+<p align="center">
+  <img src="docs/images/library.png" alt="The GameLobbies library: a side menu with stores and counts, and a grid of game covers" width="900">
+</p>
+
 ---
 
 ## About
 
-GameLobbies brings the games you already own into one library: Steam, Epic, GOG, Xbox and other store games, your own PC games, and emulator ROM folders. It shows them as a cover-art grid with search and filters, launches each one through the right store, emulator or launcher, and keeps track of your playtime, all on your own PC.
+GameLobbies brings the games you already own into one library: Steam, Epic, GOG, Battle.net, Xbox and other store games, your own PC games, custom launchers and emulator ROM folders. It shows them as a cover-art grid, launches each one through the right store, emulator or launcher, and keeps track of your playtime, all on your own PC.
 
-GameLobbies is **my first Rust project**. It started as an Electron app and was rebuilt with a Rust backend on [Tauri 2](https://tauri.app/), which made it much lighter: the installer is about 5 MB instead of 125 MB, and it uses less memory. I'm still learning Rust, so feedback, issues and pull requests are very welcome.
+GameLobbies is **my first Rust project**. It started as an Electron app and was rebuilt with a Rust backend on [Tauri 2](https://tauri.app/), which made it much lighter: the installer is about 6 MB instead of 125 MB, and it uses less memory. I'm still learning Rust, so feedback, issues and pull requests are very welcome.
 
 > **Bring your own games.** GameLobbies does not include, download or link to games, ROMs, BIOS or firmware files, or emulators. It only finds and launches what you have installed or own yourself.
 
@@ -31,23 +35,42 @@ GameLobbies is **my first Rust project**. It started as an Electron app and was 
 
 **One library**
 - Finds installed games from Steam, Epic Games, GOG, Xbox / Microsoft Store, EA app, Battle.net, Ubisoft Connect, Amazon Games and itch.io automatically.
+- Optional store sign-ins add the games you own but haven't installed, with their playtime: **Steam** (in your browser), **GOG** (in your browser) and **Battle.net**.
 - Scans your own game folders and emulator folders: 23 known emulators and 24 systems, with ROMs matched to the right emulator.
-- Custom launchers with your own name, icon and colour, and games folders that are scanned for games and emulators.
-- Search, store filters, favourites, a recently added shelf, a storage view with install sizes, and a library health check for missing files and duplicates.
+- Custom launchers with your own name, icon, colour and start mode, including launchers that must be open and signed in before a game starts.
+- Link several entries into one game (the same game from two stores, or editions like Minecraft Java and Bedrock), each with its own name and launch options.
+- A side menu with every view and store and their game counts, search, favourites, a recently added shelf, a storage view with install sizes, and a library health check for missing files and duplicates.
 
 **Rich game pages**
+
+<p align="center">
+  <img src="docs/images/game-page.png" alt="A game page: hero art and title, the Play bar with playtime, and the activity list" width="900">
+</p>
+
 - Cover art, heroes and logos from SteamGridDB, including animated art.
 - Descriptions, genres, developers, ratings, screenshots and time to beat from IGDB.
 - Built in, with no key: release dates, platforms, developers, publishers and genres from Wikidata, a short description from Wikipedia, and free logos (and covers where a free one exists) from Wikimedia Commons, each credited.
 - A screenshot wall, your own score, notes and memories, and controller details.
 
-**Playtime that stays yours**
+**Playtime and statistics**
+
+<p align="center">
+  <img src="docs/images/statistics.png" alt="The Statistics view: overview tiles and a bar for each store" width="900">
+</p>
+
 - Tracks play sessions for games you launch and for store games you start elsewhere.
+- Steam and GOG hours are added to every game they know: each game shows the larger of GameLobbies's own time and the store's, and the activity list says how much came from the store.
+- **Statistics**: an overview of your library, what you have and haven't played, your top playtime and how many games each store has.
 - Full play history with exact times, corrections, a journal per session, and sharing as text or Markdown.
 
+**Fits your PC**
+- A calm dark interface where the cover art brings the colour, readable at any window size: the side menu folds into icons in a smaller window.
+- Launch on boot, minimize to tray and close to tray, so playtime tracking keeps running in the background.
+- Themes, a choice of how much motion you want, and a first-time setup that asks only what it needs.
+
 **Built to be safe**
-- Your library, playtime and settings stay on your PC. There is no account and no telemetry.
-- API keys are encrypted with Windows DPAPI and never logged or shared.
+- Your library, playtime and settings stay on your PC. There is no GameLobbies account and no telemetry.
+- Store passwords go only to the store: Steam and GOG sign in on their own websites in your browser, and Battle.net in a private window. What GameLobbies keeps from a sign-in, and every API key, is encrypted with Windows DPAPI and never logged or shared.
 - The interface can never choose which program GameLobbies runs: programs and folders come only from Windows file pickers, and new launch settings are confirmed in a Windows dialog.
 - The library database is checked at every start and repaired automatically if it is damaged.
 - Updates are signed and verified before they install.
@@ -67,24 +90,36 @@ The installer is not yet signed with a code-signing certificate, so Windows Smar
 
 ## Getting started
 
-1. Open GameLobbies. Installed store games are found automatically on the first scan.
-2. Add your own game and emulator folders in **Settings → Library folders**.
+1. Open GameLobbies. A short setup asks which stores you use and whether to sign in to them or only read their installed files; every step can be skipped.
+2. Installed store games are found on the first scan. Add your own game and emulator folders in **Settings → Library folders**.
 3. Optionally, add API keys for cover art and game details (see below).
 4. Press **Play** on any game. GameLobbies minimizes while you play and records the session.
 
-See the [user guide](docs/USER-GUIDE.md) for emulators, custom launchers, play history, themes and more.
+See the [user guide](docs/USER-GUIDE.md) for store accounts, emulators, custom launchers, linked games, play history, statistics, themes and more.
+
+## Store accounts
+
+Signing in is optional; installed games are always found without it.
+
+| Store | How you sign in | What it adds |
+| --- | --- | --- |
+| Steam | Steam's own page in your browser; with a free Steam Web API key | Games you own but haven't installed, and Steam's playtime |
+| GOG | GOG's own page in your browser, then paste the address GOG shows | Owned games and GOG's playtime |
+| Battle.net | Battle.net's page in a private GameLobbies window | The games on your account |
+
+GOG and Battle.net have no official sign-in for other apps, so GameLobbies signs in the way their own launchers and websites do; they could stop that at any time. **Settings → Accounts** shows each account, syncs it and signs out (which removes the not-installed games it added). Xbox and Epic Games sign-in will come later; their installed games are found already.
 
 ## Optional API keys
 
-GameLobbies works without any account. Three optional features use free keys that **you** create. They are stored on your PC, encrypted for your Windows user, and are never shared or included in backups. GameLobbies never ships a shared key.
+Three optional features use free keys that **you** create. They are stored on your PC, encrypted for your Windows user, and are never shared or included in backups. GameLobbies never ships a shared key.
 
 | Feature | What you need | Where to enter it |
 | --- | --- | --- |
 | Cover art, heroes and logos | A free [SteamGridDB API key](https://www.steamgriddb.com/profile/preferences/api) | **Settings → API keys** |
 | Game details, screenshots and time to beat | Your own [Twitch developer application](https://dev.twitch.tv/console) (Client ID and Client Secret) for IGDB | **Settings → API keys** |
-| Steam games you own but haven't installed | A free [Steam Web API key](https://steamcommunity.com/dev/apikey) and your SteamID64, with your Steam profile's game details set to Public | **Settings → API keys** |
+| Steam games you own but haven't installed, and Steam playtime | A free [Steam Web API key](https://steamcommunity.com/dev/apikey), with your Steam profile's game details set to Public | **Settings → API keys** |
 
-Settings opens inside the main window (the gear in the side rail, or **Ctrl+,**; **Esc** goes back). **Settings → API keys** lists all three keys with what each unlocks and whether it is set; **Add keys** opens a side sheet with every key at once, with links and short steps. Keys you have set can be changed or removed there.
+Settings opens inside the main window (the gear in the side menu, or **Ctrl+,**; **Esc** goes back). **Settings → API keys** lists all three keys with what each unlocks and whether it is set; **Add keys** opens a side sheet with every key at once, with links and short steps. Keys you have set can be changed or removed there.
 
 Without any key, GameLobbies still fills in game details from **Wikidata** (facts, CC0), **Wikipedia** (the first paragraph of the article, CC BY-SA 4.0, credited with a link, only when IGDB has none) and **Wikimedia Commons** (free logos and covers with their author and licence; never fair-use images). It only fills what is missing, IGDB's details come first, and it can be turned off with **Use Wikipedia & Wikidata (no key needed)** in **Settings → API keys** or **Settings → Playtime and stats**. See the [user guide](docs/USER-GUIDE.md#game-details-from-wikipedia-and-wikidata-no-key).
 
@@ -94,20 +129,21 @@ Keep your keys private: don't paste them into issues, screenshots or logs. **Cop
 
 | Store | How games are found |
 | --- | --- |
-| Steam | Installed games from `appmanifest_*.acf` files; optionally also owned games that aren't installed, from the Steam Web API with your own key |
+| Steam | Installed games from `appmanifest_*.acf` files; with a sign-in and your own key, also owned games that aren't installed |
 | Epic Games | Installed games from the Epic Games Launcher manifests |
-| GOG | Owned games from the local GOG Galaxy database, with install state |
-| EA app, Battle.net, Ubisoft Connect, Amazon Games | Installed games from Windows registry and uninstall records |
+| GOG | Owned games from the local GOG Galaxy database, with install state; with a sign-in, every game on your account |
+| Battle.net | Installed games from Windows records; with a sign-in, every game on your account |
+| EA app, Ubisoft Connect, Amazon Games | Installed games from Windows registry and uninstall records |
 | itch.io | Installed games from the itch app folders |
 | Xbox / Microsoft Store | Installed game packages (best effort) |
 
-No store accounts or keys are needed. GameLobbies reads each launcher's local data and opens its own launch links; it never signs in to them. Each store can be turned off in **Settings → Libraries**.
+Each store can be turned off in **Settings → Libraries**.
 
 ## Privacy and data
 
 - Everything is stored locally in `%APPDATA%\app.gamelobby.desktop`: the library database, cached artwork, screenshots and logs.
-- GameLobbies only goes online for the features you use: SteamGridDB, IGDB, Wikidata, Wikipedia and Wikimedia Commons (unless turned off), the Steam artwork CDN, themes you add, and update checks on GitHub.
-- JSON backups include your games, settings, emulators, custom launchers and play history, but never API keys.
+- GameLobbies only goes online for the features you use: store accounts you sign in to, SteamGridDB, IGDB, Wikidata, Wikipedia and Wikimedia Commons (unless turned off), the Steam artwork CDN, themes you add, and update checks on GitHub.
+- JSON backups include your games, settings, emulators, custom launchers and play history, but never API keys or store sign-ins.
 
 ### Data sources and terms
 
@@ -150,9 +186,11 @@ npm run build      # release build and NSIS installer
 | --- | --- |
 | `src-tauri/src/` | Rust backend: commands, database, scanners, launchers, play tracking |
 | `src-tauri/src/importers/` | One importer per store |
+| `src-tauri/src/accounts/` | Store sign-ins and account syncs |
+| `src-tauri/src/wikimedia/` | Game details from Wikidata, Wikipedia and Wikimedia Commons |
 | `src/renderer/` | React interface |
 | `src/shared/` | Types and helpers shared by the interface, with their tests |
-| `docs/` | User guide, release process and manual test checks |
+| `docs/` | User guide, release process, design notes and manual test checks |
 
 ## Contributing
 

@@ -7,7 +7,7 @@ Releases start at 0.9.0 on the [releases page](https://github.com/m72b/GameLobbi
 ## [Unreleased]
 
 ### Renamed to GameLobbies
-- The app is now called **GameLobbies**: window title, tray, setup, settings, About, Windows dialogs, the installer and uninstaller, shortcuts and Apps & features. The logo, colours and look are unchanged.
+- The app is now called **GameLobbies**: window title, tray, setup, settings, About, Windows dialogs, the installer and uninstaller, shortcuts and Apps & features. The logo is unchanged.
 - Your library, settings, covers, screenshots, signed-in accounts and keys stay where they are (`%APPDATA%\app.gamelobby.desktop`); nothing has to be set up again.
 - Updating from Game Lobby 0.9.0 or older, in the app or with the installer, replaces the old install: GameLobbies is installed to `%LOCALAPPDATA%\GameLobbies`, the old Game Lobby program, its uninstall entry and the Start menu and desktop shortcuts that started it are removed, and those shortcuts are created again under the new name. **Launch on boot** carries over (the Windows startup entry is now named GameLobbies).
 - The in-app update works from 0.5.0 and newer. Game Lobby 0.4.0 can't find updates (its update address no longer exists); install GameLobbies with the installer, and it replaces 0.4.0 the same way.
@@ -15,6 +15,19 @@ Releases start at 0.9.0 on the [releases page](https://github.com/m72b/GameLobbi
 - Windows removes a taskbar pin of the old shortcut; pin GameLobbies again.
 - The program file is now `GameLobbies.exe` and the installer `GameLobbies_<version>_x64-setup.exe`.
 - The repository moves to [m72b/GameLobbies](https://github.com/m72b/GameLobbies); links and the update check use the new name, and the old one keeps working.
+
+### New look
+- A calmer dark interface: graphite surfaces with one green accent, and the cover art brings the colour. Text is larger (12 px and up) and in sentence case; page and game titles use Quantico, and hours and counts line up in a fixed-width font.
+- A side menu with labels and game counts replaces the icon rail: the library views, every store and custom launcher, Settings and Quit. The selected entry is green. The menu folds into icons with the button at its top, and on its own in a window narrower than 1100 px.
+- The whole app fits smaller windows, down to 800 × 600: the toolbar, game page, Settings, Statistics and dialogs wrap or shrink instead of overflowing.
+- **Add game** is one button with a menu: a store link or launcher, or **Add local game…**.
+- Every bar in Statistics is green.
+- A green dot marks what is live (a game running, playtime tracking, a connected account) and no longer pulses; game cards lift slightly on hover instead of zooming and glowing.
+- Edit mode is removed from the side menu; **Edit metadata** stays in each game's menu.
+
+### Fixed
+- **Close to tray** could ignore the close button once, until another click, after GameLobbies was brought back from the tray or by starting it a second time. Windows sometimes refuses to bring a window to the front, and the fallback then faked an Alt key press that swallowed the next click; GameLobbies now comes forward without it.
+- If an update's installer failed to start, the close button quit GameLobbies instead of hiding it to the tray until the next restart.
 
 ## [0.9.0] — 2026-11-22
 

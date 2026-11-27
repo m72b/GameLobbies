@@ -105,7 +105,7 @@ Screens and game pages animate subtly: a game page grows out of the poster you c
 - **Minimize to tray** hides the window to the notification area (the icon next to the clock, possibly under the **^** arrow) when you minimize it, instead of leaving a taskbar button.
 - **Close to tray** makes the window's close button hide GameLobbies instead of exiting. It keeps running, so playtime tracking and scheduled scans continue. The first time this happens, the next time you open the window it tells you GameLobbies is still in the tray.
 
-The tray icon appears only while one of the two tray options is on. Click it to open GameLobbies; right-click it for **Open GameLobbies** and **Quit**. **Quit** (and the Quit button in the side rail) exits for real, and so does installing an update. Starting GameLobbies a second time brings the hidden window back. If **Minimize when a game starts** is on together with **Minimize to tray**, pressing Play sends GameLobbies to the tray.
+The tray icon appears only while one of the two tray options is on. Click it to open GameLobbies; right-click it for **Open GameLobbies** and **Quit**. **Quit** (and Quit at the bottom of the side menu) exits for real, and so does installing an update. Starting GameLobbies a second time brings the hidden window back. If **Minimize when a game starts** is on together with **Minimize to tray**, pressing Play sends GameLobbies to the tray.
 ### Steam games you own but haven't installed
 
 Steam is installed-games only unless you set this up. The easiest way is **Settings → Accounts → Sign in through Steam** (see [Signing in through Steam](#signing-in-through-steam)), which fills in your SteamID64; then add the API key below. To enter both yourself instead, open **Settings → API keys** (also reachable from the Steam row in **Settings → Libraries**), choose **Add keys** and fill in the **Steam Web API key and SteamID64** card:
@@ -256,7 +256,7 @@ Store routes (`steam://`, Xbox apps, Epic, GOG and the others), launchers withou
 
 ## Play session history
 
-Every tracked session (game, start, end, duration and whether it was launched from GameLobbies or detected running) is kept in the library. The game page lists recent sessions with their date and start and end times; **All sessions** on the game page, and **Play history** in the library bar or the side rail, open the full history for one game or for all games, loaded 50 at a time.
+Every tracked session (game, start, end, duration and whether it was launched from GameLobbies or detected running) is kept in the library. The game page lists recent sessions with their date and start and end times; **All sessions** on the game page, and **Play history** in the side menu, open the full history for one game or for all games, loaded 50 at a time.
 
 - **Limits.** Sessions are only recorded while GameLobbies is running. A game that starts and ends while GameLobbies is closed isn't recorded, and detection relies on the game's process being seen with a game window.
 - **Crashes and shutdowns.** Playtime is saved every few seconds while a game runs. If GameLobbies closes unexpectedly, the next start ends the open session at the last time the game was seen running and marks it **Interrupted**; it is never counted up to the current time.
@@ -268,7 +268,7 @@ Every tracked session (game, start, end, duration and whether it was launched fr
 
 ## Statistics
 
-The **Statistics** button in the side rail and in the library bar (it replaces the old Recently played view) opens a Statistics view in place of the library, like Settings: **Back** or **Esc** returns, and a game in the Top playtime list opens its page. Everything is calculated from your library on this PC; nothing is sent anywhere.
+**Statistics** in the side menu opens a Statistics view in place of the library, like Settings: **Back** or **Esc** returns, and a game in the Top playtime list opens its page. Everything is calculated from your library on this PC; nothing is sent anywhere.
 
 **Include hidden games** (top right) is off by default: hidden games are left out of every figure. The **Hidden** tile always shows how many games you have hidden.
 
