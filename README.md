@@ -20,7 +20,7 @@
 <p align="center">
   <img src="docs/images/library.jpg" alt="The GameLobbies library: a side menu with stores and counts, and a grid of game covers" width="900">
 </p>
-
+Used My own Pictures and didn't use some random pictures
 ---
 
 ## About
