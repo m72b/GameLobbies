@@ -203,7 +203,11 @@ pub async fn updates_install(app: AppHandle, updates: State<'_, Updates>) -> Cmd
     // version when it is done. Other platforms return here with the new version in place.
     // The installer ends this process; Close to tray must not get in its way.
     crate::tray::allow_exit();
-    update.install(&bytes).map_err(|e| describe(&e).message())?;
+    if let Err(e) = update.install(&bytes) {
+        // Nothing is exiting after all: Close to tray must work again.
+        crate::tray::cancel_exit();
+        return Err(describe(&e).message());
+    }
     app.restart()
 }
 

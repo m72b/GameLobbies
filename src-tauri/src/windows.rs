@@ -142,7 +142,7 @@ pub fn open_settings_at(app: &AppHandle, section: Option<&str>) -> tauri::Result
     };
     let _ = window.show();
     let _ = window.unminimize();
-    window.set_focus()?;
+    bring_to_front(&window)?;
     crate::tray::announce_if_pending(app);
     app.emit_to(MAIN, "settings:open", section)
 }
@@ -156,11 +156,74 @@ pub fn focus_main(app: &AppHandle) -> tauri::Result<()> {
             if window.is_minimized().unwrap_or(false) {
                 window.unminimize()?;
             }
-            window.set_focus()?;
+            bring_to_front(&window)?;
             crate::tray::announce_if_pending(app);
             Ok(())
         }
         None => create(app, StartMode::Show),
+    }
+}
+
+/// Makes `window` the foreground window. Use this instead of `WebviewWindow::set_focus`.
+///
+/// On Windows, tao's `set_focus` falls back to a synthesized Alt press and release when
+/// `SetForegroundWindow` is refused, which happens whenever another process holds the foreground
+/// (a second copy started from a shortcut, often a tray click). The Alt release reaches the window
+/// as `SC_KEYMENU` and puts it into invisible system-menu mode, so the next click, typically the
+/// title bar's close button, is swallowed. Here the fallback joins the foreground thread's input
+/// state instead, and synthesizes no input.
+///
+/// Runs on the main thread, after the `show`/`unminimize` calls queued before it.
+pub fn bring_to_front<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) -> tauri::Result<()> {
+    #[cfg(windows)]
+    {
+        let target = window.clone();
+        window.run_on_main_thread(move || {
+            if let Ok(hwnd) = target.hwnd() {
+                foreground::bring_to_front(hwnd.0);
+            }
+        })
+    }
+    #[cfg(not(windows))]
+    {
+        window.set_focus()
+    }
+}
+
+#[cfg(windows)]
+mod foreground {
+    use windows_sys::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        BringWindowToTop, GetForegroundWindow, GetWindowThreadProcessId, IsWindowVisible,
+        SetForegroundWindow,
+    };
+
+    pub fn bring_to_front(hwnd: *mut core::ffi::c_void) {
+        // SAFETY: plain user32 calls on a window handle owned by this thread; every result is
+        // checked, and the input attachment is always undone.
+        unsafe {
+            if hwnd.is_null() || IsWindowVisible(hwnd) == 0 {
+                return;
+            }
+            let current = GetForegroundWindow();
+            if current == hwnd || SetForegroundWindow(hwnd) != 0 {
+                return;
+            }
+            let own = GetCurrentThreadId();
+            let other = if current.is_null() {
+                0
+            } else {
+                GetWindowThreadProcessId(current, std::ptr::null_mut())
+            };
+            let attached = other != 0 && other != own && AttachThreadInput(own, other, 1) != 0;
+            BringWindowToTop(hwnd);
+            if SetForegroundWindow(hwnd) == 0 {
+                log::info!("Windows did not let GameLobbies come to the front.");
+            }
+            if attached {
+                AttachThreadInput(own, other, 0);
+            }
+        }
     }
 }
 
@@ -208,6 +271,33 @@ mod tests {
             assert!(!is_main_label(label), "{label}");
         }
         assert_eq!(forbidden_response().status(), 403);
+    }
+
+    /// tao's `set_focus` can synthesize an Alt press that swallows the next click (see
+    /// [`bring_to_front`]); no window in the app is focused through it.
+    #[test]
+    fn windows_are_brought_to_the_front_without_tao_set_focus() {
+        let sources = [
+            ("windows.rs", include_str!("windows.rs")),
+            ("tray.rs", include_str!("tray.rs")),
+            ("lib.rs", include_str!("lib.rs")),
+            ("commands.rs", include_str!("commands.rs")),
+            ("updater.rs", include_str!("updater.rs")),
+            ("accounts/signin.rs", include_str!("accounts/signin.rs")),
+        ];
+        let call = concat!(".set_", "focus()");
+        for (name, source) in sources {
+            let code = source.split("#[cfg(test)]").next().unwrap();
+            let calls = code.matches(call).count();
+            let allowed = if name == "windows.rs" { 1 } else { 0 };
+            assert_eq!(calls, allowed, "{name}");
+        }
+        let helper = &include_str!("windows.rs")[include_str!("windows.rs")
+            .find("pub fn bring_to_front")
+            .unwrap()..];
+        let windows_branch = &helper[..helper.find("#[cfg(not(windows))]").unwrap()];
+        assert!(!windows_branch.contains(call));
+        assert!(!include_str!("windows.rs").contains(concat!("Send", "Input")));
     }
 
     #[test]

@@ -66,6 +66,11 @@ pub fn allow_exit() {
     QUITTING.store(true, Ordering::SeqCst);
 }
 
+/// Undoes [`allow_exit`] when the exit did not happen (the update installer failed to start).
+pub fn cancel_exit() {
+    QUITTING.store(false, Ordering::SeqCst);
+}
+
 pub fn quit(app: &AppHandle) {
     allow_exit();
     app.exit(0);
@@ -268,6 +273,17 @@ mod tests {
         assert!(!hide_on_minimize(false, true, false));
         assert!(!hide_on_minimize(true, false, false));
         assert!(!hide_on_minimize(true, true, true));
+    }
+
+    #[test]
+    fn a_failed_update_install_gives_close_to_tray_back() {
+        allow_exit();
+        assert!(!hide_on_close(true, true, QUITTING.load(Ordering::SeqCst)));
+        cancel_exit();
+        assert!(hide_on_close(true, true, QUITTING.load(Ordering::SeqCst)));
+        let updater = include_str!("updater.rs");
+        let install = updater.find("update.install(&bytes)").unwrap();
+        assert!(updater[install..].find("cancel_exit()").unwrap() < 300);
     }
 
     #[test]

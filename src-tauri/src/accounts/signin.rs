@@ -271,7 +271,7 @@ pub async fn start(app: &AppHandle, store: AccountStore) -> Result<(), String> {
             }
             if let Some(window) = app.get_webview_window(&label(store)) {
                 let _ = window.unminimize();
-                let _ = window.set_focus();
+                let _ = crate::windows::bring_to_front(&window);
             }
             return Ok(());
         }
