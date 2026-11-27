@@ -183,7 +183,7 @@ export function SettingsView({ settings, onSettings, say, keys, accounts, onRunS
     <div className="settings-layout">
       <nav className="settings-nav" aria-label="Settings sections">
         <div className="settings-nav-label">Preferences</div>
-        {sections.map(([name, , Icon]) => <button key={name} className={section === name ? 'selected' : ''} aria-current={section === name ? 'page' : undefined} onClick={() => setSection(name)}><Icon size={16} strokeWidth={1.5} /><span>{name}</span></button>)}
+        {sections.map(([name, , Icon]) => <button key={name} title={name} className={section === name ? 'selected' : ''} aria-current={section === name ? 'page' : undefined} onClick={() => setSection(name)}><Icon size={16} strokeWidth={1.5} /><span>{name}</span></button>)}
       </nav>
       <main className="settings-content" key={section}>
         <h1>{section}</h1>

@@ -25,10 +25,10 @@ function Empty({ title, text }: { title: string; text: string }) {
 }
 
 /** Row of a bar list: name, a plain CSS bar, a count and a share. */
-function BarRow({ name, count, percent, width, tone }: { name: string; count: string; percent: number; width: number; tone?: 'muted' }) {
+function BarRow({ name, count, percent, width }: { name: string; count: string; percent: number; width: number }) {
   return <div className="stat-bar-row" role="listitem">
     <span className="stat-bar-name" title={name}>{name}</span>
-    <span className="stat-bar-track" aria-hidden><span className={'stat-bar-fill' + (tone ? ' ' + tone : '')} style={{ width: width + '%' }} /></span>
+    <span className="stat-bar-track" aria-hidden><span className="stat-bar-fill" style={{ width: width + '%' }} /></span>
     <span className="stat-bar-count">{count}</span>
     <span className="stat-bar-percent">{formatPercent(percent)}</span>
   </div>
@@ -56,12 +56,12 @@ function TopTable({ data, onOpen }: { data: StatsSummary; onOpen: (gameId: strin
       {header('seconds', 'Time played', 'top-time')}
       {header('seconds', '% of total', 'top-percent')}
     </div>
-    {rows.map((row, index) => <TopRow key={row.gameId} row={row} biggest={biggest} lead={index === 0} onOpen={onOpen} />)}
+    {rows.map(row => <TopRow key={row.gameId} row={row} biggest={biggest} onOpen={onOpen} />)}
     <p className="stats-foot">Top {data.top.length} of {plural(data.playtime.playedGames, 'game')} with play time. The percentage is the share of the total play time ({formatTotal(data.playtime.totalSeconds)}).</p>
   </div>
 }
 
-function TopRow({ row, biggest, lead, onOpen }: { row: StatsTopGame; biggest: number; lead: boolean; onOpen: (gameId: string) => void }) {
+function TopRow({ row, biggest, onOpen }: { row: StatsTopGame; biggest: number; onOpen: (gameId: string) => void }) {
   const src = coverSrc(row.cover)
   const fromStore = row.storeSeconds !== undefined && row.storeSeconds > row.trackedSeconds
   return <div className="top-row" role="row">
@@ -73,7 +73,7 @@ function TopRow({ row, biggest, lead, onOpen }: { row: StatsTopGame; biggest: nu
       {formatTotal(row.seconds)}{fromStore && <small>{row.storeSource ?? 'Store'}</small>}
     </div>
     <div className="top-percent" role="cell">
-      <span className="stat-bar-track" aria-hidden><span className={'stat-bar-fill' + (lead ? '' : ' muted')} style={{ width: barWidth(row.percent, biggest) + '%' }} /></span>
+      <span className="stat-bar-track" aria-hidden><span className="stat-bar-fill" style={{ width: barWidth(row.percent, biggest) + '%' }} /></span>
       <span>{formatPercent(row.percent)}</span>
     </div>
   </div>
@@ -141,7 +141,7 @@ export function StatsView({ onClose, onOpenGame, say }: { onClose(): void; onOpe
         </div>
         <div className="stat-bars" role="list">
           <BarRow name="Played" count={plural(completion.played, 'game')} percent={total ? completion.played / total * 100 : 0} width={barWidth(completion.played, total)} />
-          <BarRow name="Not played" count={plural(completion.notPlayed, 'game')} percent={total ? completion.notPlayed / total * 100 : 0} width={barWidth(completion.notPlayed, total)} tone="muted" />
+          <BarRow name="Not played" count={plural(completion.notPlayed, 'game')} percent={total ? completion.notPlayed / total * 100 : 0} width={barWidth(completion.notPlayed, total)} />
         </div>
         <p className="stats-foot">Played: the game has play time (tracked, or reported by a store), a last-played date or a recorded session. Not played: everything else.</p>
       </div>
@@ -150,7 +150,7 @@ export function StatsView({ onClose, onOpenGame, say }: { onClose(): void; onOpe
     const most = Math.max(...library.map(entry => entry.count), 0)
     return <div className="stats-card">
       <div className="stat-bars" role="list">
-        {library.map((entry, index) => <BarRow key={entry.name} name={entry.name} count={plural(entry.count, 'game')} percent={entry.percent} width={barWidth(entry.count, most)} tone={index === 0 ? undefined : 'muted'} />)}
+        {library.map(entry => <BarRow key={entry.name} name={entry.name} count={plural(entry.count, 'game')} percent={entry.percent} width={barWidth(entry.count, most)} />)}
       </div>
       <p className="stats-foot">Each game is counted once, under the store or launcher shown on its card, even when it has several ways to play. The percentage is the share of the {plural(counts.all, 'game')} counted.</p>
     </div>

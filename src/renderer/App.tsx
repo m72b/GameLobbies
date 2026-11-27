@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import Fuse from 'fuse.js'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { BarChart3, ChevronDown, CircleUserRound, CloudDownload, EyeOff, Gamepad2, HardDrive, Heart, History, Library, Minus, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pencil, Play, Plus, Search, Settings2, Square, X } from 'lucide-react'
+import { BarChart3, ChevronDown, CircleUserRound, CloudDownload, EyeOff, Gamepad2, HardDrive, Heart, History, Library, Minus, MoreHorizontal, PanelLeftClose, Play, Plus, Search, Settings as SettingsGear, Square, X } from 'lucide-react'
 import { StoreIcon } from './store-icons'
 import { GlMark } from './gl-mark'
 import type { CustomLauncher, Game, LauncherTargetKind, RunningGame, Settings, SetupInfo, Store as StoreName, SteamGridDbCover, StoreTime, UpdateInfo } from '../shared/types'
@@ -94,8 +94,17 @@ export default function App() {
   const [editFavorite, setEditFavorite] = useState(false)
   const [sgdbGame, setSgdbGame] = useState<Game | null>(null)
   const [sgdbApplying, setSgdbApplying] = useState(false)
-  const [editMode, setEditMode] = useState(false)
-  const [collapsed, setCollapsed] = useState(false)
+  const [manualCollapsed, setManualCollapsed] = useState(false)
+  // Below 1100px the sidebar is always the icon rail (the toggle is hidden there); above it the toggle decides.
+  const [narrow, setNarrow] = useState(() => window.matchMedia('(max-width: 1099px)').matches)
+  const collapsed = manualCollapsed || narrow
+  useEffect(() => {
+    const query = window.matchMedia('(max-width: 1099px)')
+    const change = () => setNarrow(query.matches)
+    change()
+    query.addEventListener('change', change)
+    return () => query.removeEventListener('change', change)
+  }, [])
   const [addMenu, setAddMenu] = useState(false)
   const [gridWidth, setGridWidth] = useState(1200)
   const [focusedId, setFocusedId] = useState<string | null>(null)
@@ -634,11 +643,17 @@ export default function App() {
     </header>
     <aside className={'sidebar' + (collapsed ? ' compact' : '')} onClickCapture={() => { if (setupOpen) setSetupOpen(false) }}>
       <div className="side-head">
-        <GlMark size={24} className="gl-mark" />
-        {!collapsed && <span className="side-brand">GameLobbies</span>}
-        <button className="side-toggle" onClick={() => setCollapsed(!collapsed)} title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-expanded={!collapsed}>{collapsed ? <PanelLeftOpen size={16} strokeWidth={1.5} /> : <PanelLeftClose size={16} strokeWidth={1.5} />}</button>
+        {!collapsed && <>
+          <GlMark size={24} className="gl-mark" />
+          <span className="side-brand">GameLobbies</span>
+          <button className="side-toggle" onClick={() => setManualCollapsed(true)} title="Collapse sidebar" aria-label="Collapse sidebar" aria-expanded><PanelLeftClose size={16} strokeWidth={1.5} /></button>
+        </>}
+        {collapsed && (narrow
+          ? <GlMark size={24} className="gl-mark" />
+          : <button className="side-mark-toggle" onClick={() => setManualCollapsed(false)} title="Expand sidebar" aria-label="Expand sidebar" aria-expanded={false}><GlMark size={24} className="gl-mark" /></button>)}
       </div>
       <button className="side-row side-search" onClick={() => searchRef.current?.focus()} title="Search (Ctrl+K)"><Search size={16} strokeWidth={1.5} /><span className="side-text">Search</span><kbd>Ctrl K</kbd></button>
+      <div className="side-scroll">
       <div className="side-label">Library</div>
       <div className="side-list">
         <button className={'side-row' + (libActive && view === 'All Games' ? ' active' : '')} onClick={() => { setStorageOpen(false); setSettingsOpen(false); setStatsOpen(false); setView('All Games'); setStore('All Games') }} title="All games"><Library size={16} strokeWidth={1.5} /><span className="side-text">All games</span><span className="side-count">{counts.all}</span></button>
@@ -655,10 +670,10 @@ export default function App() {
         const filter = launcherFilter(item.id)
         return <button key={filter} className={'side-row' + (libActive && store === filter ? ' active' : '')} title={item.name} aria-label={item.name} onClick={() => { setSettingsOpen(false); setStatsOpen(false); setStorageOpen(false); setStore(libActive && store === filter ? 'All Games' : filter); setView('All Games') }}><LauncherIcon launcher={item} size={16} /><span className="side-text">{item.name}</span><span className="side-count">{counts.per(filter)}</span></button>
       })}<button className="side-row" title="Add source" onClick={() => openSettings()}><Plus size={16} strokeWidth={1.5} /><span className="side-text">Add source</span></button></div>
+      </div>
       <div className="side-bottom">
         <button className="side-row" title="Export library" onClick={() => void window.lobby.backup.export()}><CloudDownload size={16} strokeWidth={1.5} /><span className="side-text">Export library</span></button>
-        <button className={'side-row' + (editMode ? ' active' : '')} title="Edit mode" onClick={() => setEditMode(!editMode)}><Pencil size={16} strokeWidth={1.5} /><span className="side-text">Edit mode</span></button>
-        <button className={'side-row' + (settingsOpen ? ' active' : '')} title="Settings (Ctrl+,)" onClick={() => openSettings()}><Settings2 size={16} strokeWidth={1.5} /><span className="side-text">Settings</span><kbd>Ctrl ,</kbd></button>
+        <button className={'side-row' + (settingsOpen ? ' active' : '')} title="Settings (Ctrl+,)" onClick={() => openSettings()}><SettingsGear size={16} strokeWidth={1.5} /><span className="side-text">Settings</span><kbd>Ctrl ,</kbd></button>
         <button className="side-row" title="Quit" onClick={() => window.lobby.app.quit()}><X size={16} strokeWidth={1.5} /><span className="side-text">Quit</span></button>
       </div>
     </aside>
@@ -676,7 +691,7 @@ export default function App() {
         <button type="button" className="update-notice-close" title="Dismiss" aria-label="Dismiss the store accounts banner" onClick={() => void dismissSetupBanner()}><X size={16} /></button>
       </div>}
       <div className="toolbar">
-        <h1>{view === 'All Games' ? (store === 'All Games' ? 'All games' : activeLauncher ? activeLauncher.name : store) : view}<span className="title-count">{filtered.length}</span></h1>
+        <h1><span className="title-text">{view === 'All Games' ? (store === 'All Games' ? 'All games' : activeLauncher ? activeLauncher.name : store) : view}</span><span className="title-count">{filtered.length}</span></h1>
         <div className="toolbar-actions">
           <label className="searchbox"><Search size={16} strokeWidth={1.5} /><input ref={searchRef} value={query} onChange={event => setQuery(event.target.value)} placeholder="Search" /><kbd>Ctrl K</kbd></label>
           <button className="icon-button" title="Scan libraries" aria-label="Scan libraries" onClick={() => void scan()} disabled={scanBusy}><CloudDownload size={16} strokeWidth={1.5} className={scanBusy ? 'spin' : ''} /></button>
@@ -797,7 +812,6 @@ export default function App() {
       {sgdbApplying && <div className="sgdb-applying" role="status">Saving cover…</div>}
       <div className="modal-actions"><button className="secondary-button" onClick={closeFindCover}>Cancel</button></div>
     </div></div>}
-    {editMode && <div className="edit-banner">Edit mode is on · select a title to edit its metadata <button onClick={() => setEditMode(false)}>Done</button></div>}
     {waiting && <LauncherWaitDialog key={waiting.pendingId} wait={waiting} onClose={() => setWaiting(null)} onStarted={() => { const game = waiting.game; setWaiting(null); notice('Launching ' + game.title); void refresh() }} />}
     {toast && <div className="toast">{toast}</div>}
     {updateNotice && <div className="update-notice" role="status">

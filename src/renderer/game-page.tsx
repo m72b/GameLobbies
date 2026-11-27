@@ -250,6 +250,7 @@ export function GamePage({ game, index, settings, launchers, running, libraryVer
         <div className="gp-stat"><span>Play time</span><b>{formatTotal(totalSeconds)}</b></div>
         <div className="gp-stat"><span>Last two weeks</span><b>{formatTotal(stats?.lastTwoWeeksSeconds ?? 0)}</b></div>
       </div>
+      <div className="gp-tail">
       <div className={'gp-track' + (!settings.tracking ? ' off' : running ? ' on' : '')}
         title={running ? (running.exe ? 'Tracking ' + running.exe + ' · ' : '') + (running.source === 'detected' ? 'detected running' : 'launched from GameLobbies') : undefined}>
         {settings.tracking && running ? <span className="gp-live-dot" /> : <span className="gp-dot-off" />}
@@ -265,6 +266,7 @@ export function GamePage({ game, index, settings, launchers, running, libraryVer
             {menuItems.map(([label, run]) => <button key={label} role="menuitem" className={label.startsWith('Remove') ? 'danger' : ''} onClick={() => { setMenuOpen(false); run() }}>{label}</button>)}
           </div>
         </>}
+      </div>
       </div>
     </div>
 
