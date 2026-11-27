@@ -4,7 +4,7 @@ All notable changes to GameLobbies (called Game Lobby up to 0.9.0) are listed he
 
 Releases start at 0.9.0 on the [releases page](https://github.com/m72b/GameLobbies/releases). The release pages and tags for 0.4.0 to 0.8.0 were removed on 2026-11-22; this file is the record of those versions.
 
-## [Unreleased]
+## [1.0.0] — 2026-11-27
 
 ### Renamed to GameLobbies
 - The app is now called **GameLobbies**: window title, tray, setup, settings, About, Windows dialogs, the installer and uninstaller, shortcuts and Apps & features. The logo is unchanged.
